@@ -1,0 +1,3 @@
+export const TOAST_DURATION_MS = 3600;
+export const MAX_ADDRESS_BOOK_ENTRIES = 8;
+export const DEFAULT_WHATSAPP_COUNTRY_CODE = "593";

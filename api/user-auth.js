@@ -1,0 +1,1033 @@
+﻿/* global process */
+
+import crypto from "node:crypto";
+import { Buffer } from "node:buffer";
+import { bumpRealtimeMeta, readStore, updateStore } from "./_lib/store.js";
+import {
+  buildClearSessionCookie,
+  buildSessionCookie,
+  consumeRateLimit,
+  createPasswordRecord,
+  ensureCsrfCookie,
+  getAllowedOrigins,
+  getClientIp,
+  hasStrongPassword,
+  isOriginAllowed,
+  isValidEmail,
+  monitorApiRequest,
+  normalizeEmail,
+  normalizeLine,
+  normalizePhone,
+  parseCookies,
+  requireJsonBody,
+  requireCsrf,
+  sanitizeParagraph,
+  setCommonSecurityHeaders,
+  signPayload,
+  verifyPassword,
+  verifySignedToken,
+} from "./_lib/security.js";
+
+const COOKIE_NAME = "atelier_user_session";
+const SESSION_HOURS = Math.max(1, Number(process.env.USER_SESSION_HOURS) || 72);
+const SESSION_TTL_MS = SESSION_HOURS * 60 * 60 * 1000;
+const PASSWORD_MIN_LENGTH = 8;
+const ENDPOINT_NAME = "user-auth";
+const USERNAME_MIN_LENGTH = 3;
+const USERNAME_MAX_LENGTH = 40;
+const NAME_MAX_LENGTH = 90;
+const IDENTIFIER_MAX_LENGTH = 120;
+const USER_PHONE_LENGTH = 10;
+const USER_ADDRESS_BOOK_MAX_ITEMS = 8;
+const USER_ADDRESS_LABEL_MAX_LENGTH = 48;
+const USER_ADDRESS_MAX_LENGTH = 320;
+const USER_ADDRESS_CITY_MAX_LENGTH = 80;
+const USER_ADDRESS_REFERENCE_MAX_LENGTH = 260;
+const USER_CART_MAX_ITEMS = 60;
+const USER_FAVORITES_MAX_ITEMS = 140;
+const USER_STATE_VERSION_MIN = 0;
+const RESET_TOKEN_BYTES = 32;
+const RESET_TOKEN_TTL_MS = Math.max(10 * 60 * 1000, (Number(process.env.USER_PASSWORD_RESET_TTL_MINUTES) || 30) * 60 * 1000);
+const RESET_EMAIL_TIMEOUT_MS = Math.max(3000, Number(process.env.PASSWORD_RESET_EMAIL_TIMEOUT_MS) || 10000);
+
+function normalizeUsername(value = "") {
+  return normalizeLine(value)
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9._-]/g, "")
+    .slice(0, USERNAME_MAX_LENGTH);
+}
+
+function normalizeUserPhone(value = "") {
+  return normalizePhone(value).slice(0, USER_PHONE_LENGTH);
+}
+
+function resolvePreferredUsername(rawUsername = "", email = "") {
+  const candidate = normalizeUsername(rawUsername);
+  if (candidate) return candidate;
+  return normalizeUsername(normalizeEmail(email).split("@")[0] || "");
+}
+
+function sanitizeAddressBookEntry(rawEntry = {}, fallbackId = "") {
+  const address = sanitizeParagraph(rawEntry?.address || "").slice(0, USER_ADDRESS_MAX_LENGTH);
+  if (!address) return null;
+  const normalizedPhone = normalizeUserPhone(rawEntry?.phone || "");
+  return {
+    id: normalizeLine(rawEntry?.id || fallbackId || crypto.randomUUID()).slice(0, 80),
+    label: normalizeLine(rawEntry?.label || "Direccion guardada").slice(0, USER_ADDRESS_LABEL_MAX_LENGTH),
+    address,
+    city: normalizeLine(rawEntry?.city || "").slice(0, USER_ADDRESS_CITY_MAX_LENGTH),
+    reference: sanitizeParagraph(rawEntry?.reference || "").slice(0, USER_ADDRESS_REFERENCE_MAX_LENGTH),
+    phone: normalizedPhone,
+    isDefault: Boolean(rawEntry?.isDefault),
+    updatedAt: normalizeLine(rawEntry?.updatedAt || new Date().toISOString()).slice(0, 60),
+  };
+}
+
+function normalizeAddressBook(rawAddressBook = []) {
+  const source = Array.isArray(rawAddressBook) ? rawAddressBook : [];
+  const normalizedEntries = source
+    .slice(0, USER_ADDRESS_BOOK_MAX_ITEMS)
+    .map((entry, index) => sanitizeAddressBookEntry(entry, `addr-${index + 1}`))
+    .filter(Boolean);
+  if (!normalizedEntries.length) return [];
+  const explicitDefaultIndex = normalizedEntries.findIndex((entry) => entry.isDefault);
+  return normalizedEntries.map((entry, index) => ({
+    ...entry,
+    isDefault: explicitDefaultIndex >= 0 ? explicitDefaultIndex === index : index === 0,
+  }));
+}
+
+function normalizeFavoriteIds(rawFavorites = []) {
+  const source = Array.isArray(rawFavorites) ? rawFavorites : [];
+  const unique = new Set();
+  const normalized = [];
+  source.forEach((entry) => {
+    const id = normalizeLine(entry || "").slice(0, 120);
+    if (!id || unique.has(id)) return;
+    unique.add(id);
+    normalized.push(id);
+  });
+  return normalized.slice(0, USER_FAVORITES_MAX_ITEMS);
+}
+
+function sanitizeCartEntry(rawEntry = {}, fallbackId = "") {
+  const productId = normalizeLine(rawEntry?.id || fallbackId || "").slice(0, 120);
+  const color = normalizeLine(rawEntry?.color || "").slice(0, 80);
+  const size = normalizeLine(rawEntry?.size || "").slice(0, 40);
+  if (!productId || !color || !size) return null;
+  const quantity = Math.max(1, Math.min(10, Math.floor(Number(rawEntry?.quantity) || 1)));
+  const key = normalizeLine(rawEntry?.key || `${productId}-${color}-${size}`).slice(0, 220) || `${productId}-${color}-${size}`;
+  return {
+    key,
+    id: productId,
+    color,
+    size,
+    quantity,
+  };
+}
+
+function normalizeUserCartState(rawCart = []) {
+  const source = Array.isArray(rawCart) ? rawCart : [];
+  const normalizedEntries = source
+    .slice(0, USER_CART_MAX_ITEMS)
+    .map((entry, index) => sanitizeCartEntry(entry, `line-${index + 1}`))
+    .filter(Boolean);
+  if (!normalizedEntries.length) return [];
+
+  const mergedByKey = new Map();
+  normalizedEntries.forEach((entry) => {
+    const previous = mergedByKey.get(entry.key);
+    if (!previous) {
+      mergedByKey.set(entry.key, { ...entry });
+      return;
+    }
+    mergedByKey.set(entry.key, {
+      ...previous,
+      quantity: Math.max(1, Math.min(10, Number(previous.quantity || 0) + Number(entry.quantity || 0))),
+    });
+  });
+  return [...mergedByKey.values()].slice(0, USER_CART_MAX_ITEMS);
+}
+
+function normalizeUserStateVersion(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return USER_STATE_VERSION_MIN;
+  return Math.max(USER_STATE_VERSION_MIN, Math.floor(numeric));
+}
+
+function resolveUserForLogin(users = [], identifier = "", password = "") {
+  const normalizedIdentifier = normalizeLine(identifier).toLowerCase().slice(0, IDENTIFIER_MAX_LENGTH);
+  if (!normalizedIdentifier) return null;
+
+  const emailMatch = users.find((entry) => normalizeEmail(entry.email) === normalizedIdentifier);
+  if (emailMatch) return emailMatch;
+
+  const usernameIdentifier = normalizeUsername(normalizedIdentifier);
+  if (!usernameIdentifier) return null;
+
+  const usernameCandidates = users.filter((entry) => (
+    normalizeUsername(entry.username || normalizeEmail(entry.email || "").split("@")[0] || "") === usernameIdentifier
+  ));
+  if (usernameCandidates.length <= 1) {
+    return usernameCandidates[0] || null;
+  }
+  return usernameCandidates.find((entry) => verifyPassword(password, entry)) || null;
+}
+
+function buildSession(user, secret) {
+  const now = Date.now();
+  const payload = {
+    sub: String(user.id),
+    email: normalizeEmail(user.email),
+    iat: now,
+    exp: now + SESSION_TTL_MS,
+  };
+  return {
+    token: signPayload(payload, secret),
+    payload,
+  };
+}
+
+function stripUserSensitiveData(user) {
+  if (!user) return null;
+  return {
+    id: String(user.id || normalizeEmail(user.email || "")),
+    name: normalizeLine(user.name || ""),
+    lastName: normalizeLine(user.lastName || ""),
+    email: normalizeEmail(user.email || ""),
+    username: normalizeUsername(user.username || normalizeEmail(user.email || "").split("@")[0] || ""),
+    phone: normalizeUserPhone(user.phone || ""),
+    shippingAddress: sanitizeParagraph(user.shippingAddress || ""),
+    addressBook: normalizeAddressBook(user.addressBook),
+    cart: normalizeUserCartState(user.cartState),
+    favorites: normalizeFavoriteIds(user.favorites),
+    stateUpdatedAt: normalizeLine(user.stateUpdatedAt || user.updatedAt || "").slice(0, 60),
+    stateVersion: normalizeUserStateVersion(user.stateVersion),
+  };
+}
+
+async function resolveSessionUser(req, sessionSecret) {
+  const cookies = parseCookies(req.headers?.cookie || "");
+  const session = verifySignedToken(cookies[COOKIE_NAME] || "", sessionSecret);
+  if (!session) return null;
+  const store = await readStore();
+  return (store.users || []).find((entry) => String(entry.id) === String(session.sub)) || null;
+}
+
+function rejectUnauthorized(res) {
+  res.status(401).json({ ok: false, message: "No autorizado" });
+}
+
+function applyRateLimit(res, namespace, key, limit, windowMs, endpoint = "") {
+  const result = consumeRateLimit(namespace, key, limit, windowMs, {
+    endpoint,
+  });
+  if (result.ok) return true;
+  res.setHeader("Retry-After", String(Math.ceil(result.retryAfterMs / 1000)));
+  res.status(429).json({ ok: false, message: "Too many requests" });
+  return false;
+}
+
+function createPasswordResetToken() {
+  return crypto.randomBytes(RESET_TOKEN_BYTES).toString("base64url");
+}
+
+function hashPasswordResetToken(token = "", secret = "") {
+  return crypto
+    .createHash("sha256")
+    .update(`${secret}::password-reset::${String(token || "")}`)
+    .digest("hex");
+}
+
+function timingSafeEqualText(left = "", right = "") {
+  const leftBuffer = Buffer.from(String(left || ""));
+  const rightBuffer = Buffer.from(String(right || ""));
+  if (leftBuffer.length !== rightBuffer.length) return false;
+  return crypto.timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function buildPasswordResetLink(req, email = "", token = "") {
+  const baseFromEnv = String(process.env.USER_PASSWORD_RESET_BASE_URL || "").trim().replace(/\/+$/, "");
+  const originFromRequest = String(req.headers?.origin || "").trim().replace(/\/+$/, "");
+  let baseUrl = baseFromEnv || originFromRequest;
+
+  if (!baseUrl) {
+    const forwardedProto = String(req.headers?.["x-forwarded-proto"] || "").split(",")[0].trim();
+    const forwardedHost = String(req.headers?.["x-forwarded-host"] || req.headers?.host || "").split(",")[0].trim();
+    const protocol = forwardedProto || (String(process.env.NODE_ENV || "").toLowerCase() === "production" ? "https" : "http");
+    if (forwardedHost) {
+      baseUrl = `${protocol}://${forwardedHost}`;
+    }
+  }
+
+  if (!baseUrl || !token) return "";
+  const search = new URLSearchParams({
+    email: normalizeEmail(email),
+    resetToken: token,
+  });
+  return `${baseUrl}/?${search.toString()}`;
+}
+
+function maskEmailForLog(email = "") {
+  const normalized = normalizeEmail(email);
+  const [localPart = "", domainPart = ""] = normalized.split("@");
+  if (!localPart || !domainPart) return "invalid-email";
+  if (localPart.length <= 2) {
+    return `**@${domainPart}`;
+  }
+  return `${localPart.slice(0, 2)}***@${domainPart}`;
+}
+
+function escapeHtml(value = "") {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+async function deliverPasswordResetEmail({ to = "", resetLink = "" }) {
+  const provider = normalizeLine(process.env.PASSWORD_RESET_EMAIL_PROVIDER || "resend").toLowerCase();
+  const endpoint = String(process.env.PASSWORD_RESET_EMAIL_ENDPOINT || "").trim();
+  const bearer = String(process.env.PASSWORD_RESET_EMAIL_BEARER || process.env.RESEND_API_KEY || "").trim();
+  const apiKey = String(process.env.PASSWORD_RESET_EMAIL_API_KEY || "").trim();
+  const from = String(process.env.PASSWORD_RESET_EMAIL_FROM || process.env.RESEND_FROM_EMAIL || "no-reply@adriego.store").trim();
+  const smtpUser = String(process.env.SMTP_USER || "").trim();
+  const smtpPass = String(process.env.SMTP_PASS || "").trim();
+  const smtpHost = String(process.env.SMTP_HOST || (provider.includes("gmail") ? "smtp.gmail.com" : "")).trim();
+  const smtpFrom = String(process.env.SMTP_FROM_EMAIL || from).trim();
+  const smtpPort = Math.max(1, Number(process.env.SMTP_PORT) || (provider.includes("gmail") ? 465 : 587));
+  const smtpSecureRaw = String(process.env.SMTP_SECURE || (provider.includes("gmail") ? "true" : "")).toLowerCase();
+  const smtpSecure = smtpSecureRaw
+    ? ["1", "true", "yes", "on"].includes(smtpSecureRaw)
+    : smtpPort === 465;
+  const brandName = normalizeLine(process.env.STORE_BRAND_NAME || "Adriego Store") || "Adriego Store";
+  const expiresMinutes = Math.max(1, Math.round(RESET_TOKEN_TTL_MS / (60 * 1000)));
+  const supportEmail = normalizeEmail(
+    process.env.STORE_SUPPORT_EMAIL
+    || process.env.PASSWORD_RESET_SUPPORT_EMAIL
+    || "adriegostorerecovery@gmail.com",
+  );
+  const safeBrandName = escapeHtml(brandName);
+  const safeResetLink = escapeHtml(resetLink);
+  const safeSupportEmail = escapeHtml(supportEmail || "");
+  const currentYear = new Date().getFullYear();
+
+  const subject = `${brandName} | Solicitud segura para restablecer tu contrasena`;
+  const text = [
+    `Hola,`,
+    "",
+    `Recibimos una solicitud para restablecer la contrasena de tu cuenta en ${brandName}.`,
+    "",
+    "Para continuar, usa este enlace seguro:",
+    `${resetLink}`,
+    "",
+    `Por tu seguridad, el enlace estara disponible por aproximadamente ${expiresMinutes} minutos.`,
+    "",
+    "Recomendaciones de seguridad:",
+    "- Crea una contrasena unica que no uses en otros sitios.",
+    "- No compartas este enlace con nadie.",
+    "- Si no solicitaste este cambio, ignora este correo.",
+    "",
+    "Tu cuenta no se modificara si no usas el enlace.",
+    safeSupportEmail ? `Si necesitas ayuda, escribe a: ${supportEmail}` : "",
+    "",
+    `Atentamente,`,
+    `Equipo de ${brandName}`,
+  ].filter(Boolean).join("\n");
+
+  const html = `
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>${safeBrandName} - Seguridad de cuenta</title>
+    <style>
+      @media only screen and (max-width: 620px) {
+        .email-shell { padding: 20px 12px !important; }
+        .email-card { border-radius: 16px !important; }
+        .email-body { padding: 24px 20px !important; }
+        .email-title { font-size: 24px !important; line-height: 1.2 !important; }
+        .email-btn { display: block !important; width: 100% !important; box-sizing: border-box !important; }
+      }
+    </style>
+  </head>
+  <body style="margin:0;padding:0;background:#f1f5f9;color:#0f172a;">
+    <div style="display:none;max-height:0;overflow:hidden;opacity:0;">
+      Solicitud segura para restablecer tu contrasena en ${safeBrandName}.
+    </div>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f1f5f9;">
+      <tr>
+        <td align="center" class="email-shell" style="padding:28px 16px;">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;background:#ffffff;border:1px solid #e2e8f0;border-radius:20px;overflow:hidden;" class="email-card">
+            <tr>
+              <td style="padding:18px 24px;background:linear-gradient(135deg,#020617 0%,#0f172a 55%,#1e293b 100%);">
+                <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                  <tr>
+                    <td align="left" style="font-family:'Segoe UI',Arial,sans-serif;color:#ffffff;font-size:18px;font-weight:700;letter-spacing:.03em;">
+                      ${safeBrandName}
+                    </td>
+                    <td align="right">
+                      <span style="display:inline-block;padding:6px 10px;border-radius:999px;background:#0f172a;color:#bfdbfe;border:1px solid #334155;font-family:'Segoe UI',Arial,sans-serif;font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;">Cuenta protegida</span>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+            <tr>
+              <td class="email-body" style="padding:30px 28px 24px;">
+                <p style="margin:0 0 12px;font-family:'Segoe UI',Arial,sans-serif;font-size:14px;color:#64748b;">Hola,</p>
+                <h1 class="email-title" style="margin:0 0 14px;font-family:'Segoe UI',Arial,sans-serif;font-size:28px;line-height:1.24;color:#020617;">Restablece tu contrasena</h1>
+                <p style="margin:0 0 14px;font-family:'Segoe UI',Arial,sans-serif;font-size:15px;line-height:1.65;color:#334155;">
+                  Recibimos una solicitud para cambiar la contrasena de tu cuenta en <strong>${safeBrandName}</strong>.
+                </p>
+                <p style="margin:0 0 22px;font-family:'Segoe UI',Arial,sans-serif;font-size:15px;line-height:1.65;color:#334155;">
+                  Para continuar de forma segura, usa el boton de abajo. Este enlace estara activo por aproximadamente <strong>${expiresMinutes} minutos</strong>.
+                </p>
+
+                <table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 0 18px;">
+                  <tr>
+                    <td>
+                      <a href="${safeResetLink}" class="email-btn" style="display:inline-block;padding:14px 24px;border-radius:12px;background:#0f172a;color:#ffffff;font-family:'Segoe UI',Arial,sans-serif;font-size:15px;font-weight:700;text-decoration:none;letter-spacing:.01em;">
+                        Restablecer contrasena
+                      </a>
+                    </td>
+                  </tr>
+                </table>
+
+                <p style="margin:0 0 10px;font-family:'Segoe UI',Arial,sans-serif;font-size:13px;line-height:1.6;color:#64748b;">
+                  Si el boton no abre, copia y pega este enlace en tu navegador:
+                </p>
+                <div style="margin:0 0 18px;padding:10px 12px;border:1px solid #e2e8f0;border-radius:10px;background:#f8fafc;word-break:break-all;font-family:Consolas,'Courier New',monospace;font-size:12px;line-height:1.6;color:#1e293b;">
+                  ${safeResetLink}
+                </div>
+
+                <div style="margin:0 0 18px;padding:12px 14px;border-left:4px solid #0f172a;background:#f8fafc;border-radius:8px;">
+                  <p style="margin:0;font-family:'Segoe UI',Arial,sans-serif;font-size:13px;line-height:1.65;color:#475569;">
+                    Si no solicitaste este cambio, puedes ignorar este correo con tranquilidad. Tu acceso seguira intacto.
+                  </p>
+                </div>
+
+                ${safeSupportEmail ? `<p style="margin:0;font-family:'Segoe UI',Arial,sans-serif;font-size:13px;line-height:1.6;color:#64748b;">Soporte: <a href="mailto:${safeSupportEmail}" style="color:#0f172a;text-decoration:none;font-weight:600;">${safeSupportEmail}</a></p>` : ""}
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:14px 24px 20px;border-top:1px solid #e2e8f0;background:#ffffff;">
+                <p style="margin:0;font-family:'Segoe UI',Arial,sans-serif;font-size:12px;line-height:1.6;color:#94a3b8;">
+                  © ${currentYear} ${safeBrandName}. Correo enviado por seguridad de tu cuenta.
+                </p>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>`.trim();
+
+  if (provider === "smtp" || provider === "gmail" || provider === "gmail-smtp") {
+    const hasSmtpConfig = Boolean(smtpUser && smtpPass && smtpHost && smtpFrom);
+    if (!hasSmtpConfig) {
+      if (String(process.env.NODE_ENV || "").toLowerCase() !== "production") {
+        console.info(`[password-reset-link] to=${to} link=${resetLink}`);
+      }
+      return { ok: false, skipped: true };
+    }
+
+    try {
+      const nodemailerModule = await import("nodemailer");
+      const nodemailer = nodemailerModule?.default || nodemailerModule;
+      const transporter = nodemailer.createTransport({
+        host: smtpHost,
+        port: smtpPort,
+        secure: smtpSecure,
+        auth: {
+          user: smtpUser,
+          pass: smtpPass,
+        },
+        connectionTimeout: RESET_EMAIL_TIMEOUT_MS,
+        greetingTimeout: RESET_EMAIL_TIMEOUT_MS,
+        socketTimeout: RESET_EMAIL_TIMEOUT_MS,
+      });
+
+      await transporter.sendMail({
+        from: smtpFrom,
+        to,
+        subject,
+        text,
+        html,
+      });
+      return { ok: true, skipped: false };
+    } catch (error) {
+      console.warn(`[password-reset-email-smtp] ${error?.message || "send-failed"}`);
+      return { ok: false, skipped: false };
+    }
+  }
+
+  const resolvedEndpoint = endpoint || (provider === "resend" ? "https://api.resend.com/emails" : "");
+  const canSendWithProvider = provider === "resend"
+    ? Boolean(bearer && from)
+    : Boolean(resolvedEndpoint);
+
+  if (!canSendWithProvider) {
+    if (String(process.env.NODE_ENV || "").toLowerCase() !== "production") {
+      console.info(`[password-reset-link] to=${to} link=${resetLink}`);
+    }
+    return { ok: false, skipped: true };
+  }
+
+  const headers = {
+    "Content-Type": "application/json",
+  };
+  if (bearer) headers.Authorization = `Bearer ${bearer}`;
+  if (apiKey) headers["X-API-Key"] = apiKey;
+
+  const payload = provider === "resend"
+    ? {
+        from,
+        to: [to],
+        subject,
+        html,
+        text,
+      }
+    : {
+        to,
+        from,
+        subject,
+        text,
+        html,
+        resetLink,
+        provider: "password-reset",
+      };
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), RESET_EMAIL_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(resolvedEndpoint, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      const details = await response.text().catch(() => "");
+      throw new Error(`email-endpoint-${response.status}${details ? `:${details.slice(0, 200)}` : ""}`);
+    }
+    return { ok: true, skipped: false };
+  } catch (error) {
+    console.warn(`[password-reset-email] ${error?.message || "send-failed"}`);
+    return { ok: false, skipped: false };
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+export default async function handler(req, res) {
+  monitorApiRequest(req, res, ENDPOINT_NAME);
+  setCommonSecurityHeaders(res);
+  ensureCsrfCookie(req, res);
+
+  if (req.method === "OPTIONS") {
+    res.status(204).end();
+    return;
+  }
+
+  const allowedOrigins = getAllowedOrigins(process.env.USER_ALLOWED_ORIGIN);
+  if (!isOriginAllowed(req, allowedOrigins)) {
+    res.status(403).json({ ok: false, message: "Origen no permitido" });
+    return;
+  }
+
+  const sessionSecret = String(process.env.USER_SESSION_SECRET || "").trim();
+  if (!sessionSecret) {
+    res.status(500).json({ ok: false, message: "User auth no configurado" });
+    return;
+  }
+
+  const action = normalizeLine(req.query?.action || "status").toLowerCase();
+
+  if (action === "status") {
+    const user = await resolveSessionUser(req, sessionSecret);
+    res.status(200).json({
+      ok: true,
+      authenticated: Boolean(user),
+      user: stripUserSensitiveData(user),
+    });
+    return;
+  }
+
+  if (action === "logout") {
+    if (req.method !== "POST") {
+      res.status(405).json({ ok: false, message: "Method not allowed" });
+      return;
+    }
+    if (!requireCsrf(req, res, { endpoint: ENDPOINT_NAME })) return;
+    res.setHeader("Set-Cookie", buildClearSessionCookie(COOKIE_NAME));
+    res.status(200).json({ ok: true, authenticated: false });
+    return;
+  }
+
+  if (req.method !== "POST") {
+    res.status(405).json({ ok: false, message: "Method not allowed" });
+    return;
+  }
+
+  if (!requireCsrf(req, res, { endpoint: ENDPOINT_NAME })) return;
+
+  const body = requireJsonBody(req, res, { endpoint: ENDPOINT_NAME });
+  if (!body) return;
+  const clientIp = getClientIp(req);
+
+  if (action === "register") {
+    const name = normalizeLine(body.name || "").slice(0, NAME_MAX_LENGTH);
+    const email = normalizeEmail(body.email || "");
+    const username = resolvePreferredUsername(body.username || "", email);
+    const password = String(body.password || "").trim();
+    const confirmPassword = String(body.confirmPassword || "").trim();
+    const phone = normalizeUserPhone(body.phone || "");
+
+    if (!applyRateLimit(res, "user-register-ip", clientIp, 8, 20 * 60 * 1000, ENDPOINT_NAME)) return;
+    if (email && !applyRateLimit(res, "user-register-email", email, 4, 20 * 60 * 1000, ENDPOINT_NAME)) return;
+
+    if (
+      !name
+      || name.length < 2
+      || !isValidEmail(email)
+      || username.length < USERNAME_MIN_LENGTH
+      || !hasStrongPassword(password, PASSWORD_MIN_LENGTH)
+      || (confirmPassword && confirmPassword !== password)
+      || (phone && phone.length !== USER_PHONE_LENGTH)
+    ) {
+      res.status(400).json({ ok: false, message: "Datos invalidos" });
+      return;
+    }
+
+    let createdUser = null;
+    await updateStore((draft) => {
+      const users = Array.isArray(draft.users) ? draft.users : [];
+      const duplicated = users.some((entry) => (
+        normalizeEmail(entry.email) === email
+        || normalizeUsername(entry.username || normalizeEmail(entry.email || "").split("@")[0] || "") === username
+      ));
+      if (duplicated) {
+        createdUser = null;
+        return draft;
+      }
+
+      const passwordRecord = createPasswordRecord(password);
+      const nowIso = new Date().toISOString();
+      createdUser = {
+        id: crypto.randomUUID(),
+        name,
+        lastName: "",
+        email,
+        username,
+        phone,
+        shippingAddress: "",
+        addressBook: [],
+        cartState: [],
+        favorites: [],
+        stateUpdatedAt: nowIso,
+        stateVersion: 1,
+        passwordResetTokenHash: "",
+        passwordResetExpiresAt: 0,
+        passwordResetRequestedAt: "",
+        ...passwordRecord,
+        createdAt: nowIso,
+        updatedAt: nowIso,
+      };
+      draft.users = [createdUser, ...users];
+      bumpRealtimeMeta(draft, ["users", "user-state"]);
+      return draft;
+    });
+
+    if (!createdUser) {
+      res.status(409).json({ ok: false, message: "Ya existe una cuenta con ese correo o usuario" });
+      return;
+    }
+
+    const session = buildSession(createdUser, sessionSecret);
+    res.setHeader("Set-Cookie", buildSessionCookie(COOKIE_NAME, session.token, SESSION_TTL_MS / 1000));
+    res.status(200).json({ ok: true, user: stripUserSensitiveData(createdUser) });
+    return;
+  }
+
+  if (action === "login") {
+    const identifier = normalizeLine(body.identifier || "").slice(0, IDENTIFIER_MAX_LENGTH).toLowerCase();
+    const password = String(body.password || "").trim();
+
+    if (!applyRateLimit(res, "user-login-ip", clientIp, 16, 10 * 60 * 1000, ENDPOINT_NAME)) return;
+    if (identifier && !applyRateLimit(res, "user-login-identifier", identifier, 10, 10 * 60 * 1000, ENDPOINT_NAME)) return;
+
+    if (!identifier || !password) {
+      res.status(400).json({ ok: false, message: "Credenciales incompletas" });
+      return;
+    }
+
+    const store = await readStore();
+    const users = Array.isArray(store.users) ? store.users : [];
+    const user = resolveUserForLogin(users, identifier, password);
+
+    if (!user || !verifyPassword(password, user)) {
+      res.status(401).json({ ok: false, message: "Correo, usuario o contrasena incorrectos" });
+      return;
+    }
+
+    let activeUser = user;
+    if (String(user.passwordAlgorithm || "").toLowerCase() !== "scrypt") {
+      const upgradedRecord = createPasswordRecord(password);
+      await updateStore((draft) => {
+        draft.users = (draft.users || []).map((entry) => {
+          if (String(entry.id) !== String(user.id)) return entry;
+          activeUser = {
+            ...entry,
+            ...upgradedRecord,
+            updatedAt: new Date().toISOString(),
+          };
+          return activeUser;
+        });
+        bumpRealtimeMeta(draft, ["users"]);
+        return draft;
+      });
+    }
+
+    const session = buildSession(activeUser, sessionSecret);
+    res.setHeader("Set-Cookie", buildSessionCookie(COOKIE_NAME, session.token, SESSION_TTL_MS / 1000));
+    res.status(200).json({ ok: true, user: stripUserSensitiveData(activeUser) });
+    return;
+  }
+
+  if (action === "request-password-reset") {
+    const email = normalizeEmail(body.email || "");
+
+    if (!applyRateLimit(res, "user-reset-request-ip", clientIp, 8, 20 * 60 * 1000, ENDPOINT_NAME)) return;
+    if (email && !applyRateLimit(res, "user-reset-request-email", email, 4, 20 * 60 * 1000, ENDPOINT_NAME)) return;
+
+    let issuedToken = "";
+    let resetLink = "";
+    let matchedUser = false;
+    let emailDelivery = { ok: false, skipped: true };
+
+    if (isValidEmail(email)) {
+      const rawToken = createPasswordResetToken();
+      const tokenHash = hashPasswordResetToken(rawToken, sessionSecret);
+      const expiresAt = Date.now() + RESET_TOKEN_TTL_MS;
+      const requestedAt = new Date().toISOString();
+
+      await updateStore((draft) => {
+        const users = Array.isArray(draft.users) ? draft.users : [];
+        draft.users = users.map((entry) => {
+          if (normalizeEmail(entry.email || "") !== email) return entry;
+          matchedUser = true;
+          issuedToken = rawToken;
+          return {
+            ...entry,
+            passwordResetTokenHash: tokenHash,
+            passwordResetExpiresAt: expiresAt,
+            passwordResetRequestedAt: requestedAt,
+            updatedAt: requestedAt,
+          };
+        });
+        return draft;
+      });
+
+      if (matchedUser && issuedToken) {
+        resetLink = buildPasswordResetLink(req, email, issuedToken);
+        if (resetLink) {
+          emailDelivery = await deliverPasswordResetEmail({
+            to: email,
+            resetLink,
+          });
+        }
+      }
+    }
+
+    const payload = {
+      ok: true,
+      message: "Si existe una cuenta con ese correo, enviaremos un enlace de recuperacion.",
+    };
+
+    if (String(process.env.NODE_ENV || "").toLowerCase() === "test" && matchedUser) {
+      payload.resetToken = issuedToken;
+      payload.resetLink = resetLink;
+    }
+
+    if (isValidEmail(email)) {
+      console.info(
+        `[password-reset-request] email=${maskEmailForLog(email)} matchedUser=${matchedUser} sent=${Boolean(emailDelivery.ok)} skipped=${Boolean(emailDelivery.skipped)}`,
+      );
+    }
+
+    res.status(200).json(payload);
+    return;
+  }
+
+  if (action === "confirm-password-reset") {
+    const email = normalizeEmail(body.email || "");
+    const token = String(body.token || body.resetToken || "").trim();
+    const newPassword = String(body.newPassword || body.password || "").trim();
+    const confirmPassword = String(body.confirmPassword || "").trim();
+
+    if (!applyRateLimit(res, "user-reset-confirm-ip", clientIp, 10, 20 * 60 * 1000, ENDPOINT_NAME)) return;
+    if (email && !applyRateLimit(res, "user-reset-confirm-email", email, 6, 20 * 60 * 1000, ENDPOINT_NAME)) return;
+
+    if (!isValidEmail(email) || !token || !newPassword || !confirmPassword) {
+      res.status(400).json({ ok: false, message: "Datos invalidos" });
+      return;
+    }
+
+    if (!hasStrongPassword(newPassword, PASSWORD_MIN_LENGTH) || newPassword !== confirmPassword) {
+      res.status(400).json({ ok: false, message: "La nueva contrasena no cumple los requisitos" });
+      return;
+    }
+
+    const store = await readStore();
+    const users = Array.isArray(store.users) ? store.users : [];
+    const user = users.find((entry) => normalizeEmail(entry.email || "") === email);
+
+    const hashedToken = hashPasswordResetToken(token, sessionSecret);
+    const storedHash = String(user?.passwordResetTokenHash || "");
+    const expiresAt = Number(user?.passwordResetExpiresAt || 0);
+    const validToken = Boolean(
+      user
+      && storedHash
+      && expiresAt > Date.now()
+      && timingSafeEqualText(storedHash, hashedToken),
+    );
+
+    if (!validToken) {
+      res.status(400).json({ ok: false, message: "Token invalido o vencido" });
+      return;
+    }
+
+    const passwordRecord = createPasswordRecord(newPassword);
+    await updateStore((draft) => {
+      draft.users = (draft.users || []).map((entry) => (
+        String(entry.id) === String(user.id)
+          ? {
+              ...entry,
+              ...passwordRecord,
+              passwordResetTokenHash: "",
+              passwordResetExpiresAt: 0,
+              passwordResetRequestedAt: "",
+              updatedAt: new Date().toISOString(),
+            }
+          : entry
+      ));
+      return draft;
+    });
+
+    res.status(200).json({ ok: true, message: "Contrasena actualizada" });
+    return;
+  }
+
+  if (action === "update-profile") {
+    const sessionUser = await resolveSessionUser(req, sessionSecret);
+    if (!sessionUser) {
+      rejectUnauthorized(res);
+      return;
+    }
+    if (!applyRateLimit(res, "user-profile-ip", clientIp, 24, 10 * 60 * 1000, ENDPOINT_NAME)) return;
+    if (!applyRateLimit(res, "user-profile-user", String(sessionUser.id), 20, 10 * 60 * 1000, ENDPOINT_NAME)) return;
+
+    const name = normalizeLine(body.name || "");
+    const lastName = normalizeLine(body.lastName || "");
+    const email = normalizeEmail(body.email || "");
+    const phone = normalizeUserPhone(body.phone || "");
+    const shippingAddress = sanitizeParagraph(body.shippingAddress || "");
+    const hasAddressBookPayload = Array.isArray(body.addressBook);
+    const addressBook = normalizeAddressBook(body.addressBook);
+
+    if (!name || !isValidEmail(email) || (phone && phone.length !== USER_PHONE_LENGTH)) {
+      res.status(400).json({ ok: false, message: "Datos invalidos" });
+      return;
+    }
+
+    let updatedUser = null;
+    await updateStore((draft) => {
+      const duplicated = (draft.users || []).some((entry) => (
+        String(entry.id) !== String(sessionUser.id) && normalizeEmail(entry.email) === email
+      ));
+      if (duplicated) {
+        updatedUser = null;
+        return draft;
+      }
+
+      const nowIso = new Date().toISOString();
+      draft.users = (draft.users || []).map((entry) => {
+        if (String(entry.id) !== String(sessionUser.id)) return entry;
+        updatedUser = {
+          ...entry,
+          name,
+          lastName,
+          email,
+          phone,
+          shippingAddress,
+          addressBook: hasAddressBookPayload ? addressBook : normalizeAddressBook(entry.addressBook),
+          stateUpdatedAt: nowIso,
+          stateVersion: normalizeUserStateVersion(entry.stateVersion) + 1,
+          updatedAt: nowIso,
+        };
+        return updatedUser;
+      });
+      if (updatedUser) {
+        bumpRealtimeMeta(draft, ["users", "user-state"]);
+      }
+      return draft;
+    });
+
+    if (!updatedUser) {
+      res.status(409).json({ ok: false, message: "Ese correo ya esta en uso por otra cuenta" });
+      return;
+    }
+
+    const session = buildSession(updatedUser, sessionSecret);
+    res.setHeader("Set-Cookie", buildSessionCookie(COOKIE_NAME, session.token, SESSION_TTL_MS / 1000));
+    res.status(200).json({ ok: true, user: stripUserSensitiveData(updatedUser) });
+    return;
+  }
+
+  if (action === "sync-state") {
+    const sessionUser = await resolveSessionUser(req, sessionSecret);
+    if (!sessionUser) {
+      rejectUnauthorized(res);
+      return;
+    }
+    if (!applyRateLimit(res, "user-state-ip", clientIp, 80, 10 * 60 * 1000, ENDPOINT_NAME)) return;
+    if (!applyRateLimit(res, "user-state-user", String(sessionUser.id), 120, 10 * 60 * 1000, ENDPOINT_NAME)) return;
+
+    const hasCartPayload = Array.isArray(body.cart);
+    const hasFavoritesPayload = Array.isArray(body.favorites);
+    const requestedBaseStateVersion = normalizeUserStateVersion(body.baseStateVersion);
+    if (!hasCartPayload && !hasFavoritesPayload) {
+      res.status(400).json({ ok: false, message: "No recibimos cambios para sincronizar." });
+      return;
+    }
+
+    const normalizedCart = hasCartPayload ? normalizeUserCartState(body.cart) : normalizeUserCartState(sessionUser.cartState);
+    const normalizedFavorites = hasFavoritesPayload ? normalizeFavoriteIds(body.favorites) : normalizeFavoriteIds(sessionUser.favorites);
+
+    let updatedUser = null;
+    let mutatedState = false;
+    await updateStore((draft) => {
+      const nowIso = new Date().toISOString();
+      draft.users = (draft.users || []).map((entry) => {
+        if (String(entry.id) !== String(sessionUser.id)) return entry;
+        const currentStateVersion = normalizeUserStateVersion(entry.stateVersion);
+        const currentCartState = normalizeUserCartState(entry.cartState);
+        const currentFavorites = normalizeFavoriteIds(entry.favorites);
+        const isStaleClientWrite = requestedBaseStateVersion > 0 && currentStateVersion > requestedBaseStateVersion;
+
+        let nextCartState = normalizedCart;
+        let nextFavorites = normalizedFavorites;
+        if (isStaleClientWrite) {
+          const mergedCartMap = new Map(currentCartState.map((item) => [String(item.key || ""), item]));
+          normalizedCart.forEach((item) => {
+            const key = String(item.key || "");
+            if (!key || mergedCartMap.has(key)) return;
+            mergedCartMap.set(key, item);
+          });
+          nextCartState = [...mergedCartMap.values()].slice(0, USER_CART_MAX_ITEMS);
+          nextFavorites = normalizeFavoriteIds([
+            ...currentFavorites,
+            ...normalizedFavorites,
+          ]);
+        }
+
+        const currentStateSignature = JSON.stringify({
+          cart: currentCartState,
+          favorites: currentFavorites,
+        });
+        const nextStateSignature = JSON.stringify({
+          cart: nextCartState,
+          favorites: nextFavorites,
+        });
+        if (currentStateSignature === nextStateSignature) {
+          updatedUser = entry;
+          return entry;
+        }
+        mutatedState = true;
+        updatedUser = {
+          ...entry,
+          cartState: nextCartState,
+          favorites: nextFavorites,
+          stateUpdatedAt: nowIso,
+          stateVersion: currentStateVersion + 1,
+          updatedAt: nowIso,
+        };
+        return updatedUser;
+      });
+      if (mutatedState) {
+        bumpRealtimeMeta(draft, ["user-state"]);
+      }
+      return draft;
+    });
+
+    if (!updatedUser) {
+      rejectUnauthorized(res);
+      return;
+    }
+
+    res.status(200).json({ ok: true, user: stripUserSensitiveData(updatedUser) });
+    return;
+  }
+
+  if (action === "change-password") {
+    const sessionUser = await resolveSessionUser(req, sessionSecret);
+    if (!sessionUser) {
+      rejectUnauthorized(res);
+      return;
+    }
+    if (!applyRateLimit(res, "user-password-ip", clientIp, 12, 10 * 60 * 1000, ENDPOINT_NAME)) return;
+    if (!applyRateLimit(res, "user-password-user", String(sessionUser.id), 8, 10 * 60 * 1000, ENDPOINT_NAME)) return;
+
+    const currentPassword = String(body.currentPassword || "").trim();
+    const newPassword = String(body.newPassword || "").trim();
+    const confirmPassword = String(body.confirmPassword || "").trim();
+
+    if (!currentPassword || !newPassword || !confirmPassword) {
+      res.status(400).json({ ok: false, message: "Completa todos los campos" });
+      return;
+    }
+    if (!hasStrongPassword(newPassword, PASSWORD_MIN_LENGTH)) {
+      res.status(400).json({ ok: false, message: "La nueva contrasena no cumple requisitos" });
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      res.status(400).json({ ok: false, message: "La confirmacion no coincide" });
+      return;
+    }
+    if (!verifyPassword(currentPassword, sessionUser)) {
+      res.status(401).json({ ok: false, message: "La contrasena actual no es correcta" });
+      return;
+    }
+
+    const passwordRecord = createPasswordRecord(newPassword);
+    await updateStore((draft) => {
+      draft.users = (draft.users || []).map((entry) => (
+        String(entry.id) === String(sessionUser.id)
+          ? {
+              ...entry,
+              ...passwordRecord,
+              passwordResetTokenHash: "",
+              passwordResetExpiresAt: 0,
+              passwordResetRequestedAt: "",
+              updatedAt: new Date().toISOString(),
+            }
+          : entry
+      ));
+      bumpRealtimeMeta(draft, ["users"]);
+      return draft;
+    });
+
+    res.status(200).json({ ok: true });
+    return;
+  }
+
+  res.status(400).json({ ok: false, message: "Accion no valida" });
+}
