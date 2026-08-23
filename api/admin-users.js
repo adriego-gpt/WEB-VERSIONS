@@ -320,6 +320,47 @@ async function deliverPasswordResetEmail({ to = "", resetLink = "" }) {
     }
   }
 
+  if (provider === "brevo" || provider === "sendinblue") {
+    const brevoApiKey = apiKey || bearer || process.env.PASSWORD_RESET_EMAIL_BEARER || process.env.RESEND_API_KEY || process.env.SMTP_PASS || "";
+    if (!brevoApiKey) {
+      if (String(process.env.NODE_ENV || "").toLowerCase() !== "production") {
+        console.info('[password-reset-link] to=' + to + ' link=' + resetLink);
+      }
+      return { ok: false, skipped: true };
+    }
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), RESET_EMAIL_TIMEOUT_MS);
+
+    try {
+      const response = await fetch("https://api.brevo.com/v3/smtp/email", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "api-key": brevoApiKey,
+        },
+        body: JSON.stringify({
+          sender: { name: brandName, email: smtpFrom || from },
+          to: [{ email: to }],
+          subject,
+          htmlContent: html,
+          textContent: text,
+        }),
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        const details = await response.text().catch(() => "");
+        throw new Error('brevo-api-' + response.status + (details ? ':' + details.slice(0, 200) : ''));
+      }
+      return { ok: true, skipped: false };
+    } catch (error) {
+      console.warn('[password-reset-email-brevo] ' + (error?.message || "send-failed"));
+      return { ok: false, skipped: false };
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
   const resolvedEndpoint = endpoint || (provider === "resend" ? "https://api.resend.com/emails" : "");
   const canSendWithProvider = provider === "resend"
     ? Boolean(bearer && from)
