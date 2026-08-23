@@ -1,0 +1,8 @@
+User-agent: *
+Allow: /
+
+# Evitar indexación de URLs con parámetros internos o búsquedas
+Disallow: /*?*
+
+# URL base configurada temporalmente a https://www.adriegostore.com
+Sitemap: https://www.adriegostore.com/sitemap.xml

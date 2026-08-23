@@ -39,8 +39,8 @@ function buildRateLimitKey(value = "", fallback = "unknown") {
   return normalized || fallback;
 }
 
-function applyRateLimit(res, namespace, key, limit, windowMs, context = {}) {
-  const result = consumeRateLimit(namespace, key, limit, windowMs, context);
+async function applyRateLimit(res, namespace, key, limit, windowMs, context = {}) {
+  const result = await consumeRateLimit(namespace, key, limit, windowMs, context);
   if (result.ok) return true;
   res.setHeader("Retry-After", String(Math.ceil(result.retryAfterMs / 1000)));
   res.status(429).json({ ok: false, message: "Too many requests" });
@@ -119,7 +119,7 @@ function buildPasswordResetLink(req, email = "", token = "") {
     email: normalizeEmail(email),
     resetToken: token,
   });
-  return `${baseUrl}/?${search.toString()}`;
+  return `${baseUrl}/cuenta/restablecer?${search.toString()}`;
 }
 
 function maskEmailForLog(email = "") {
@@ -413,11 +413,11 @@ export default async function handler(req, res) {
       res.status(405).json({ ok: false, message: "Method not allowed" });
       return;
     }
-    if (!applyRateLimit(res, "admin-users-list-ip", buildRateLimitKey(clientIp, "unknown-ip"), 140, 10 * 60 * 1000, {
+    if (!await applyRateLimit(res, "admin-users-list-ip", buildRateLimitKey(clientIp, "unknown-ip"), 140, 10 * 60 * 1000, {
       endpoint: ENDPOINT_NAME,
       ip: clientIp,
     })) return;
-    if (!applyRateLimit(res, "admin-users-list-admin", adminKey, 200, 10 * 60 * 1000, {
+    if (!await applyRateLimit(res, "admin-users-list-admin", adminKey, 200, 10 * 60 * 1000, {
       endpoint: ENDPOINT_NAME,
       ip: clientIp,
     })) return;
@@ -437,7 +437,7 @@ export default async function handler(req, res) {
     return;
   }
 
-  if (!applyRateLimit(res, "admin-users-mutate-ip", buildRateLimitKey(clientIp, "unknown-ip"), 120, 10 * 60 * 1000, {
+  if (!await applyRateLimit(res, "admin-users-mutate-ip", buildRateLimitKey(clientIp, "unknown-ip"), 120, 10 * 60 * 1000, {
     endpoint: ENDPOINT_NAME,
     ip: clientIp,
   })) return;
@@ -460,15 +460,15 @@ export default async function handler(req, res) {
       res.status(400).json({ ok: false, message: "userId es requerido" });
       return;
     }
-    if (!applyRateLimit(res, "admin-users-update-ip", buildRateLimitKey(clientIp, "unknown-ip"), 80, 10 * 60 * 1000, {
+    if (!await applyRateLimit(res, "admin-users-update-ip", buildRateLimitKey(clientIp, "unknown-ip"), 80, 10 * 60 * 1000, {
       endpoint: ENDPOINT_NAME,
       ip: clientIp,
     })) return;
-    if (!applyRateLimit(res, "admin-users-update-user", buildRateLimitKey(userId), 40, 10 * 60 * 1000, {
+    if (!await applyRateLimit(res, "admin-users-update-user", buildRateLimitKey(userId), 40, 10 * 60 * 1000, {
       endpoint: ENDPOINT_NAME,
       ip: clientIp,
     })) return;
-    if (!applyRateLimit(res, "admin-users-update-admin", adminKey, 120, 10 * 60 * 1000, {
+    if (!await applyRateLimit(res, "admin-users-update-admin", adminKey, 120, 10 * 60 * 1000, {
       endpoint: ENDPOINT_NAME,
       ip: clientIp,
     })) return;
@@ -545,15 +545,15 @@ export default async function handler(req, res) {
       res.status(400).json({ ok: false, message: "userId es requerido" });
       return;
     }
-    if (!applyRateLimit(res, "admin-users-delete-ip", buildRateLimitKey(clientIp, "unknown-ip"), 50, 10 * 60 * 1000, {
+    if (!await applyRateLimit(res, "admin-users-delete-ip", buildRateLimitKey(clientIp, "unknown-ip"), 50, 10 * 60 * 1000, {
       endpoint: ENDPOINT_NAME,
       ip: clientIp,
     })) return;
-    if (!applyRateLimit(res, "admin-users-delete-user", buildRateLimitKey(userId), 24, 10 * 60 * 1000, {
+    if (!await applyRateLimit(res, "admin-users-delete-user", buildRateLimitKey(userId), 24, 10 * 60 * 1000, {
       endpoint: ENDPOINT_NAME,
       ip: clientIp,
     })) return;
-    if (!applyRateLimit(res, "admin-users-delete-admin", adminKey, 80, 10 * 60 * 1000, {
+    if (!await applyRateLimit(res, "admin-users-delete-admin", adminKey, 80, 10 * 60 * 1000, {
       endpoint: ENDPOINT_NAME,
       ip: clientIp,
     })) return;
@@ -602,15 +602,15 @@ export default async function handler(req, res) {
       return;
     }
     const targetRateKey = buildRateLimitKey(userId || requestedEmail, "unknown-user");
-    if (!applyRateLimit(res, "admin-users-reset-ip", buildRateLimitKey(clientIp, "unknown-ip"), 30, 10 * 60 * 1000, {
+    if (!await applyRateLimit(res, "admin-users-reset-ip", buildRateLimitKey(clientIp, "unknown-ip"), 30, 10 * 60 * 1000, {
       endpoint: ENDPOINT_NAME,
       ip: clientIp,
     })) return;
-    if (!applyRateLimit(res, "admin-users-reset-target", targetRateKey, 10, 10 * 60 * 1000, {
+    if (!await applyRateLimit(res, "admin-users-reset-target", targetRateKey, 10, 10 * 60 * 1000, {
       endpoint: ENDPOINT_NAME,
       ip: clientIp,
     })) return;
-    if (!applyRateLimit(res, "admin-users-reset-admin", adminKey, 60, 10 * 60 * 1000, {
+    if (!await applyRateLimit(res, "admin-users-reset-admin", adminKey, 60, 10 * 60 * 1000, {
       endpoint: ENDPOINT_NAME,
       ip: clientIp,
     })) return;

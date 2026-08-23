@@ -1,10 +1,10 @@
 /**
  * Authentication form validation and helpers.
  */
-import { PASSWORD_SECURITY, AUTH_FORM_DEFAULTS, AUTH_FIELD_LIMITS } from "../constants";
-import { sanitizeLine, normalizeEmail } from "./sanitizers";
-import { normalizeUserPhoneNumber } from "./phone";
-import { isValidEmail } from "./url";
+import { PASSWORD_SECURITY, AUTH_FORM_DEFAULTS, AUTH_FIELD_LIMITS } from "../constants/auth.js";
+import { sanitizeLine, normalizeEmail } from "./sanitizers.js";
+import { normalizeUserPhoneNumber } from "./phone.js";
+import { isValidEmail } from "./url.js";
 
 export function hasStrongPassword(value = "") {
   const candidate = String(value);
@@ -23,18 +23,19 @@ export function normalizeUsername(value = "") {
     .slice(0, AUTH_FIELD_LIMITS.username);
 }
 
-export function buildUsernameFromAuth({ email = "", name = "" } = {}) {
-  const emailAlias = normalizeEmail(email).split("@")[0] || "";
-  const nameAlias = sanitizeLine(name).replace(/\s+/g, "").toLowerCase();
-  return normalizeUsername(emailAlias || nameAlias || "");
+export function buildUsernameFromAuth({ name = "", email = "" } = {}) {
+  const emailPrefix = String(email || "").split("@")[0] || "";
+  const base = normalizeUsername(emailPrefix || name || "cliente");
+  if (base.length >= 3) return base.slice(0, AUTH_FIELD_LIMITS.username);
+  return `${base || "cliente"}${Math.floor(100 + Math.random() * 900)}`.slice(0, AUTH_FIELD_LIMITS.username);
 }
 
-export function getPasswordChecks(value = "") {
-  const candidate = String(value || "");
+export function getPasswordChecks(password = "") {
+  const raw = String(password || "");
   const checks = {
-    minLength: candidate.length >= PASSWORD_SECURITY.minLength,
-    hasLetter: /[A-Za-z]/.test(candidate),
-    hasNumber: /\d/.test(candidate),
+    minLength: raw.length >= PASSWORD_SECURITY.minLength,
+    hasLetter: /[A-Za-z]/.test(raw),
+    hasNumber: /\d/.test(raw),
   };
   return {
     ...checks,
@@ -67,7 +68,7 @@ export function buildAuthValidation(mode = "login", form = AUTH_FORM_DEFAULTS) {
     }
     if (!confirmPassword) {
       fieldErrors.confirmPassword = "Confirma tu contrasena.";
-    } else if (confirmPassword !== password) {
+    } else if (confirmPassword !== password) { // eslint-disable-line security/detect-possible-timing-attacks
       fieldErrors.confirmPassword = "Las contrasenas no coinciden.";
     }
   } else if (isForgot) {
@@ -80,7 +81,7 @@ export function buildAuthValidation(mode = "login", form = AUTH_FORM_DEFAULTS) {
     }
     if (!confirmPassword) {
       fieldErrors.confirmPassword = "Confirma tu nueva contrasena.";
-    } else if (confirmPassword !== password) {
+    } else if (confirmPassword !== password) { // eslint-disable-line security/detect-possible-timing-attacks
       fieldErrors.confirmPassword = "Las contrasenas no coinciden.";
     }
   } else {
@@ -137,3 +138,5 @@ export function buildAuthValidation(mode = "login", form = AUTH_FORM_DEFAULTS) {
     },
   };
 }
+
+export { AUTH_FORM_DEFAULTS };

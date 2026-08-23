@@ -33,7 +33,7 @@ import {
   Navigation,
   Mail,
   MapPin,
-  Store,
+  Send,
 } from "lucide-react";
 import { motion as Motion, AnimatePresence, MotionConfig } from "framer-motion";
 import {
@@ -57,7 +57,6 @@ import {
   logoutUserAccount,
   requestUserPasswordReset,
   registerUserAccount,
-  syncUserAccountState,
   updateUserProfile,
 } from "./services/userAccountService";
 import {
@@ -71,17 +70,53 @@ import {
   createServerCheckoutOrder,
   deleteServerOrder,
   getCatalogState,
-  getRealtimeSyncStatus,
   getSecurityMetricsSnapshot,
   listServerOrders,
   previewCouponApplication,
   resetSecurityMetricsSnapshot,
   syncCatalogState,
+  syncContactState,
   updateServerOrder,
 } from "./services/serverStateService";
 import { ensureCsrfToken } from "./services/httpClient";
 import { useBodyScrollLock } from "./hooks/useBodyScrollLock";
 import { useMobileNavGuards } from "./hooks/useMobileNavGuards";
+import { useSwipeGesture } from "./hooks/useSwipeGesture";
+import { useCatalogBootstrap } from "./hooks/useCatalogBootstrap";
+import { useRealtimeSync } from "./hooks/useRealtimeSync";
+import { useUserStateSync } from "./hooks/useUserStateSync";
+import { buildUserStateSignature, hydrateRemoteUserState } from "./domain/user/remoteState";
+import { resolvePublicLocation } from "./domain/contact/publicLocation";
+import {
+  normalizeBankAccounts,
+  paymentSettingsMatch,
+  withBankAccounts,
+} from "./domain/contact/paymentSettings";
+import { enqueueAsyncOperation } from "./utils/asyncQueue";
+import {
+  PRODUCT_DRAFT_MAX_CHARS,
+  createProductDraftPayload,
+  getProductFormSignature,
+  parseProductDraftPayload,
+} from "./domain/admin/productDraft";
+import { trackAnalyticsEvent } from "./services/analyticsService";
+import { AnimatedCurrencyValue } from "./components/ui/AnimatedCurrencyValue";
+import { EmotionalEmptyState } from "./components/ui/EmotionalEmptyState";
+import { ConfirmModal } from "./components/ui/ConfirmModal";
+import { normalizeOrderStatusForOrder } from "./domain/orders/status";
+import {
+  PAYMENT_METHODS,
+  getPaymentMethodLabel,
+  normalizeCardFeePercent,
+  normalizePaymentMethod,
+} from "./domain/orders/payment";
+import { OrderStatusProgress } from "./components/orders/OrderStatusProgress";
+import { OrderReferenceStrip } from "./components/orders/OrderReferenceStrip";
+import { ProductDraftPreview } from "./components/products/ProductDraftPreview";
+import { MemoFeaturedProductMarquee as ExternalFeaturedProductMarquee } from "./components/catalog/FeaturedProductMarquee";
+import { MemoCatalogProductCard as ExternalMemoCatalogProductCard } from "./components/catalog/CatalogProductCard";
+import { CatalogSkeletonCard as ExternalCatalogSkeletonCard } from "./components/catalog/CatalogSkeletonCard";
+import { CatalogPagination as ExternalCatalogPagination } from "./components/catalog/CatalogPagination";
 import whatsappIconUrl from "./assets/social/whatsapp.svg";
 import instagramIconUrl from "./assets/social/instagram.svg";
 import facebookIconUrl from "./assets/social/facebook.svg";
@@ -139,27 +174,97 @@ import {
   preOpenExternalWindow,
   closeExternalWindow,
   copyTextToClipboard,
-  estimateDataUrlBytes,
   normalizeImageSource,
   fileToDataUrl,
   createUid,
+  createUuid,
   formatMinutesRemaining,
   formatAdminTimestamp,
   hasStrongPassword,
   normalizeUsername,
-  buildUsernameFromAuth,
-  getPasswordChecks,
   buildAuthValidation,
 } from "./utils";
 
 const { startTransition } = React;
 const UserAuthSheet = lazy(() => import("./components/modals/AuthModals").then((module) => ({ default: module.UserAuthModal })));
 const ProfileModal = lazy(() => import("./components/modals/AuthModals").then((module) => ({ default: module.ProfileModal })));
+const ExternalAdminPanelModal = lazy(() => import("./components/admin/AdminPanelModal").then((module) => ({ default: module.AdminPanelModal })));
+const ADMIN_PANEL_HISTORY_KEY = "__adriegoAdminPanel";
+const MAX_RECENTLY_VIEWED_PRODUCTS = 4;
+const ProductModal = lazy(() => import("./components/products/ProductModal"));
+const CartSummaryModal = lazy(() => import("./components/cart/CartSummaryModal"));
+const FavoritesModal = lazy(() => import("./components/cart/FavoritesModal"));
+const ProfileQuickMenu = lazy(() => import("./components/cart/ProfileQuickMenu"));
+const OrdersModal = lazy(() => import("./components/orders/OrdersModal"));
+const OrderReferenceModal = lazy(() => import("./components/orders/OrderReferenceModal"));
+
+const CATALOG_SORT_OPTIONS = new Set(["destacados", "nuevos", "mejor-valorados", "precio-asc", "precio-desc"]);
+
+function readCatalogRouteState() {
+  const defaults = { search: "", category: "Todos", productType: "Todos", sortBy: "destacados", page: 1 };
+  if (typeof window === "undefined") return defaults;
+  const params = new URL(window.location.href).searchParams;
+  const parsedPage = Math.floor(Number(params.get("pagina")));
+  const requestedSort = sanitizeLine(params.get("orden") || "");
+  return {
+    search: sanitizeLine(params.get("q") || "").slice(0, 120),
+    category: sanitizeLine(params.get("categoria") || "").slice(0, 80) || defaults.category,
+    productType: sanitizeLine(params.get("tipo") || "").slice(0, 80) || defaults.productType,
+    sortBy: CATALOG_SORT_OPTIONS.has(requestedSort) ? requestedSort : defaults.sortBy,
+    page: Number.isFinite(parsedPage) && parsedPage > 0 ? parsedPage : defaults.page,
+  };
+}
+
+function decodeRouteSegment(value) {
+  try {
+    return slugify(decodeURIComponent(String(value || "")));
+  } catch {
+    return "";
+  }
+}
+
+function upsertRouteMeta(selector, [attribute, attributeValue], content) {
+  if (typeof document === "undefined") return;
+  let meta = document.querySelector(selector);
+  if (!meta) {
+    meta = document.createElement("meta");
+    meta.setAttribute(attribute, attributeValue);
+    document.head.appendChild(meta);
+  }
+  meta.setAttribute("content", String(content || ""));
+}
+
+function readStoredProductDraft() {
+  if (typeof window === "undefined") return null;
+  try {
+    const rawValue = window.localStorage.getItem(STORAGE_KEYS.adminProductDraft);
+    const parsed = parseProductDraftPayload(rawValue);
+    if (rawValue && !parsed) window.localStorage.removeItem(STORAGE_KEYS.adminProductDraft);
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function removeStoredProductDraft() {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.removeItem(STORAGE_KEYS.adminProductDraft);
+  } catch {
+    // Storage can be unavailable in private or restricted browser contexts.
+  }
+}
 
 
 function normalizeStoredFavorites(rawValue = []) {
   const list = Array.isArray(rawValue) ? rawValue : [];
   return [...new Set(list.map((entry) => normalizeEntityId(entry)).filter(Boolean))];
+}
+
+function normalizeRecentlyViewedProductIds(rawValue = []) {
+  const list = Array.isArray(rawValue) ? rawValue : [];
+  return [...new Set(list.map((entry) => normalizeEntityId(entry)).filter(Boolean))]
+    .slice(0, MAX_RECENTLY_VIEWED_PRODUCTS);
 }
 
 function normalizeStoredCart(rawValue = []) {
@@ -386,11 +491,11 @@ const initialProducts = [
   },
   {
     id: 6,
-    name: "Pantaln Tailored Flow",
+    name: "Pantalón Tailored Flow",
     price: 69.99,
     oldPrice: 84.99,
     category: "Mujer",
-    description: "Pantaln recto de talle alto con estructura impecable y cada fluida.",
+    description: "Pantalón recto de talle alto con estructura impecable y caída fluida.",
     imagesByColor: {
       Negro: ["https://images.unsplash.com/photo-1506629905607-d9c297d66f42?auto=format&fit=crop&w=1200&q=80"],
       Camel: ["https://images.unsplash.com/photo-1512436991641-6745cdb1723f?auto=format&fit=crop&w=1200&q=80"],
@@ -413,24 +518,35 @@ const defaultContactSettings = {
   whatsappLink: "",
   phone: "",
   email: "",
-  mapsLink: "https://maps.app.goo.gl/gc5qGjhA4xoQyzr68",
+  mapsLink: "",
   instagram: "https://instagram.com/atelierstudio",
   facebook: "https://facebook.com/atelierstudio",
   tiktok: "",
+  paymentSettings: {
+    bankAccounts: [],
+    bankName: "",
+    accountType: "Ahorros",
+    accountNumber: "",
+    accountHolder: "",
+    accountId: "",
+    bankLogoImage: "",
+    bankQrImage: "",
+    cardFeePercent: 6,
+  },
 };
 
 const defaultStoreSettings = {
-  brandLabel: "Adriego Store",
+  brandLabel: "Luxury Fashion",
   brandName: "Adriego Store",
-  heroBadgeText: "La mejor coleccion premium, a un solo clic",
-  primaryCtaText: "Comprar ahora",
+  heroBadgeText: "Estilo seleccionado para ti",
+  primaryCtaText: "Explorar colección",
   offerLabel: "Ofertas",
   offerPercentage: 30,
-  offerText: "Seleccion curada con descuento por tiempo limitado.",
-  saleTitle: "Compra facil y atencion inmediata",
-  saleDescription: "Arma tu pedido en minutos y recibe acompanamiento por WhatsApp para confirmar talla, disponibilidad y entrega.",
-  footerTitle: "Vistanos y conversemos",
-  footerText: "Atencion personalizada por WhatsApp, Instagram, Facebook y TikTok.",
+  offerText: "Prendas seleccionadas con precio especial por tiempo limitado.",
+  saleTitle: "Tu pedido, claro y sencillo.",
+  saleDescription: "Elige tus prendas, confirma tus datos y escríbenos por WhatsApp para completar la compra.",
+  footerTitle: "¿Necesitas ayuda para elegir?",
+  footerText: "Escríbenos para consultar tallas, colores, disponibilidad o el estado de tu pedido.",
   automationSettings: {
     postPurchaseEnabled: false,
     postPurchaseTemplate: "",
@@ -441,24 +557,24 @@ const defaultStoreSettings = {
   heroSlides: [
     {
       id: "slide-1",
-      title: "Nueva coleccion",
-      subtitle: "Minimalismo, elegancia y venta directa por WhatsApp.",
+      title: "Nueva colección",
+      subtitle: "Prendas versátiles para crear looks con personalidad.",
       image: "https://images.unsplash.com/photo-1445205170230-053b83016050?auto=format&fit=crop&w=1400&q=80",
       linkedProductId: "",
       targetUrl: "",
     },
     {
       id: "slide-2",
-      title: "Looks que convierten",
-      subtitle: "Diseno premium inspirado en marcas de moda editorial.",
+      title: "Encuentra tu próximo look",
+      subtitle: "Explora colores, cortes y detalles para combinar a tu manera.",
       image: "https://images.unsplash.com/photo-1483985988355-763728e1935b?auto=format&fit=crop&w=1400&q=80",
       linkedProductId: "",
       targetUrl: "",
     },
     {
       id: "slide-3",
-      title: "Compra rapida",
-      subtitle: "Carrito elegante, detalles del pedido y cierre en un clic.",
+      title: "Compra a tu ritmo",
+      subtitle: "Guarda tus favoritos, arma tu pedido y confírmalo por WhatsApp.",
       image: "https://images.unsplash.com/photo-1524504388940-b1c1722653e1?auto=format&fit=crop&w=1400&q=80",
       linkedProductId: "",
       targetUrl: "",
@@ -483,40 +599,6 @@ function normalizeAutomationSettings(rawSettings = {}) {
     abandonedCartDelayMinutes,
     abandonedCartTemplate: abandonedCartTemplate || defaultStoreSettings.automationSettings.abandonedCartTemplate,
   };
-}
-
-function getOrderAgeMinutes(createdAt) {
-  const createdMs = new Date(createdAt || "").getTime();
-  if (!Number.isFinite(createdMs)) return 0;
-  return Math.max(0, Math.round((Date.now() - createdMs) / 60000));
-}
-
-function getOrderSlaMeta(order = {}) {
-  const status = normalizeOrderStatusForOrder(order.status, order.deliveryType);
-  const ageMinutes = getOrderAgeMinutes(order.createdAt);
-
-  if (status === "Cancelado" || status === "Entregado") {
-    return { tone: "light", label: "Cerrado", ageMinutes };
-  }
-  if (status === "Pendiente") {
-    if (ageMinutes >= 90) return { tone: "danger", label: "SLA critico", ageMinutes };
-    if (ageMinutes >= 30) return { tone: "warning", label: "SLA en riesgo", ageMinutes };
-    return { tone: "success", label: "SLA saludable", ageMinutes };
-  }
-  if (status === "Confirmado" || status === "Preparando") {
-    if (ageMinutes >= 360) return { tone: "danger", label: "Preparacion lenta", ageMinutes };
-    if (ageMinutes >= 120) return { tone: "warning", label: "Preparacion en riesgo", ageMinutes };
-    return { tone: "success", label: "Preparacion en tiempo", ageMinutes };
-  }
-  if (status === "Enviado") {
-    if (ageMinutes >= 2880) return { tone: "warning", label: "Entrega extendida", ageMinutes };
-    return { tone: "light", label: "En ruta", ageMinutes };
-  }
-  if (status === "Listo para retiro") {
-    if (ageMinutes >= 2880) return { tone: "warning", label: "Pendiente de retiro", ageMinutes };
-    return { tone: "success", label: "Listo para entregar", ageMinutes };
-  }
-  return { tone: "light", label: "En seguimiento", ageMinutes };
 }
 
 function buildCouponFallbackState(couponCode, subtotal, message = "") {
@@ -756,6 +838,21 @@ function normalizeProduct(rawProduct) {
 }
 
 function normalizeContactSettings(rawSettings = {}) {
+  const rawPaymentSettings = rawSettings.paymentSettings && typeof rawSettings.paymentSettings === "object"
+    ? rawSettings.paymentSettings
+    : {};
+  const defaultPaymentSettings = defaultContactSettings.paymentSettings;
+  const bankAccounts = normalizeBankAccounts(rawPaymentSettings).map((account, index) => ({
+    id: normalizeEntityId(account.id || `bank-${index + 1}`) || `bank-${index + 1}`,
+    bankName: sanitizeLine(account.bankName),
+    accountType: sanitizeLine(account.accountType || "Ahorros") || "Ahorros",
+    accountNumber: sanitizeLine(account.accountNumber),
+    accountHolder: sanitizeLine(account.accountHolder),
+    accountId: sanitizeLine(account.accountId),
+    bankLogoImage: normalizeImageSource(account.bankLogoImage),
+    bankQrImage: normalizeImageSource(account.bankQrImage),
+  }));
+  const primaryBankAccount = bankAccounts[0] || {};
   return {
     address: sanitizeParagraph(rawSettings.address != null ? rawSettings.address : defaultContactSettings.address),
     locationNote: sanitizeParagraph(rawSettings.locationNote != null ? rawSettings.locationNote : defaultContactSettings.locationNote),
@@ -767,6 +864,17 @@ function normalizeContactSettings(rawSettings = {}) {
     instagram: normalizeSafeUrl(rawSettings.instagram != null ? rawSettings.instagram : defaultContactSettings.instagram),
     facebook: normalizeSafeUrl(rawSettings.facebook != null ? rawSettings.facebook : defaultContactSettings.facebook),
     tiktok: normalizeSafeUrl(rawSettings.tiktok != null ? rawSettings.tiktok : defaultContactSettings.tiktok),
+    paymentSettings: {
+      bankAccounts,
+      bankName: primaryBankAccount.bankName || defaultPaymentSettings.bankName,
+      accountType: primaryBankAccount.accountType || defaultPaymentSettings.accountType,
+      accountNumber: primaryBankAccount.accountNumber || defaultPaymentSettings.accountNumber,
+      accountHolder: primaryBankAccount.accountHolder || defaultPaymentSettings.accountHolder,
+      accountId: primaryBankAccount.accountId || defaultPaymentSettings.accountId,
+      bankLogoImage: primaryBankAccount.bankLogoImage || defaultPaymentSettings.bankLogoImage,
+      bankQrImage: primaryBankAccount.bankQrImage || defaultPaymentSettings.bankQrImage,
+      cardFeePercent: normalizeCardFeePercent(rawPaymentSettings.cardFeePercent, defaultPaymentSettings.cardFeePercent),
+    },
   };
 }
 
@@ -786,48 +894,116 @@ function normalizeBrandText(value = "", fallback = "Adriego Store") {
   return normalized;
 }
 
+function replaceLegacyStoreCopy(value, legacyValue, replacement) {
+  const legacyValues = Array.isArray(legacyValue) ? legacyValue : [legacyValue];
+  return !value || legacyValues.includes(value) ? replacement : value;
+}
+
 function mergeStoreSettings(rawSettings = {}) {
   const incomingSlides = Array.isArray(rawSettings.heroSlides) && rawSettings.heroSlides.length
     ? rawSettings.heroSlides
     : defaultStoreSettings.heroSlides;
 
   const rawHeroBadge = sanitizeLine(rawSettings.heroBadgeText != null ? rawSettings.heroBadgeText : defaultStoreSettings.heroBadgeText);
-  const heroBadgeText = /premium\s+listo\s+para\s+vender/i.test(rawHeroBadge)
+  const heroBadgeText = !rawHeroBadge
+    || /premium\s+listo\s+para\s+vender/i.test(rawHeroBadge)
+    || rawHeroBadge === "La mejor coleccion premium, a un solo clic"
     ? defaultStoreSettings.heroBadgeText
     : rawHeroBadge;
+  const brandName = normalizeBrandText(
+    rawSettings.brandName != null ? rawSettings.brandName : defaultStoreSettings.brandName,
+    defaultStoreSettings.brandName,
+  );
+  const normalizedBrandLabel = normalizeBrandText(
+    rawSettings.brandLabel != null ? rawSettings.brandLabel : defaultStoreSettings.brandLabel,
+    defaultStoreSettings.brandLabel,
+  );
+  const brandLabel = normalizedBrandLabel.toLowerCase() === brandName.toLowerCase()
+    ? defaultStoreSettings.brandLabel
+    : normalizedBrandLabel;
 
   return {
     ...defaultStoreSettings,
     ...rawSettings,
-    brandLabel: normalizeBrandText(rawSettings.brandLabel != null ? rawSettings.brandLabel : defaultStoreSettings.brandLabel),
-    brandName: normalizeBrandText(rawSettings.brandName != null ? rawSettings.brandName : defaultStoreSettings.brandName),
+    brandLabel,
+    brandName,
     heroBadgeText,
-    primaryCtaText: sanitizeLine(rawSettings.primaryCtaText != null ? rawSettings.primaryCtaText : defaultStoreSettings.primaryCtaText),
-    offerLabel: sanitizeLine(rawSettings.offerLabel != null ? rawSettings.offerLabel : defaultStoreSettings.offerLabel),
+    primaryCtaText: replaceLegacyStoreCopy(
+      sanitizeLine(rawSettings.primaryCtaText != null ? rawSettings.primaryCtaText : defaultStoreSettings.primaryCtaText),
+      "Comprar ahora",
+      defaultStoreSettings.primaryCtaText,
+    ),
+    offerLabel: sanitizeLine(rawSettings.offerLabel != null ? rawSettings.offerLabel : defaultStoreSettings.offerLabel) || defaultStoreSettings.offerLabel,
     offerPercentage: (() => {
       const rawValue = rawSettings.offerPercentage != null ? rawSettings.offerPercentage : defaultStoreSettings.offerPercentage;
       const parsed = Number.parseInt(String(rawValue).replace(/[^\d-]/g, ""), 10);
       if (!Number.isFinite(parsed)) return defaultStoreSettings.offerPercentage;
       return Math.max(0, Math.abs(parsed));
     })(),
-    offerText: sanitizeLine(rawSettings.offerText != null ? rawSettings.offerText : defaultStoreSettings.offerText),
-    saleTitle: sanitizeLine(rawSettings.saleTitle != null ? rawSettings.saleTitle : defaultStoreSettings.saleTitle),
-    saleDescription: sanitizeParagraph(rawSettings.saleDescription != null ? rawSettings.saleDescription : defaultStoreSettings.saleDescription),
-    footerTitle: sanitizeLine(rawSettings.footerTitle != null ? rawSettings.footerTitle : defaultStoreSettings.footerTitle),
-    footerText: sanitizeParagraph(rawSettings.footerText != null ? rawSettings.footerText : defaultStoreSettings.footerText),
+    offerText: replaceLegacyStoreCopy(
+      sanitizeLine(rawSettings.offerText != null ? rawSettings.offerText : defaultStoreSettings.offerText),
+      ["Seleccion curada con descuento por tiempo limitado.", "Selección curada con descuento por tiempo limitado."],
+      defaultStoreSettings.offerText,
+    ),
+    saleTitle: replaceLegacyStoreCopy(
+      sanitizeLine(rawSettings.saleTitle != null ? rawSettings.saleTitle : defaultStoreSettings.saleTitle),
+      [
+        "Compra facil y atencion inmediata",
+        "Compra fácil y atención inmediata",
+        "Comprar es simple. Confirmamos contigo por WhatsApp.",
+        "Tu pedido, paso a paso.",
+      ],
+      defaultStoreSettings.saleTitle,
+    ),
+    saleDescription: replaceLegacyStoreCopy(
+      sanitizeParagraph(rawSettings.saleDescription != null ? rawSettings.saleDescription : defaultStoreSettings.saleDescription),
+      [
+        "Arma tu pedido en minutos y recibe acompanamiento por WhatsApp para confirmar talla, disponibilidad y entrega.",
+        "Arma tu pedido en minutos y recibe acompañamiento por WhatsApp para confirmar talla, disponibilidad y entrega.",
+        "Arma tu pedido a tu ritmo y recibe un resumen listo para enviar. La confirmación final se hace contigo, de forma personalizada.",
+        "Elige tus prendas, revisa tus datos y envíanos el pedido por WhatsApp.",
+      ],
+      defaultStoreSettings.saleDescription,
+    ),
+    footerTitle: replaceLegacyStoreCopy(
+      sanitizeLine(rawSettings.footerTitle != null ? rawSettings.footerTitle : defaultStoreSettings.footerTitle),
+      ["Vistanos y conversemos", "Estamos para ayudarte"],
+      defaultStoreSettings.footerTitle,
+    ),
+    footerText: replaceLegacyStoreCopy(
+      sanitizeParagraph(rawSettings.footerText != null ? rawSettings.footerText : defaultStoreSettings.footerText),
+      [
+        "Atencion personalizada por WhatsApp, Instagram, Facebook y TikTok.",
+        "Escríbenos para consultar tallas, colores y disponibilidad.",
+      ],
+      defaultStoreSettings.footerText,
+    ),
     automationSettings: normalizeAutomationSettings(
       rawSettings.automationSettings != null
         ? rawSettings.automationSettings
         : defaultStoreSettings.automationSettings,
     ),
-    heroSlides: incomingSlides.map((slide, index) => ({
-      id: slide.id || defaultStoreSettings.heroSlides[index]?.id || createUid(),
-      title: sanitizeLine(slide.title != null ? slide.title : ((defaultStoreSettings.heroSlides[index] && defaultStoreSettings.heroSlides[index].title) || "")),
-      subtitle: sanitizeParagraph(slide.subtitle != null ? slide.subtitle : ((defaultStoreSettings.heroSlides[index] && defaultStoreSettings.heroSlides[index].subtitle) || "")),
-      image: normalizeSafeUrl(slide.image || defaultStoreSettings.heroSlides[index]?.image || FALLBACK_IMAGE) || FALLBACK_IMAGE,
-      linkedProductId: (slide.linkedProductId != null ? String(slide.linkedProductId) : ""),
-      targetUrl: normalizeSafeUrl(slide.targetUrl != null ? slide.targetUrl : ""),
-    })),
+    heroSlides: incomingSlides.map((slide, index) => {
+      const defaultSlide = defaultStoreSettings.heroSlides[index] || {
+        title: "Descubre tu próximo look",
+        subtitle: "Explora la colección y encuentra prendas para combinar a tu manera.",
+        image: FALLBACK_IMAGE,
+      };
+      const legacyTitles = ["Nueva coleccion", "Looks que convierten", "Compra rapida"];
+      const legacySubtitles = [
+        "Minimalismo, elegancia y venta directa por WhatsApp.",
+        "Diseno premium inspirado en marcas de moda editorial.",
+        "Carrito elegante, detalles del pedido y cierre en un clic.",
+      ];
+      return {
+        id: slide.id || defaultSlide.id || createUid(),
+        title: replaceLegacyStoreCopy(sanitizeLine(slide.title), legacyTitles[index] || "", defaultSlide.title),
+        subtitle: replaceLegacyStoreCopy(sanitizeParagraph(slide.subtitle), legacySubtitles[index] || "", defaultSlide.subtitle),
+        image: normalizeSafeUrl(slide.image || defaultSlide.image || FALLBACK_IMAGE) || FALLBACK_IMAGE,
+        linkedProductId: (slide.linkedProductId != null ? String(slide.linkedProductId) : ""),
+        targetUrl: normalizeSafeUrl(slide.targetUrl != null ? slide.targetUrl : ""),
+      };
+    }),
   };
 }
 
@@ -1074,61 +1250,9 @@ function buildConfettiPieces(seed, count = 18) {
   });
 }
 
-function AnimatedCurrencyValue({ value, className = "", duration = 360 }) {
-  const target = Number(value) || 0;
-  const [animatedValue, setAnimatedValue] = useState(target);
-  const previousValueRef = useRef(target);
 
-  useEffect(() => {
-    const from = previousValueRef.current;
-    if (Math.abs(from - target) < 0.01) {
-      previousValueRef.current = target;
-      return undefined;
-    }
 
-    let frameId = 0;
-    const startTime = performance.now();
-    const step = (now) => {
-      const progress = Math.min(1, (now - startTime) / duration);
-      const eased = 1 - ((1 - progress) ** 3);
-      const nextValue = from + ((target - from) * eased);
-      setAnimatedValue(nextValue);
-      if (progress < 1) {
-        frameId = window.requestAnimationFrame(step);
-      } else {
-        previousValueRef.current = target;
-      }
-    };
 
-    frameId = window.requestAnimationFrame(step);
-    return () => window.cancelAnimationFrame(frameId);
-  }, [duration, target]);
-
-  return <span className={className}>{currency(animatedValue)}</span>;
-}
-
-function EmotionalEmptyState({
-  icon,
-  title,
-  description,
-  actionLabel = "",
-  onAction,
-}) {
-  return (
-    <div className="empty-emotional-state">
-      <div className="empty-emotional-icon">
-        {icon ? React.createElement(icon, { size: 22 }) : null}
-      </div>
-      <h4>{title}</h4>
-      <p>{description}</p>
-      {actionLabel && onAction && (
-        <button type="button" className="btn btn-primary empty-emotional-cta" onClick={onAction}>
-          {actionLabel}
-        </button>
-      )}
-    </div>
-  );
-}
 
 function ConfettiBurst({ id, tone = "default" }) {
   const pieces = useMemo(() => buildConfettiPieces(`${tone}-${id}`), [id, tone]);
@@ -1149,60 +1273,13 @@ function ConfettiBurst({ id, tone = "default" }) {
 }
 
 
-function normalizeOrderStatus(value = "Pendiente") {
-  const normalized = normalizeOptionLabel(value).toLowerCase();
-  const legacyMap = {
-    "pendiente de pago": "Pendiente",
-    pagado: "Confirmado",
-    pendiente: "Pendiente",
-    confirmado: "Confirmado",
-    preparando: "Preparando",
-    enviado: "Enviado",
-    "listo para retiro": "Listo para retiro",
-    "listo para recoger": "Listo para retiro",
-    "listo para entrega": "Listo para retiro",
-    "listo en local": "Listo para retiro",
-    "retiro listo": "Listo para retiro",
-    recibido: "Entregado",
-    finalizado: "Entregado",
-    entregado: "Entregado",
-    cancelado: "Cancelado",
-  };
-  return legacyMap[normalized] || "Pendiente";
-}
-
-function getOrderStatusOptions(deliveryType = "delivery") {
-  if (deliveryType === "pickup") {
-    return ["Pendiente", "Confirmado", "Preparando", "Listo para retiro", "Entregado", "Cancelado"];
-  }
-  return ["Pendiente", "Confirmado", "Preparando", "Enviado", "Entregado", "Cancelado"];
-}
-
-function normalizeOrderStatusForOrder(status, deliveryType = "delivery") {
-  const normalizedStatus = normalizeOrderStatus(status);
-  if (deliveryType === "pickup" && normalizedStatus === "Enviado") return "Listo para retiro";
-  if (deliveryType !== "pickup" && normalizedStatus === "Listo para retiro") return "Preparando";
-  return normalizedStatus;
-}
-
-const ORDER_STATUS_META = {
-  Pendiente: { tone: "pending", icon: Clock3, description: "Recibimos tu solicitud y esta pendiente de revision." },
-  Confirmado: { tone: "confirmed", icon: BadgeCheck, description: "El pedido fue validado y esta confirmado." },
-  Preparando: { tone: "preparing", icon: Package, description: "Estamos organizando y preparando tus prendas." },
-  Enviado: { tone: "shipped", icon: Truck, description: "Tu pedido salio y va en camino." },
-  "Listo para retiro": { tone: "pickup-ready", icon: Store, description: "Tu pedido esta listo para retiro en local." },
-  Entregado: { tone: "delivered", icon: CheckCircle2, description: "El pedido fue entregado correctamente." },
-  Cancelado: { tone: "cancelled", icon: CircleX, description: "El pedido fue cancelado y ya no continua en proceso." },
-};
-
-function getOrderStatusMeta(status) {
-  return ORDER_STATUS_META[normalizeOrderStatus(status)] || ORDER_STATUS_META.Pendiente;
-}
-
 function normalizeOrderRecord(order = {}) {
   const subtotal = Number(order.subtotal) || 0;
   const discountAmount = Math.max(0, Number(order.discountAmount) || 0);
   const deliveryType = order.deliveryType === "delivery" ? "delivery" : "pickup";
+  const paymentMethod = normalizePaymentMethod(order.paymentMethod);
+  const paymentFeePercent = Math.max(0, Number(order.paymentFeePercent) || 0);
+  const paymentFeeAmount = Math.max(0, Number(order.paymentFeeAmount) || 0);
   return {
     ...order,
     id: order.id || createUid(),
@@ -1220,6 +1297,22 @@ function normalizeOrderRecord(order = {}) {
     status: normalizeOrderStatusForOrder(order.status, deliveryType),
     guideNumber: order.guideNumber || "",
     paymentProof: order.paymentProof || "",
+    paymentMethod,
+    paymentMethodLabel: sanitizeLine(order.paymentMethodLabel || getPaymentMethodLabel(paymentMethod)),
+    paymentBaseTotal: Math.max(0, Number(order.paymentBaseTotal) || subtotal - discountAmount),
+    paymentFeePercent,
+    paymentFeeAmount,
+    paymentBankAccountId: sanitizeLine(order.paymentBankAccountId || order?.paymentBankAccount?.id || ""),
+    paymentBankAccount: order?.paymentBankAccount && typeof order.paymentBankAccount === "object"
+      ? {
+          id: sanitizeLine(order.paymentBankAccount.id || order.paymentBankAccountId || ""),
+          bankName: sanitizeLine(order.paymentBankAccount.bankName || ""),
+          accountType: sanitizeLine(order.paymentBankAccount.accountType || ""),
+          accountNumber: sanitizeLine(order.paymentBankAccount.accountNumber || ""),
+          accountHolder: sanitizeLine(order.paymentBankAccount.accountHolder || ""),
+          accountId: sanitizeLine(order.paymentBankAccount.accountId || ""),
+        }
+      : null,
     customerId: order.customerId || "",
     customerName: order.customerName || "Cliente",
     customerEmail: order.customerEmail || "",
@@ -1248,137 +1341,13 @@ function normalizeOrderRecord(order = {}) {
   };
 }
 
-function OrderStatusProgress({ status, deliveryType = "delivery" }) {
-  const normalizedStatus = normalizeOrderStatusForOrder(status, deliveryType);
-  const currentMeta = getOrderStatusMeta(normalizedStatus);
-  const steps = getOrderStatusOptions(deliveryType).filter((item) => item !== "Cancelado");
-  const currentIndex = steps.indexOf(normalizedStatus);
-  const progress = normalizedStatus === "Cancelado" ? 0 : ((currentIndex + 1) / steps.length) * 100;
-  const Icon = currentMeta.icon;
 
-  if (normalizedStatus === "Cancelado") {
-    return (
-      <div className="order-progress">
-        <span className={`order-status-pill ${currentMeta.tone}`}><Icon size={16} /> {normalizedStatus}</span>
-        <div className="order-progress-cancelled">
-          <strong>Pedido cancelado</strong>
-          <p style={{ margin: 0 }}>{currentMeta.description}</p>
-        </div>
-      </div>
-    );
-  }
 
-  return (
-    <div className="order-progress">
-      <span className={`order-status-pill ${currentMeta.tone}`}><Icon size={16} /> {normalizedStatus}</span>
-      <div className="order-progress-bar" aria-hidden="true">
-        <div className="order-progress-bar-fill" style={{ width: `${progress}%` }} />
-      </div>
-      <div className="order-progress-steps">
-        {steps.map((step, index) => {
-          const StepIcon = getOrderStatusMeta(step).icon;
-          const stepState = index < currentIndex ? "done" : index === currentIndex ? "active" : "upcoming";
-          return (
-            <div key={step} className={`order-progress-step ${stepState}`}>
-              <div className="order-progress-bullet"><StepIcon size={18} /></div>
-              <p className="order-progress-label">{step}</p>
-              <p className="order-progress-caption">{getOrderStatusMeta(step).description}</p>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
 
-function formatOrderDate(value) {
-  if (!value) return "Sin fecha";
-  try {
-    return new Intl.DateTimeFormat("es-EC", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
-  } catch {
-    return value;
-  }
-}
 
-function OrderReferenceStrip({ order, onOpen, actionLabel = "Ver referencia" }) {
-  const previewItems = Array.isArray(order?.items) ? order.items.slice(0, 3) : [];
-  const remainingItems = Math.max(0, (order?.items?.length || 0) - previewItems.length);
-  const leadingItem = previewItems[0];
 
-  return (
-    <button type="button" className="order-reference-strip" onClick={() => onOpen?.(order)}>
-      <div className="order-reference-thumbs" aria-hidden="true">
-        {previewItems.map((item, index) => (
-          <img
-            key={`${item.key || item.name}-${index}`}
-            src={item.image || FALLBACK_IMAGE}
-            alt=""
-            className="order-reference-thumb"
-            style={{ transform: `translateX(${index * -10}px)`, zIndex: previewItems.length - index }}
-          />
-        ))}
-        {remainingItems > 0 && <span className="order-reference-more">+{remainingItems}</span>}
-      </div>
-      <div className="order-reference-copy">
-        <p className="order-reference-title">Referencia visual del pedido</p>
-        <p className="order-reference-subtitle">
-          {leadingItem ? `${leadingItem.name}${order.items.length > 1 ? ` y ${order.items.length - 1} prenda(s) mas` : ""}` : "Ver prendas del pedido"}
-        </p>
-      </div>
-      <span className="order-reference-action">{actionLabel}</span>
-    </button>
-  );
-}
 
-function OrderReferenceModal({ open, order, onClose }) {
-  if (!open || !order) return null;
 
-  return (
-    <AnimatePresence>
-      <Motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="modal-backdrop modal-backdrop-priority order-reference-backdrop" onClick={onClose}>
-        <Motion.div
-          initial={{ opacity: 0, y: 24, scale: 0.97 }}
-          animate={{ opacity: 1, y: 0, scale: 1 }}
-          exit={{ opacity: 0, y: 18, scale: 0.97 }}
-          transition={{ duration: 0.22 }}
-          className="sheet order-reference-modal"
-          onClick={(event) => event.stopPropagation()}
-        >
-          <div className="sheet-header">
-            <div>
-              <p className="muted" style={{ margin: 0, textTransform: "uppercase", letterSpacing: ".25em", fontSize: 13 }}>Referencia visual</p>
-              <h3 style={{ margin: "8px 0 0", fontSize: 30 }}>{order.code}</h3>
-            </div>
-            <button onClick={onClose} className="icon-btn"><X size={18} /></button>
-          </div>
-          <div className="sheet-body order-reference-body">
-            <div className="order-reference-summary-row">
-              <span className="badge badge-light">{order.itemCount} item(s)</span>
-              <span className="badge badge-light">Subtotal: {currency(order.subtotal)}</span>
-              <span className="badge badge-light">Descuento: -{currency(order.discountAmount || 0)}</span>
-              <span className="badge badge-light">Total: {currency(order.total || order.subtotal)}</span>
-              {order.couponCode && <span className="badge badge-light">Cupon: {order.couponCode}</span>}
-              <span className={`order-status-pill ${getOrderStatusMeta(normalizeOrderStatusForOrder(order.status, order.deliveryType)).tone}`}>{normalizeOrderStatusForOrder(order.status, order.deliveryType)}</span>
-            </div>
-            <div className="order-reference-grid">
-              {order.items.map((item) => (
-                <div key={item.key} className="order-reference-card">
-                  <img src={item.image || FALLBACK_IMAGE} alt={item.name} className="order-reference-card-image" loading="lazy" decoding="async" />
-                  <div className="order-reference-card-copy">
-                    <strong>{item.name}</strong>
-                    <p className="muted" style={{ margin: "6px 0 0" }}>{item.color} - {item.size}</p>
-                    <p className="muted" style={{ margin: "6px 0 0" }}>Cantidad: {item.quantity}</p>
-                    <p style={{ margin: "10px 0 0", fontWeight: 700 }}>{currency(item.price * item.quantity)}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </Motion.div>
-      </Motion.div>
-    </AnimatePresence>
-  );
-}
 
 function syncSelections(products, previousSelections) {
   return Object.fromEntries(
@@ -1528,1177 +1497,18 @@ function buildProductFromForm(form) {
   };
 }
 
-function ProductModal({
-  product,
-  selection,
-  onClose,
-  onChange,
-  onAddToCart,
-  cartEditMode = false,
-  isAdmin,
-  onEditProduct,
-}) {
-  const resolvedSelection = product ? getSelectionForColor(product, selection) : null;
-  const [imageIndex, setImageIndex] = useState(0);
-  const [imagePreviewOpen, setImagePreviewOpen] = useState(false);
-  const [previewZoomed, setPreviewZoomed] = useState(false);
-  const [previewZoomOrigin, setPreviewZoomOrigin] = useState("50% 50%");
-  const previewSwipeStartRef = useRef(null);
-  const previewSwipeIntentRef = useRef(null);
-  const previewDidSwipeRef = useRef(false);
-  const previewHandledByPointerRef = useRef(false);
-  const currentImages = product ? getImagesForColor(product, resolvedSelection?.color) : [];
-  const safeImageIndex = currentImages.length ? Math.min(imageIndex, currentImages.length - 1) : 0;
-  const activeImage = currentImages[safeImageIndex] || currentImages[0] || FALLBACK_IMAGE;
-  const discount = product ? discountPercent(product.price, product.oldPrice) : 0;
-  const sizesForSelectedColor = product ? getSizesForColor(product, resolvedSelection?.color) : [];
-  const selectedStock = product ? getStockForVariant(product, resolvedSelection?.color, resolvedSelection?.size) : 0;
-  const stockStatus = getStockStatus(selectedStock);
-  const isLowStock = selectedStock > 0 && selectedStock <= 2;
-  const hasMultipleImages = currentImages.length > 1;
-  const isTouchLikePointer = (pointerType) => pointerType === "touch" || pointerType === "pen";
-  const openImagePreview = () => {
-    setImagePreviewOpen(true);
-    setPreviewZoomed(false);
-    setPreviewZoomOrigin("50% 50%");
-    previewSwipeStartRef.current = null;
-    previewSwipeIntentRef.current = null;
-    previewDidSwipeRef.current = false;
-    previewHandledByPointerRef.current = false;
-  };
-
-  const closeImagePreview = () => {
-    setImagePreviewOpen(false);
-    setPreviewZoomed(false);
-    setPreviewZoomOrigin("50% 50%");
-    previewSwipeStartRef.current = null;
-    previewSwipeIntentRef.current = null;
-    previewDidSwipeRef.current = false;
-    previewHandledByPointerRef.current = false;
-  };
-
-  const updatePreviewZoomOrigin = (event) => {
-    const bounds = event.currentTarget.getBoundingClientRect();
-    if (!bounds.width || !bounds.height) return;
-    const x = ((event.clientX - bounds.left) / bounds.width) * 100;
-    const y = ((event.clientY - bounds.top) / bounds.height) * 100;
-    setPreviewZoomOrigin(`${x}% ${y}%`);
-  };
-
-  const togglePreviewZoom = (event) => {
-    if (event) {
-      updatePreviewZoomOrigin(event);
-    }
-    setPreviewZoomed((previous) => !previous);
-  };
-
-  const handleDetailImageClick = () => {
-    openImagePreview();
-  };
-
-  const handlePreviewPointerDown = (event) => {
-    if (!isTouchLikePointer(event.pointerType)) return;
-    previewSwipeStartRef.current = { x: event.clientX, y: event.clientY };
-    previewSwipeIntentRef.current = null;
-    previewDidSwipeRef.current = false;
-  };
-
-  const handlePreviewPointerMove = (event) => {
-    if (!isTouchLikePointer(event.pointerType) || !previewSwipeStartRef.current) return;
-    const deltaX = event.clientX - previewSwipeStartRef.current.x;
-    const deltaY = event.clientY - previewSwipeStartRef.current.y;
-    if (!previewSwipeIntentRef.current && (Math.abs(deltaX) > 8 || Math.abs(deltaY) > 8)) {
-      if (Math.abs(deltaX) > Math.abs(deltaY) * 1.15) {
-        previewSwipeIntentRef.current = "horizontal";
-      } else if (Math.abs(deltaY) > Math.abs(deltaX) * 1.15) {
-        previewSwipeIntentRef.current = "vertical";
-      }
-    }
-    if (previewSwipeIntentRef.current === "horizontal" && event.cancelable) {
-      event.preventDefault();
-    }
-  };
-
-  const handlePreviewPointerUp = (event) => {
-    if (!isTouchLikePointer(event.pointerType) || !previewSwipeStartRef.current) return;
-    const distanceX = event.clientX - previewSwipeStartRef.current.x;
-    const distanceY = event.clientY - previewSwipeStartRef.current.y;
-    const horizontalSwipe = hasMultipleImages
-      && (previewSwipeIntentRef.current === "horizontal"
-      || (Math.abs(distanceX) > 40 && Math.abs(distanceX) > Math.abs(distanceY) * 1.2));
-    previewSwipeStartRef.current = null;
-    previewSwipeIntentRef.current = null;
-
-    if (horizontalSwipe) {
-      previewDidSwipeRef.current = true;
-      previewHandledByPointerRef.current = true;
-      if (distanceX > 0) {
-        goToPreviousImage();
-      } else {
-        goToNextImage();
-      }
-      return;
-    }
-
-    previewHandledByPointerRef.current = true;
-    togglePreviewZoom(event);
-  };
-
-  const handlePreviewImageClick = (event) => {
-    if (previewHandledByPointerRef.current) {
-      previewHandledByPointerRef.current = false;
-      return;
-    }
-    if (previewDidSwipeRef.current) {
-      previewDidSwipeRef.current = false;
-      return;
-    }
-    togglePreviewZoom(event);
-  };
-
-  const goToPreviousImage = () => {
-    if (!hasMultipleImages) return;
-    setImageIndex((previous) => (previous - 1 + currentImages.length) % currentImages.length);
-  };
-
-  const goToNextImage = () => {
-    if (!hasMultipleImages) return;
-    setImageIndex((previous) => (previous + 1) % currentImages.length);
-  };
-
-  useEffect(() => {
-    const frame = window.requestAnimationFrame(() => {
-      setImageIndex(0);
-      setImagePreviewOpen(false);
-      setPreviewZoomed(false);
-      setPreviewZoomOrigin("50% 50%");
-      previewSwipeStartRef.current = null;
-      previewSwipeIntentRef.current = null;
-      previewDidSwipeRef.current = false;
-      previewHandledByPointerRef.current = false;
-    });
-
-    return () => window.cancelAnimationFrame(frame);
-  }, [resolvedSelection?.color, product?.id]);
-
-  useEffect(() => {
-    if (!product || typeof window === "undefined") return undefined;
-    const handleKeyDown = (event) => {
-      if (event.key === "Escape" && imagePreviewOpen) {
-        event.preventDefault();
-        closeImagePreview();
-      } else if (event.key === "ArrowLeft" && hasMultipleImages) {
-        event.preventDefault();
-        setImageIndex((previous) => (previous - 1 + currentImages.length) % currentImages.length);
-      } else if (event.key === "ArrowRight" && hasMultipleImages) {
-        event.preventDefault();
-        setImageIndex((previous) => (previous + 1) % currentImages.length);
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [product, hasMultipleImages, currentImages.length, imagePreviewOpen]);
-
-  if (!product) return null;
-
-  return (
-    <AnimatePresence>
-      <Motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="modal-backdrop" onClick={onClose}>
-        <Motion.div
-          initial={{ opacity: 0, y: 30, scale: 0.97 }}
-          animate={{ opacity: 1, y: 0, scale: 1 }}
-          exit={{ opacity: 0, y: 20, scale: 0.97 }}
-          transition={{ duration: 0.25 }}
-          className="modal"
-          onClick={(event) => event.stopPropagation()}
-        >
-          <div className="modal-left">
-            <button onClick={onClose} className="icon-btn" style={{ position: "absolute", right: 16, top: 16, zIndex: 2 }}>
-              <X size={18} />
-            </button>
-            <AnimatePresence mode="wait">
-              <button
-                type="button"
-                className="modal-image-open-btn"
-                onClick={handleDetailImageClick}
-                aria-label={`Abrir imagen ampliada de ${product.name}`}
-              >
-                <Motion.img
-                  key={`${product.id}-${resolvedSelection?.color}-${safeImageIndex}-${activeImage}`}
-                  src={activeImage}
-                  alt={product.name}
-                  loading="eager"
-                  decoding="async"
-                  initial={{ opacity: 0, scale: 1.02 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  exit={{ opacity: 0, scale: 0.99 }}
-                  transition={{ duration: 0.18 }}
-                  className="modal-img"
-                  draggable={false}
-                  style={{
-                    cursor: "zoom-in",
-                    touchAction: "manipulation",
-                  }}
-                  onError={(event) => {
-                    if (event.currentTarget.src !== FALLBACK_IMAGE) {
-                      event.currentTarget.src = FALLBACK_IMAGE;
-                    }
-                  }}
-                />
-              </button>
-            </AnimatePresence>
-            <div style={{ position: "absolute", left: 16, top: 16, zIndex: 2 }}>
-              <button type="button" className="badge badge-light modal-zoom-toggle" onClick={openImagePreview} aria-label="Abrir imagen del producto">
-                Toca para ampliar
-              </button>
-            </div>
-            {hasMultipleImages && (
-              <>
-                <button
-                  className="icon-btn carousel-arrow left"
-                  type="button"
-                  onClick={goToPreviousImage}
-                  aria-label="Imagen anterior"
-                >
-                  <ChevronLeft size={18} />
-                </button>
-                <button
-                  className="icon-btn carousel-arrow right"
-                  type="button"
-                  onClick={goToNextImage}
-                  aria-label="Imagen siguiente"
-                >
-                  <ChevronRight size={18} />
-                </button>
-                <div className="thumb-counter">
-                  {safeImageIndex + 1} / {currentImages.length}
-                </div>
-                <div className="thumb-row">
-                  {currentImages.map((_, index) => (
-                    <button
-                      key={index}
-                      type="button"
-                      className={`dot ${safeImageIndex === index ? "active" : ""}`}
-                      onClick={() => setImageIndex(index)}
-                      aria-label={`Ver imagen ${index + 1}`}
-                    />
-                  ))}
-                </div>
-              </>
-            )}
-          </div>
-
-          <div className="modal-right">
-            <div style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "flex-start" }}>
-              <div>
-                <p className="muted" style={{ fontSize: 13, letterSpacing: ".24em", textTransform: "uppercase" }}>{product.category}</p>
-                <h3 style={{ margin: "8px 0 0", fontSize: 34 }}>{product.name}</h3>
-                <p className="muted" style={{ margin: "8px 0 0", fontSize: 14 }}>Tipo: {product.productType || "General"}</p>
-              </div>
-              <div style={{ textAlign: "right" }}>
-                <p style={{ margin: 0, fontSize: 28, fontWeight: 600 }}>{currency(product.price)}</p>
-                {product.oldPrice > product.price && (
-                  <p style={{ margin: "4px 0 0", fontSize: 14, color: "#a1a1aa", textDecoration: "line-through" }}>{currency(product.oldPrice)}</p>
-                )}
-              </div>
-            </div>
-
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 10, margin: "18px 0" }}>
-              {discount > 0 && <span className="badge badge-dark">-{discount}%</span>}
-              <span className="badge badge-light"><Star size={14} /> {product.rating}</span>
-              {product.newArrival && <span className="badge badge-light">Nuevo</span>}
-            </div>
-
-            <p className="muted" style={{ lineHeight: 1.8 }}>{product.description}</p>
-
-            <div style={{ marginTop: 24 }}>
-              <p style={{ fontWeight: 600, marginBottom: 10 }}>Color: {resolvedSelection?.color}</p>
-              <div className="chip-row">
-                {product.colors.map((color) => (
-                  <button key={color} onClick={() => onChange(product.id, "color", color)} className={`chip ${resolvedSelection?.color === color ? "active" : ""}`}>{color}</button>
-                ))}
-              </div>
-            </div>
-
-            <div style={{ marginTop: 24 }}>
-              <p style={{ fontWeight: 600, marginBottom: 10 }}>Talla</p>
-              <div className="chip-row">
-                {sizesForSelectedColor.map((size) => {
-                  const sizeStock = getStockForVariant(product, resolvedSelection?.color, size);
-                  return (
-                    <button key={size} onClick={() => sizeStock > 0 && onChange(product.id, "size", size)} className={`chip ${resolvedSelection?.size === size ? "active" : ""}`} disabled={sizeStock <= 0} style={{ opacity: sizeStock <= 0 ? 0.45 : 1, cursor: sizeStock <= 0 ? "not-allowed" : "pointer" }}>
-                      {size}
-                    </button>
-                  );
-                })}
-              </div>
-              <div style={{ marginTop: 12 }}>
-                <span className={`badge badge-${stockStatus.tone} ${isLowStock ? "badge-low-stock" : ""}`}>{stockStatus.label}</span>
-              </div>
-            </div>
-
-            <div style={{ display: "grid", gridTemplateColumns: isAdmin ? "1fr 1fr 1fr" : "1fr 1fr", gap: 12, marginTop: 30 }}>
-              <button className="btn btn-primary" onClick={(event) => onAddToCart(product, { sourceElement: event.currentTarget, image: activeImage })} disabled={selectedStock <= 0} style={{ opacity: selectedStock <= 0 ? 0.6 : 1, cursor: selectedStock <= 0 ? "not-allowed" : "pointer" }}>{selectedStock <= 0 ? "Agotado" : (cartEditMode ? "Guardar cambios" : "Agregar al carrito")}</button>
-              <button className="btn btn-outline" onClick={onClose}>Seguir viendo</button>
-              {isAdmin && (
-                <button className="btn btn-soft" onClick={() => onEditProduct(product)}>
-                  <Eye size={16} />
-                  Editar
-                </button>
-              )}
-            </div>
-
-            <div className="grid" style={{ gridTemplateColumns: "repeat(3, 1fr)", marginTop: 28, gap: 12 }}>
-              <div style={{ background: "#fafafa", borderRadius: 22, padding: 16 }}><Truck size={18} /><p style={{ fontWeight: 600, marginBottom: 6 }}>Envios confiables</p><p className="muted" style={{ fontSize: 13 }}>Entrega coordinada por WhatsApp.</p></div>
-              <div style={{ background: "#fafafa", borderRadius: 22, padding: 16 }}><RotateCcw size={18} /><p style={{ fontWeight: 600, marginBottom: 6 }}>Cambios faciles</p><p className="muted" style={{ fontSize: 13 }}>Atencion directa con tu cliente.</p></div>
-              <div style={{ background: "#fafafa", borderRadius: 22, padding: 16 }}><ShieldCheck size={18} /><p style={{ fontWeight: 600, marginBottom: 6 }}>Compra segura</p><p className="muted" style={{ fontSize: 13 }}>Confirmacion personalizada.</p></div>
-            </div>
-          </div>
-        </Motion.div>
-      </Motion.div>
-      {imagePreviewOpen && (
-        <Motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          className="modal-backdrop modal-backdrop-priority image-preview-backdrop"
-          onClick={closeImagePreview}
-        >
-          <Motion.div
-            initial={{ opacity: 0, scale: 0.96, y: 10 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.98, y: 8 }}
-            transition={{ duration: 0.2 }}
-            className="image-preview-shell"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <button onClick={closeImagePreview} className="icon-btn image-preview-close" aria-label="Cerrar vista de imagen">
-              <X size={18} />
-            </button>
-            {hasMultipleImages && (
-              <>
-                <button className="icon-btn carousel-arrow left" type="button" onClick={goToPreviousImage} aria-label="Imagen anterior">
-                  <ChevronLeft size={18} />
-                </button>
-                <button className="icon-btn carousel-arrow right" type="button" onClick={goToNextImage} aria-label="Imagen siguiente">
-                  <ChevronRight size={18} />
-                </button>
-                <div className="thumb-counter">
-                  {safeImageIndex + 1} / {currentImages.length}
-                </div>
-              </>
-            )}
-            <Motion.img
-              key={`preview-${product.id}-${selection?.color}-${safeImageIndex}-${activeImage}`}
-              src={activeImage}
-              alt={`${product.name} ampliada`}
-              className="image-preview-media"
-              loading="eager"
-              decoding="async"
-              draggable={false}
-              style={{
-                transform: previewZoomed ? "scale(1.95)" : "scale(1)",
-                transformOrigin: previewZoomOrigin,
-                transition: "transform .2s ease",
-                cursor: previewZoomed ? "zoom-out" : "zoom-in",
-                touchAction: previewZoomed ? "none" : "pan-y",
-              }}
-              onClick={handlePreviewImageClick}
-              onPointerDown={handlePreviewPointerDown}
-              onPointerMove={handlePreviewPointerMove}
-              onPointerUp={handlePreviewPointerUp}
-              onPointerCancel={() => {
-                previewSwipeStartRef.current = null;
-                previewSwipeIntentRef.current = null;
-              }}
-              onMouseMove={(event) => {
-                if (!previewZoomed) return;
-                updatePreviewZoomOrigin(event);
-              }}
-              onError={(event) => {
-                if (event.currentTarget.src !== FALLBACK_IMAGE) {
-                  event.currentTarget.src = FALLBACK_IMAGE;
-                }
-              }}
-            />
-            <button
-              type="button"
-              className="badge badge-light modal-zoom-toggle"
-              style={{ position: "absolute", left: 14, top: 14, zIndex: 3 }}
-              onClick={() => setPreviewZoomed((previous) => !previous)}
-              aria-label="Activar o desactivar zoom"
-            >
-              {previewZoomed ? "Quitar zoom" : "Zoom"}
-            </button>
-          </Motion.div>
-        </Motion.div>
-      )}
-    </AnimatePresence>
-  );
-}
-
-function ProductDraftPreview({ form, activeColor, setActiveColor, imageIndex, setImageIndex }) {
-  const cleanColors = form.colorsData
-    .map((color) => ({
-      name: color.name.trim(),
-      images: color.images.map((image) => image.trim()).filter(Boolean),
-      sizes: Array.isArray(color.sizes) ? color.sizes : [],
-    }))
-    .filter((color) => color.name);
-
-  const selectedColor = cleanColors.find((color) => color.name === activeColor) || cleanColors[0];
-  const previewImages = selectedColor?.images || [];
-  const previewImage = previewImages[imageIndex] || previewImages[0] || "";
-  const previewSizes = selectedColor?.sizes || [];
-  const previewBasePrice = Number(form.price || 0);
-  const previewOfferConfig = resolveOfferDiscount(previewBasePrice, form.offerDiscountMode, form.offerDiscountValue);
-  const previewOfferExtra = form.offerEnabled ? previewOfferConfig.percent : 0;
-  const previewFinalPrice = form.offerEnabled ? computeOfferPrice(previewBasePrice, previewOfferExtra) : previewBasePrice;
-  const previewOldPrice = Number(form.oldPrice || previewBasePrice || 0);
-  const previewDiscount = discountPercent(previewFinalPrice, Math.max(previewOldPrice, previewBasePrice));
-
-  return (
-    <div className="card preview-panel">
-      {previewImage ? (
-        <img src={previewImage} alt={form.name || "Vista previa"} className="preview-panel-img" loading="lazy" decoding="async" />
-      ) : (
-        <div className="preview-placeholder">
-          <div style={{ textAlign: "center", padding: 18 }}>
-            <p style={{ fontWeight: 600, margin: 0 }}>Vista previa en tiempo real</p>
-            <p className="muted" style={{ marginBottom: 0 }}>Sube una foto o pega una URL para ver el producto.</p>
-          </div>
-        </div>
-      )}
-
-      <div style={{ padding: 22, display: "grid", gap: 16 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-          <div>
-            <p className="muted" style={{ margin: 0, fontSize: 14 }}>{form.category || "Categoria"}</p>
-            <h4 style={{ margin: "6px 0 0", fontSize: 24 }}>{form.name || "Nombre del producto"}</h4>
-            <p className="muted" style={{ margin: "6px 0 0", fontSize: 13 }}>Tipo: {form.productType || "General"}</p>
-          </div>
-          <div style={{ textAlign: "right" }}>
-            <p style={{ margin: 0, fontWeight: 600 }}>{currency(previewFinalPrice)}</p>
-            {Math.max(previewOldPrice, previewBasePrice) > previewFinalPrice && (
-              <p className="muted" style={{ margin: "4px 0 0", fontSize: 13, textDecoration: "line-through" }}>{currency(Math.max(previewOldPrice, previewBasePrice))}</p>
-            )}
-          </div>
-        </div>
-
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-          {previewDiscount > 0 && <span className="badge badge-dark">-{previewDiscount}%</span>}
-            {form.offerEnabled && previewOfferExtra > 0 && (
-              <span className="badge badge-warning">
-                {form.offerDiscountMode === "amount"
-                  ? `Oferta extra -${currency(previewOfferConfig.amount)} (${Math.round(previewOfferExtra)}%)`
-                  : `Oferta extra -${Math.round(previewOfferExtra)}%`}
-              </span>
-            )}
-          {form.newArrival && <span className="badge badge-light">Nuevo</span>}
-          {form.featured && <span className="badge badge-success">Destacado</span>}
-          {form.isPublic === false && <span className="badge badge-warning">Oculto del publico</span>}
-        </div>
-
-        <p className="muted" style={{ margin: 0, lineHeight: 1.8 }}>{form.description || "La descripcion del producto se reflejara aqui conforme escribes."}</p>
-
-        <div>
-          <p style={{ fontWeight: 600, marginBottom: 10 }}>Colores</p>
-          <div className="chip-row">
-            {cleanColors.length ? (
-              cleanColors.map((color) => (
-                <button key={color.name} className={`chip ${selectedColor?.name === color.name ? "active" : ""}`} onClick={() => { setActiveColor(color.name); setImageIndex(0); }}>
-                  {color.name}
-                </button>
-              ))
-            ) : (
-              <span className="muted">Agrega variantes de color para verlas aqui.</span>
-            )}
-          </div>
-        </div>
-
-        <div>
-          <p style={{ fontWeight: 600, marginBottom: 10 }}>Tallas</p>
-          <div className="chip-row">
-            {previewSizes.length ? previewSizes.map((entry) => <span key={entry.uid} className="chip">{entry.size || "Talla"} - {Math.max(0, Number(entry.stock) || 0)}</span>) : <span className="muted">Sin tallas todava.</span>}
-          </div>
-        </div>
-
-        {previewImages.length > 1 && (
-          <div>
-            <p style={{ fontWeight: 600, marginBottom: 10 }}>Galera de {selectedColor?.name}</p>
-            <div className="mini-thumb-row">
-              {previewImages.map((image, index) => (
-                <button
-                  key={`${selectedColor?.name}-${index}`}
-                  className="icon-btn"
-                  style={{ width: 72, height: 72, padding: 0, overflow: "hidden", border: imageIndex === index ? "2px solid #111" : "1px solid rgba(0,0,0,.08)" }}
-                  onClick={() => setImageIndex(index)}
-                >
-                  <img src={image} alt={`${selectedColor?.name} ${index + 1}`} className="mini-thumb" style={{ width: "100%", height: "100%", border: 0 }} loading="lazy" decoding="async" />
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
 
 
-function OrdersModal({
-  open,
-  onClose,
-  orders,
-  onSearchChange,
-  searchValue,
-  onOpenReference,
-  onCopyOrderCode,
-  onOpenOrderWhatsApp,
-}) {
-  if (!open) return null;
-  return (
-    <AnimatePresence>
-      <Motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="modal-backdrop" onClick={onClose}>
-        <Motion.div initial={{ opacity: 0, y: 24, scale: 0.97 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 18, scale: 0.97 }} transition={{ duration: 0.22 }} className="sheet" onClick={(event) => event.stopPropagation()}>
-          <div className="sheet-header">
-            <div>
-              <p className="muted" style={{ margin: 0, textTransform: "uppercase", letterSpacing: ".25em", fontSize: 13 }}>Tus ordenes</p>
-              <h3 style={{ margin: "8px 0 0", fontSize: 32 }}>Seguimiento de pedidos</h3>
-            </div>
-            <button onClick={onClose} className="icon-btn"><X size={18} /></button>
-          </div>
-          <div className="sheet-body orders-sheet-body">
-            <input className="input" placeholder="Buscar por codigo o producto" value={searchValue} onChange={(event) => onSearchChange(event.target.value)} />
-            {orders.length === 0 ? (
-              <div className="empty-admin-note">Aun no tienes ordenes guardadas.</div>
-            ) : orders.map((order) => {
-              const normalizedStatus = normalizeOrderStatusForOrder(order.status, order.deliveryType);
-              const canOpenWhatsApp = typeof onOpenOrderWhatsApp === "function"
-                && (normalizedStatus === "Listo para retiro" || normalizedStatus === "Enviado");
-              return (
-              <div key={order.id} className="cart-item customer-order-card">
-                <div className="admin-toolbar customer-order-header">
-                  <div>
-                    <div className="order-code-row">
-                      <p style={{ margin: 0, fontWeight: 700 }}>{order.code}</p>
-                      <button type="button" className="btn btn-outline order-copy-btn" onClick={() => onCopyOrderCode(order.code)}>
-                        <Copy size={13} />
-                        Copiar
-                      </button>
-                    </div>
-                    <p className="muted" style={{ margin: "6px 0 0", fontSize: 13 }}>{formatOrderDate(order.createdAt)} - {order.itemCount} item(s)</p>
-                  </div>
-                  <div style={{ textAlign: "right" }}>
-                    <span className={`badge badge-light customer-order-status ${normalizedStatus.toLowerCase()}`}>{normalizedStatus}</span>
-                    <p style={{ margin: "8px 0 0", fontWeight: 700 }}>{currency(order.total || order.subtotal)}</p>
-                  </div>
-                </div>
-                {(order.discountAmount > 0 || order.couponCode) && (
-                  <div className="order-money-block">
-                    <div>
-                      <span className="muted">Subtotal</span>
-                      <strong>{currency(order.subtotal)}</strong>
-                    </div>
-                    <div>
-                      <span className="muted">Descuento</span>
-                      <strong>-{currency(order.discountAmount || 0)}</strong>
-                    </div>
-                    <div>
-                      <span className="muted">Total</span>
-                      <strong>{currency(order.total || order.subtotal)}</strong>
-                    </div>
-                  </div>
-                )}
-                {order.couponCode && <span className="badge badge-light">Cupon: {order.couponCode}</span>}
-                <OrderStatusProgress status={order.status} deliveryType={order.deliveryType} />
-                {canOpenWhatsApp && (
-                  <button type="button" className="btn btn-soft" onClick={() => onOpenOrderWhatsApp(order)}>
-                    <MessageCircle size={15} />
-                    Abrir WhatsApp
-                  </button>
-                )}
-                <OrderReferenceStrip order={order} onOpen={onOpenReference} />
-                {(order.guideNumber || order.paymentProof) && <div className="divider" />}
-                {order.guideNumber && <p className="helper-text" style={{ margin: 0 }}>Guia de envio: <strong>{order.guideNumber}</strong></p>}
-                {order.paymentProof && <div style={{ marginTop: 10 }}><img src={normalizeImageSource(order.paymentProof) || FALLBACK_IMAGE} alt={`Comprobante ${order.code}`} className="preview-image" loading="lazy" decoding="async" /></div>}
-                <div className="divider" />
-                <div className="grid customer-order-items" style={{ gap: 8 }}>
-                  {order.items.map((item) => (
-                    <div key={item.key} className="customer-order-item-row">
-                      <span>{item.name} - {item.color} - {item.size} x{item.quantity}</span>
-                      <strong>{currency(item.price * item.quantity)}</strong>
-                    </div>
-                  ))}
-                </div>
-              </div>
-              );
-            })}
-          </div>
-        </Motion.div>
-      </Motion.div>
-    </AnimatePresence>
-  );
-}
 
-function ProfileQuickMenu({
-  open,
-  position,
-  onClose,
-  onOpenSection,
-  onOpenOrders,
-  onLogout,
-}) {
-  if (!open) return null;
 
-  return (
-    <AnimatePresence>
-      <Motion.div
-        className="profile-quick-menu-layer"
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        exit={{ opacity: 0 }}
-        transition={{ duration: 0.14 }}
-        onClick={onClose}
-      >
-        <Motion.div
-          className="profile-quick-menu"
-          style={{ top: `${position.top}px`, left: `${position.left}px` }}
-          initial={{ opacity: 0, y: -8, scale: 0.96 }}
-          animate={{ opacity: 1, y: 0, scale: 1 }}
-          exit={{ opacity: 0, y: -6, scale: 0.97 }}
-          transition={{ duration: 0.18 }}
-          onClick={(event) => event.stopPropagation()}
-        >
-          <button type="button" className="profile-quick-item" onClick={() => onOpenSection("datos")}>
-            <UserRound size={15} />
-            <span>Datos personales</span>
-          </button>
-          <button type="button" className="profile-quick-item" onClick={() => onOpenSection("password")}>
-            <KeyRound size={15} />
-            <span>Cambiar contrasena</span>
-          </button>
-          <button type="button" className="profile-quick-item" onClick={() => onOpenSection("direccion")}>
-            <MapPin size={15} />
-            <span>Libreta de direcciones</span>
-          </button>
-          <button type="button" className="profile-quick-item" onClick={onOpenOrders}>
-            <Package size={15} />
-            <span>Mis pedidos</span>
-          </button>
-          <button type="button" className="profile-quick-item profile-quick-item-danger" onClick={onLogout}>
-            <X size={15} />
-            <span>Cerrar sesion</span>
-          </button>
-        </Motion.div>
-      </Motion.div>
-    </AnimatePresence>
-  );
-}
 
-function CartSummaryModal({
-  open,
-  onClose,
-  cart,
-  subtotal,
-  discountAmount,
-  finalTotal,
-  totalItems,
-  onUpdateQuantity,
-  onRemoveItem,
-  onOpenItem,
-  onEditItem,
-  products,
-  onCheckout,
-  onSaveCheckoutAddress,
-  checkoutDisabled,
-  requiresLogin,
-  couponDraftCode,
-  onCouponDraftChange,
-  onApplyCoupon,
-  onRemoveCoupon,
-  couponState,
-  hasActiveCoupon,
-  couponBusy,
-  checkoutBusy,
-  onBrowseCatalog,
-  currentUser,
-  savedAddresses = [],
-  contactSettings,
-}) {
-  const normalizedSavedAddresses = useMemo(() => normalizeAddressBook(savedAddresses), [savedAddresses]);
-  const defaultSavedAddress = normalizedSavedAddresses.find((entry) => entry.isDefault) || normalizedSavedAddresses[0] || null;
-  const hasSavedAddresses = normalizedSavedAddresses.length > 0;
-  const createInitialDeliveryDraft = () => ({
-    fullName: sanitizeLine(currentUser?.name || ""),
-    idNumber: "",
-    city: sanitizeLine(defaultSavedAddress?.city || ""),
-    address: sanitizeParagraph(defaultSavedAddress?.address || currentUser?.shippingAddress || ""),
-    reference: sanitizeParagraph(defaultSavedAddress?.reference || ""),
-    phone: normalizeUserPhoneNumber(defaultSavedAddress?.phone || currentUser?.phone || ""),
-  });
-  const [checkoutStep, setCheckoutStep] = useState("summary");
-  const [deliveryType, setDeliveryType] = useState("pickup");
-  const [deliveryDraft, setDeliveryDraft] = useState(() => createInitialDeliveryDraft());
-  const [selectedSavedAddressId, setSelectedSavedAddressId] = useState(() => (defaultSavedAddress?.id || ""));
-  const effectiveSelectedSavedAddressId = normalizeEntityId(selectedSavedAddressId || defaultSavedAddress?.id || "");
-  const [checkoutFormError, setCheckoutFormError] = useState("");
-  const checkoutSummaryRef = useRef(null);
 
-  const pickupAddress = sanitizeLine(contactSettings?.address || "");
-  const pickupNote = sanitizeParagraph(contactSettings?.locationNote || "");
-  const pickupMapsLink = sanitizeLine(contactSettings?.mapsLink || "");
-  const normalizedCouponCode = sanitizeLine(couponState?.code || couponDraftCode || "");
-  const couponQuickLabel = hasActiveCoupon
-    ? `Cupon ${normalizedCouponCode || "aplicado"} activo`
-    : "Tienes cupon? Aplicalo en el resumen";
-  const checkoutButtonLabel = checkoutBusy
-    ? "Registrando pedido..."
-    : requiresLogin
-      ? "Inicia sesion para confirmar"
-      : checkoutStep === "summary"
-        ? "Confirmar pedido"
-        : (deliveryType === "pickup" ? "Enviar pedido (Retiro)" : "Enviar pedido (Domicilio)");
-  const handleDeliveryDraftChange = (field, value) => {
-    if (field === "city" || field === "address" || field === "reference" || field === "phone") {
-      setSelectedSavedAddressId("");
-    }
-    setDeliveryDraft((previous) => ({
-      ...previous,
-      [field]: field === "phone"
-        ? normalizeUserPhoneNumber(value)
-        : field === "address" || field === "reference"
-          ? sanitizeParagraph(value)
-          : sanitizeLine(value),
-        }));
-  };
-  const applySavedAddressToDeliveryDraft = (addressEntry = null) => {
-    if (!addressEntry) return;
-    setSelectedSavedAddressId(String(addressEntry.id || ""));
-    setDeliveryDraft((previous) => ({
-      ...previous,
-      city: sanitizeLine(addressEntry.city || ""),
-      address: sanitizeParagraph(addressEntry.address || ""),
-      reference: sanitizeParagraph(addressEntry.reference || ""),
-      phone: normalizeUserPhoneNumber(addressEntry.phone || previous.phone || ""),
-    }));
-    setCheckoutFormError("");
-  };
 
-  const handleCheckoutAction = () => {
-    if (requiresLogin) {
-      onCheckout(null);
-      return;
-    }
-    if (checkoutStep === "summary") {
-      setCheckoutStep("confirm");
-      setCheckoutFormError("");
-      return;
-    }
 
-    if (deliveryType === "delivery") {
-      const fullName = sanitizeLine(deliveryDraft.fullName || "");
-      const idNumber = sanitizeLine(deliveryDraft.idNumber || "");
-      const city = sanitizeLine(deliveryDraft.city || "");
-      const address = sanitizeParagraph(deliveryDraft.address || "");
-      const reference = sanitizeParagraph(deliveryDraft.reference || "");
-      const phone = normalizeUserPhoneNumber(deliveryDraft.phone || "");
-      if (!fullName || !idNumber || !city || !address || !reference || phone.length !== AUTH_FIELD_LIMITS.phone) {
-        setCheckoutFormError("Completa nombre, cedula, ciudad, direccion, referencia y telefono para envio.");
-        return;
-      }
-    }
 
-    setCheckoutFormError("");
-    onCheckout({
-      deliveryType,
-      selectedAddressId: effectiveSelectedSavedAddressId,
-      deliveryDetails: {
-        fullName: sanitizeLine(deliveryDraft.fullName || ""),
-        idNumber: sanitizeLine(deliveryDraft.idNumber || ""),
-        city: sanitizeLine(deliveryDraft.city || ""),
-        address: sanitizeParagraph(deliveryDraft.address || ""),
-        reference: sanitizeParagraph(deliveryDraft.reference || ""),
-        phone: normalizeUserPhoneNumber(deliveryDraft.phone || ""),
-      },
-    });
-  };
 
-  const handleSaveCheckoutAddress = async () => {
-    if (deliveryType !== "delivery" || typeof onSaveCheckoutAddress !== "function") return;
-    const city = sanitizeLine(deliveryDraft.city || "");
-    const address = sanitizeParagraph(deliveryDraft.address || "");
-    const reference = sanitizeParagraph(deliveryDraft.reference || "");
-    const phone = normalizeUserPhoneNumber(deliveryDraft.phone || "");
-    if (!city || !address) {
-      setCheckoutFormError("Completa ciudad y direccion para guardar esta direccion en tu libreta.");
-      return;
-    }
-    const result = await onSaveCheckoutAddress({
-      city,
-      address,
-      reference,
-      phone,
-      isDefault: !hasSavedAddresses,
-    });
-    if (!result?.ok) {
-      setCheckoutFormError(result?.message || "No pudimos guardar la direccion en tu libreta.");
-      return;
-    }
-    const savedId = normalizeEntityId(result.savedEntryId || "");
-    if (savedId) {
-      setSelectedSavedAddressId(savedId);
-    }
-    setCheckoutFormError("");
-  };
 
-  useEffect(() => {
-    if (checkoutStep !== "confirm") return;
-    const summaryNode = checkoutSummaryRef.current;
-    if (!summaryNode || typeof summaryNode.scrollTo !== "function") return;
-    summaryNode.scrollTo({ top: 0, behavior: "smooth" });
-  }, [checkoutStep, deliveryType]);
 
-  if (!open) return null;
-
-  return (
-    <AnimatePresence>
-      <Motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="modal-backdrop" onClick={onClose}>
-        <Motion.div
-          initial={{ opacity: 0, y: 24, scale: 0.97 }}
-          animate={{ opacity: 1, y: 0, scale: 1 }}
-          exit={{ opacity: 0, y: 18, scale: 0.97 }}
-          transition={{ duration: 0.22 }}
-          className="sheet cart-fullscreen-sheet"
-          onClick={(event) => event.stopPropagation()}
-        >
-          <div className="sheet-header">
-            <div>
-              <p className="muted" style={{ margin: 0, textTransform: "uppercase", letterSpacing: ".22em", fontSize: 12 }}>Resumen del pedido</p>
-              <h3 style={{ margin: "6px 0 0", fontSize: 25 }}>Tu carrito completo</h3>
-            </div>
-            <button onClick={onClose} className="icon-btn">
-              <X size={18} />
-            </button>
-          </div>
-
-          <div className={`cart-fullscreen-content ${checkoutStep === "confirm" ? "is-confirm-step" : ""}`}>
-            <div className={`sheet-body cart-fullscreen-list ${checkoutStep === "confirm" ? "is-confirm-step" : ""}`}>
-              {cart.length === 0 ? (
-                <EmotionalEmptyState
-                  icon={ShoppingBag}
-                  title="Tu carrito te esta esperando"
-                  description="Explora la coleccion y agrega tus prendas favoritas para armar un pedido increble."
-                  actionLabel="Ir al catalogo"
-                  onAction={onBrowseCatalog}
-                />
-              ) : (
-                cart.map((item) => {
-                  const productRecord = products.find((product) => product.id === item.id);
-                  const stockStatus = getStockStatus(getStockForVariant(productRecord, item.color, item.size));
-                  return (
-                    <Motion.div key={item.key} layout className="cart-item sheet-product-card cart-line-item">
-                      <div className="cart-line-layout">
-                        <button onClick={() => onOpenItem(item)} className="sheet-thumb-button cart-line-thumb-btn" aria-label={`Ver ${item.name}`}>
-                          <img src={item.image} alt={item.name} className="sheet-product-thumb cart-line-thumb" loading="lazy" decoding="async" />
-                        </button>
-
-                        <button onClick={() => onOpenItem(item)} className="sheet-product-title-button cart-line-main" aria-label={`Ver detalle de ${item.name}`}>
-                          <p className="sheet-product-title cart-line-title">{item.name}</p>
-                          <p className="muted sheet-product-meta-text cart-line-meta">{item.color} - {item.size}</p>
-                          <p className="muted sheet-product-meta-text sheet-stock-text cart-line-stock">{stockStatus.label}</p>
-                        </button>
-
-                        <div className="cart-line-side">
-                          <div className="cart-line-actions">
-                            <button type="button" className="btn btn-soft cart-line-edit-btn" onClick={() => onEditItem(item)}>
-                              <PencilLine size={13} />
-                              Editar
-                            </button>
-                            <button onClick={() => onRemoveItem(item.key)} className="sheet-remove-btn cart-line-remove-btn" aria-label="Quitar producto del carrito">
-                              <Trash2 size={15} />
-                            </button>
-                          </div>
-                          <div className="qty sheet-qty cart-line-qty">
-                            <button className="qty-control-btn" onClick={() => onUpdateQuantity(item.key, -1)} aria-label="Disminuir cantidad"><Minus size={14} /></button>
-                            <span className="cart-line-qty-value">{item.quantity}</span>
-                            <button className="qty-control-btn" onClick={() => onUpdateQuantity(item.key, 1)} aria-label="Aumentar cantidad"><Plus size={14} /></button>
-                          </div>
-                          <p className="sheet-product-price cart-line-price">{currency(item.price * item.quantity)}</p>
-                        </div>
-                      </div>
-                    </Motion.div>
-                  );
-                })
-              )}
-            </div>
-
-            <div
-              className={`sheet-footer cart-fullscreen-summary ${checkoutStep === "confirm" ? "is-confirm-step" : ""}`}
-              ref={checkoutSummaryRef}
-            >
-              <div className="cart-footer-details">
-                {checkoutStep === "summary" ? (
-                  <div className="surface coupon-surface">
-                    <div className="coupon-head">
-                      <p style={{ margin: 0, fontWeight: 600 }}>Cupon de descuento</p>
-                      {hasActiveCoupon && (
-                        <button type="button" className="link-btn coupon-remove-btn" onClick={onRemoveCoupon}>
-                          Quitar
-                        </button>
-                      )}
-                    </div>
-                    <div className="coupon-row">
-                      <input
-                        className="input"
-                        placeholder="Codigo"
-                        value={couponDraftCode}
-                        onChange={(event) => onCouponDraftChange(event.target.value)}
-                      />
-                      <button type="button" className="btn btn-outline" onClick={onApplyCoupon} disabled={couponBusy || cart.length === 0} aria-busy={couponBusy}>
-                        {couponBusy ? "Validando..." : "Aplicar"}
-                      </button>
-                    </div>
-                    {!!couponState?.message && (
-                      <p className={`helper-text ${couponState?.ok ? "coupon-ok" : "coupon-error"}`} style={{ margin: 0 }}>
-                        {couponState.message}
-                      </p>
-                    )}
-                    {couponState?.ok && couponState.excludedItemsCount > 0 && (
-                      <p className="helper-text" style={{ margin: 0 }}>
-                        El descuento se aplica solo a productos elegibles: {currency(couponState.eligibleSubtotal)}.
-                      </p>
-                    )}
-                  </div>
-                ) : (
-                  <div className="surface coupon-mini-surface">
-                    <button type="button" className="btn btn-soft coupon-mini-toggle" onClick={() => setCheckoutStep("summary")}>
-                      <Tag size={13} />
-                      {couponQuickLabel}
-                    </button>
-                    {hasActiveCoupon && (
-                      <button type="button" className="link-btn coupon-remove-btn" onClick={onRemoveCoupon}>
-                        Quitar
-                      </button>
-                    )}
-                  </div>
-                )}
-                <div className="cart-footer-meta-row"><span className="muted">Productos</span><strong>{totalItems}</strong></div>
-                <div className="cart-footer-meta-row"><span className="muted">Subtotal</span><strong><AnimatedCurrencyValue value={subtotal} /></strong></div>
-                <div className="cart-footer-meta-row"><span className="muted">Descuento</span><strong>-<AnimatedCurrencyValue value={discountAmount} /></strong></div>
-              </div>
-
-              {cart.length > 0 && !requiresLogin && checkoutStep === "confirm" && (
-                <div className="surface checkout-confirm-surface">
-                  <div className="checkout-confirm-head">
-                    <div className="checkout-confirm-head-row">
-                      <div>
-                        <p className="muted checkout-confirm-step">Paso 2 de 2</p>
-                        <h4 className="checkout-confirm-title">Confirmar entrega</h4>
-                      </div>
-                      <button type="button" className="btn btn-soft checkout-back-btn-inline" onClick={() => setCheckoutStep("summary")}>
-                        <ChevronLeft size={14} />
-                        Volver al resumen
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="checkout-delivery-switch" role="tablist" aria-label="Tipo de entrega">
-                    <button
-                      type="button"
-                      role="tab"
-                      aria-selected={deliveryType === "pickup"}
-                      className={`checkout-delivery-tab ${deliveryType === "pickup" ? "active" : ""}`}
-                      onClick={() => {
-                        setDeliveryType("pickup");
-                        setCheckoutFormError("");
-                      }}
-                    >
-                      <Store size={14} />
-                      Retiro en local
-                    </button>
-                    <button
-                      type="button"
-                      role="tab"
-                      aria-selected={deliveryType === "delivery"}
-                      className={`checkout-delivery-tab ${deliveryType === "delivery" ? "active" : ""}`}
-                      onClick={() => {
-                        setDeliveryType("delivery");
-                        setCheckoutFormError("");
-                      }}
-                    >
-                      <Truck size={14} />
-                      Envio a domicilio
-                    </button>
-                  </div>
-
-                  {deliveryType === "pickup" ? (
-                    <div className="checkout-pickup-box">
-                      <p className="checkout-pickup-line"><MapPin size={14} /> {pickupAddress || "Direccion no configurada aun."}</p>
-                      {pickupNote && <p className="helper-text" style={{ margin: 0 }}>{pickupNote}</p>}
-                      {pickupMapsLink && (
-                        <a className="link-btn checkout-pickup-link" href={pickupMapsLink} target="_blank" rel="noopener noreferrer">
-                          Ver ubicacion en Google Maps
-                        </a>
-                      )}
-                    </div>
-                  ) : (
-                    <div className="checkout-delivery-form">
-                      {hasSavedAddresses && (
-                        <div className="checkout-saved-addresses">
-                          <p className="muted checkout-saved-addresses-title">Libreta de direcciones</p>
-                          <div className="checkout-saved-address-list">
-                            {normalizedSavedAddresses.map((entry) => {
-                              const isActive = String(entry.id || "") === String(effectiveSelectedSavedAddressId || "");
-                              return (
-                                <button
-                                  key={entry.id}
-                                  type="button"
-                                  className={`checkout-saved-address-chip ${isActive ? "active" : ""}`}
-                                  onClick={() => applySavedAddressToDeliveryDraft(entry)}
-                                >
-                                  <span className="checkout-saved-address-chip-label">{entry.label}</span>
-                                  <span className="checkout-saved-address-chip-text">{entry.address}</span>
-                                </button>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      )}
-                      {!hasSavedAddresses && (
-                        <p className="helper-text" style={{ margin: 0 }}>
-                          Aun no tienes direcciones guardadas. Completa este formulario y tu direccion se guardara automaticamente al confirmar.
-                        </p>
-                      )}
-                      <div className="checkout-delivery-grid">
-                        <input className="input" placeholder="Nombre completo" value={deliveryDraft.fullName} onChange={(event) => handleDeliveryDraftChange("fullName", event.target.value)} />
-                        <input className="input" placeholder="Cedula" value={deliveryDraft.idNumber} onChange={(event) => handleDeliveryDraftChange("idNumber", event.target.value)} />
-                        <input className="input" placeholder="Ciudad" value={deliveryDraft.city} onChange={(event) => handleDeliveryDraftChange("city", event.target.value)} />
-                        <input className="input" placeholder="Telefono (10 digitos)" value={deliveryDraft.phone} onChange={(event) => handleDeliveryDraftChange("phone", event.target.value)} />
-                        <textarea className="textarea checkout-delivery-full" placeholder="Direccion exacta" value={deliveryDraft.address} onChange={(event) => handleDeliveryDraftChange("address", event.target.value)} />
-                        <textarea className="textarea checkout-delivery-full" placeholder="Referencia de entrega" value={deliveryDraft.reference} onChange={(event) => handleDeliveryDraftChange("reference", event.target.value)} />
-                      </div>
-                      <button
-                        type="button"
-                        className="btn btn-outline"
-                        onClick={() => { void handleSaveCheckoutAddress(); }}
-                        disabled={typeof onSaveCheckoutAddress !== "function"}
-                      >
-                        Guardar direccion en libreta
-                      </button>
-                    </div>
-                  )}
-
-                  {checkoutFormError && <p className="helper-text coupon-error" style={{ margin: 0 }}>{checkoutFormError}</p>}
-                </div>
-              )}
-
-              <div className={`cart-checkout-cta ${checkoutStep === "confirm" ? "is-confirm-step" : ""}`}>
-                <div className="cart-footer-total-row"><span>Total</span><strong><AnimatedCurrencyValue value={finalTotal} /></strong></div>
-                <button
-                  className="btn btn-primary"
-                  onClick={handleCheckoutAction}
-                  disabled={cart.length === 0 || checkoutDisabled || checkoutBusy}
-                  aria-busy={checkoutBusy}
-                  style={{ opacity: cart.length === 0 || checkoutDisabled || checkoutBusy ? 0.6 : 1, cursor: cart.length === 0 || checkoutDisabled || checkoutBusy ? "not-allowed" : "pointer" }}
-                >
-                  <MessageCircle size={18} />
-                  {checkoutButtonLabel}
-                </button>
-              </div>
-              {requiresLogin && cart.length > 0 && (
-                <p className="helper-text sheet-login-hint">
-                  Gracias por elegirnos. Inicia sesion para guardar tu pedido, seguimiento y confirmacion.
-                </p>
-              )}
-            </div>
-          </div>
-        </Motion.div>
-      </Motion.div>
-    </AnimatePresence>
-  );
-}
-
-function FavoritesModal({
-  open,
-  onClose,
-  favorites,
-  products,
-  onOpenProduct,
-  onToggleFavorite,
-  onBrowseCatalog,
-}) {
-  if (!open) return null;
-
-  const favoriteProducts = favorites
-    .map((favoriteId) => products.find((product) => product.id === favoriteId))
-    .filter(Boolean);
-
-  return (
-    <AnimatePresence>
-      <Motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="modal-backdrop" onClick={onClose}>
-        <Motion.div
-          initial={{ opacity: 0, y: 24, scale: 0.97 }}
-          animate={{ opacity: 1, y: 0, scale: 1 }}
-          exit={{ opacity: 0, y: 18, scale: 0.97 }}
-          transition={{ duration: 0.22 }}
-          className="sheet"
-          onClick={(event) => event.stopPropagation()}
-        >
-          <div className="sheet-header">
-            <div>
-              <p className="muted" style={{ margin: 0, textTransform: "uppercase", letterSpacing: ".25em", fontSize: 13 }}>Favoritos</p>
-              <h3 style={{ margin: "8px 0 0", fontSize: 32 }}>Tus prendas guardadas</h3>
-            </div>
-            <button onClick={onClose} className="icon-btn">
-              <X size={18} />
-            </button>
-          </div>
-
-          <div className="sheet-body">
-            {favoriteProducts.length === 0 ? (
-              <EmotionalEmptyState
-                icon={Heart}
-                title="Aun no guardas favoritos"
-                description="Marca prendas con el corazon y aqui tendras tu seleccion para volver a ellas en segundos."
-                actionLabel="Explorar coleccion"
-                onAction={onBrowseCatalog}
-              />
-            ) : (
-              favoriteProducts.map((product) => (
-                <Motion.div key={product.id} layout className="cart-item sheet-product-card">
-                  <div className="sheet-product-layout">
-                    <button onClick={() => onOpenProduct(product)} className="sheet-thumb-button">
-                      <img src={getCurrentImageForProduct(product, product.colors[0])} alt={product.name} className="sheet-product-thumb" loading="lazy" decoding="async" />
-                    </button>
-
-                    <div className="sheet-product-main">
-                      <div className="sheet-product-top">
-                        <button onClick={() => onOpenProduct(product)} className="sheet-product-title-button">
-                          <p className="sheet-product-title">{product.name}</p>
-                          <p className="muted sheet-product-meta-text">{product.category}</p>
-                        </button>
-
-                        <button onClick={() => onToggleFavorite(product.id)} className="sheet-remove-btn" aria-label="Quitar de favoritos">
-                          <Heart size={16} fill="currentColor" />
-                        </button>
-                      </div>
-
-                      <div className="sheet-product-bottom sheet-product-bottom-favorites">
-                        <p className="sheet-product-price">{currency(product.price)}</p>
-                        <button className="btn btn-outline sheet-detail-btn" onClick={() => onOpenProduct(product)}>Ver detalle</button>
-                      </div>
-                    </div>
-                  </div>
-                </Motion.div>
-              ))
-            )}
-          </div>
-        </Motion.div>
-      </Motion.div>
-    </AnimatePresence>
-  );
-}
 
 function ShowcaseProductCard({ product, onOpenDetail, onAddToCart }) {
   const fallbackSelection = getFallbackSelection(product);
@@ -3211,1662 +2021,14 @@ function CouponManagerPanel({
   );
 }
 
-function AdminPanelModal({
-  open,
-  onClose,
-  adminTab,
-  setAdminTab,
-  editorMessage,
-  editorError,
-  adminProductCount,
-  adminColorVariantCount,
-  adminPhotoCount,
-  adminOutOfStockCount,
-  adminLowStockCount,
-  adminPendingOrders,
-  adminRegisteredUsers,
-  adminOrdersToday,
-  adminRevenueTotal,
-  adminAverageOrderTotal,
-  adminCatalogQuery,
-  setAdminCatalogQuery,
-  onSaveOffers,
-  offersSaving,
-  adminCatalogProducts,
-  products,
-  startEditingProduct,
-  handleDeleteProduct,
-  bulkDeleteCatalogProducts,
-  bulkSetCatalogFeatured,
-  toggleProductPublicVisibility,
-  productForm,
-  resetEditor,
-  handleProductFieldChange,
-  setContactDraft,
-  contactDraft,
-  saveContactConfiguration,
-  contactSyncFeedback,
-  addColorVariant,
-  handleColorFieldChange,
-  removeColorVariant,
-  handleColorFilesUpload,
-  addImageField,
-  handleColorImageChange,
-  removeImageField,
-  saveProduct,
-  setStoreDraft,
-  storeDraft,
-  handleStoreSlideImageUpload,
-  saveStoreConfiguration,
-  addHeroSlide,
-  removeHeroSlide,
-  previewColor,
-  setPreviewColor,
-  previewImageIndex,
-  setPreviewImageIndex,
-  filteredOrderHistory,
-  orderSearch,
-  setOrderSearch,
-  orderStatusFilter,
-  setOrderStatusFilter,
-  orderDeliveryFilter,
-  setOrderDeliveryFilter,
-  orderDateFilter,
-  setOrderDateFilter,
-  orderCustomerFilter,
-  setOrderCustomerFilter,
-  clearAdminOrderFilters,
-  adminOrderCustomerOptions,
-  updateOrderStatus,
-  updateOrderGuide,
-  updateOrderPaymentProof,
-  clearOrderPaymentProof,
-  handleOrderProofUpload,
-  deleteOrder,
-  onOpenOrderReference,
-  onCopyOrderCode,
-  liveOrdersEnabled,
-  setLiveOrdersEnabled,
-  liveOrdersRefreshing,
-  liveOrdersUpdatedAt,
-  orderLiveAlert,
-  clearOrderLiveAlert,
-  refreshOrdersFromServer,
-  productTypeOptions,
-  customProductTypeInput,
-  setCustomProductTypeInput,
-  addManagedProductType,
-  filterTagOptions,
-  customFilterTagInput,
-  setCustomFilterTagInput,
-  addManagedFilterTag,
-  appendFilterTagToForm,
-  removeFilterTagFromForm,
-  addSizeRow,
-  handleSizeRowChange,
-  removeSizeRow,
-  productTypeRecords,
-  filterTagRecords,
-  handleManagedProductTypeDraftChange,
-  saveManagedProductType,
-  deleteManagedProductType,
-  toggleManagedProductTypeActive,
-  handleManagedFilterTagDraftChange,
-  saveManagedFilterTag,
-  deleteManagedFilterTag,
-  toggleManagedFilterTagActive,
-  coupons,
-  couponDraft,
-  couponEditorMessage,
-  couponEditorError,
-  handleCouponDraftFieldChange,
-  toggleCouponDraftProduct,
-  toggleCouponDraftProductType,
-  saveCoupon,
-  resetCouponDraft,
-  startEditingCoupon,
-  toggleCouponActive,
-  deleteCoupon,
-  securityMetrics,
-  securityMetricsBusy,
-  securityMetricsResetBusy,
-  securityMetricsError,
-  securityMetricsUpdatedAt,
-  refreshSecurityMetrics,
-  resetSecurityMetricsData,
-  adminUsers,
-  adminUsersBusy,
-  adminUsersError,
-  adminUsersSearch,
-  setAdminUsersSearch,
-  refreshAdminUsers,
-  saveAdminUser,
-  removeAdminUser,
-  sendAdminUserResetLink,
-  copyAdminUserResetLink,
-}) {
-  const [offerDraftById, setOfferDraftById] = useState({});
-  const [offerDirtyById, setOfferDirtyById] = useState({});
-  const [editingUserId, setEditingUserId] = useState("");
-  const [adminUserDraft, setAdminUserDraft] = useState({
-    name: "",
-    lastName: "",
-    email: "",
-    username: "",
-    phone: "",
-    shippingAddress: "",
-  });
-  const [adminUserSaveBusy, setAdminUserSaveBusy] = useState(false);
-  const [adminUserDeleteBusyId, setAdminUserDeleteBusyId] = useState("");
-  const [adminUserResetBusyId, setAdminUserResetBusyId] = useState("");
-  const [adminUserCopyResetBusyId, setAdminUserCopyResetBusyId] = useState("");
-  const [selectedCatalogProductIds, setSelectedCatalogProductIds] = useState([]);
-  const [catalogBulkBusy, setCatalogBulkBusy] = useState(false);
-
-  const createOfferDraftFromProduct = useCallback((product) => {
-    const offerMode = normalizeOfferDiscountMode(product.offerDiscountMode);
-    const fallbackOfferValue = product.offerDiscountValue != null
-      ? product.offerDiscountValue
-      : (offerMode === "amount"
-        ? (product.offerExtraAmount != null ? product.offerExtraAmount : 0)
-        : (product.offerExtraDiscount != null ? product.offerExtraDiscount : 0));
-    return {
-      offerEnabled: Boolean(product.offerEnabled),
-      offerDiscountMode: offerMode,
-      offerDiscountValue: String(fallbackOfferValue ?? 0),
-    };
-  }, []);
-  const getOfferDraftForProduct = useCallback((product) => {
-    const productId = String(product.id);
-    return offerDraftById[productId] || createOfferDraftFromProduct(product);
-  }, [offerDraftById, createOfferDraftFromProduct]);
-
-  const tabs = [
-    { id: "resumen", label: "Resumen" },
-    { id: "usuarios", label: "Usuarios" },
-    { id: "catalogo", label: "Catálogo" },
-    { id: "ofertas", label: "Ofertas" },
-    { id: "producto", label: productForm.id ? "Editar producto" : "Nuevo producto" },
-    { id: "taxonomias", label: "Tipos y filtros" },
-    { id: "cupones", label: "Cupones" },
-    { id: "contacto", label: "Contacto" },
-    { id: "portada", label: "Portada" },
-    { id: "pedidos", label: "Pedidos" },
-    { id: "seguridad", label: "Seguridad" },
-  ];
-
-  const formTags = splitFilterTagsText(productForm.filterTagsText);
-  const normalizedAdminUsersQuery = sanitizeLine(adminUsersSearch || "").toLowerCase();
-  const visibleAdminUsers = useMemo(() => {
-    if (!normalizedAdminUsersQuery) return adminUsers;
-    return adminUsers.filter((user) => {
-      const searchText = [
-        user.name,
-        user.lastName,
-        user.email,
-        user.username,
-        user.phone,
-      ].join(" ").toLowerCase();
-      return searchText.includes(normalizedAdminUsersQuery);
-    });
-  }, [adminUsers, normalizedAdminUsersQuery]);
-  const visibleCatalogProductIds = useMemo(
-    () => adminCatalogProducts.map((product) => String(product.id)),
-    [adminCatalogProducts],
-  );
-  const selectedCatalogSet = useMemo(
-    () => new Set(selectedCatalogProductIds.map((entry) => String(entry))),
-    [selectedCatalogProductIds],
-  );
-  const selectedVisibleCatalogCount = useMemo(
-    () => visibleCatalogProductIds.filter((id) => selectedCatalogSet.has(id)).length,
-    [selectedCatalogSet, visibleCatalogProductIds],
-  );
-  const allVisibleCatalogSelected = visibleCatalogProductIds.length > 0 && selectedVisibleCatalogCount === visibleCatalogProductIds.length;
-
-  const startEditingUser = (user) => {
-    const safeUser = user || {};
-    setEditingUserId(String(safeUser.id || ""));
-    setAdminUserDraft({
-      name: safeUser.name || "",
-      lastName: safeUser.lastName || "",
-      email: safeUser.email || "",
-      username: safeUser.username || "",
-      phone: safeUser.phone || "",
-      shippingAddress: safeUser.shippingAddress || "",
-    });
-  };
-
-  const cancelEditingUser = () => {
-    setEditingUserId("");
-    setAdminUserDraft({
-      name: "",
-      lastName: "",
-      email: "",
-      username: "",
-      phone: "",
-      shippingAddress: "",
-    });
-  };
-
-  const saveEditingUser = async () => {
-    if (!editingUserId || adminUserSaveBusy) return;
-    setAdminUserSaveBusy(true);
-    const result = await saveAdminUser({
-      userId: editingUserId,
-      ...adminUserDraft,
-    });
-    setAdminUserSaveBusy(false);
-    if (result?.ok) {
-      cancelEditingUser();
-    }
-  };
-
-  const deleteUserFromAdmin = async (user) => {
-    const userId = String(user?.id || "");
-    if (!userId || adminUserDeleteBusyId) return;
-    const displayName = sanitizeLine([user?.name, user?.lastName].filter(Boolean).join(" ")) || user?.email || "este usuario";
-    if (typeof window !== "undefined" && !window.confirm(`Eliminar ${displayName}?`)) return;
-    setAdminUserDeleteBusyId(userId);
-    await removeAdminUser(userId);
-    setAdminUserDeleteBusyId("");
-    if (editingUserId === userId) {
-      cancelEditingUser();
-    }
-  };
-
-  const sendResetLinkToUser = async (user) => {
-    const userId = String(user?.id || "");
-    if (!userId || adminUserResetBusyId) return;
-    setAdminUserResetBusyId(userId);
-    try {
-      await sendAdminUserResetLink({
-        userId,
-        email: user?.email || "",
-      });
-    } finally {
-      setAdminUserResetBusyId("");
-    }
-  };
-
-  const copyResetLinkForUser = async (user) => {
-    const userId = String(user?.id || "");
-    if (!userId || adminUserCopyResetBusyId) return;
-    setAdminUserCopyResetBusyId(userId);
-    try {
-      await copyAdminUserResetLink({
-        userId,
-        email: user?.email || "",
-      });
-    } finally {
-      setAdminUserCopyResetBusyId("");
-    }
-  };
-
-  const toggleCatalogSelection = (productId) => {
-    const normalizedId = String(productId || "");
-    if (!normalizedId) return;
-    setSelectedCatalogProductIds((previous) => {
-      const set = new Set(previous.map((entry) => String(entry)));
-      if (set.has(normalizedId)) {
-        set.delete(normalizedId);
-      } else {
-        set.add(normalizedId);
-      }
-      return [...set];
-    });
-  };
-
-  const toggleSelectAllVisibleCatalogProducts = () => {
-    if (!visibleCatalogProductIds.length) return;
-    setSelectedCatalogProductIds((previous) => {
-      const set = new Set(previous.map((entry) => String(entry)));
-      if (allVisibleCatalogSelected) {
-        visibleCatalogProductIds.forEach((id) => set.delete(id));
-      } else {
-        visibleCatalogProductIds.forEach((id) => set.add(id));
-      }
-      return [...set];
-    });
-  };
-
-  const clearCatalogSelection = () => {
-    setSelectedCatalogProductIds([]);
-  };
-
-  const runCatalogBulkAction = async (runner, emptyMessage) => {
-    const targetIds = [...selectedCatalogSet];
-    if (!targetIds.length) {
-      if (emptyMessage) {
-        window.alert(emptyMessage);
-      }
-      return;
-    }
-    if (catalogBulkBusy) return;
-    setCatalogBulkBusy(true);
-    try {
-      const result = await runner(targetIds);
-      if (result?.ok) {
-        clearCatalogSelection();
-      }
-    } finally {
-      setCatalogBulkBusy(false);
-    }
-  };
-
-  useEffect(() => {
-    setSelectedCatalogProductIds((previous) => previous.filter((id) => visibleCatalogProductIds.includes(String(id))));
-  }, [visibleCatalogProductIds]);
-
-  if (!open) return null;
-
-  const offerPendingCount = Object.values(offerDirtyById).filter(Boolean).length;
-  const hasPendingOfferChanges = offerPendingCount > 0;
-  const activeOfferCount = adminCatalogProducts.reduce((total, product) => {
-    const draft = getOfferDraftForProduct(product);
-    return total + (draft.offerEnabled ? 1 : 0);
-  }, 0);
-
-  const updateOfferDraft = (productId, patch = {}) => {
-    const normalizedId = String(productId);
-    setOfferDraftById((previous) => {
-      const product = products.find((entry) => String(entry.id) === normalizedId);
-      const baseDraft = previous[normalizedId]
-        || (product ? createOfferDraftFromProduct(product) : {
-          offerEnabled: false,
-          offerDiscountMode: "percent",
-          offerDiscountValue: "0",
-        });
-      const nextDraft = {
-        ...baseDraft,
-        ...patch,
-      };
-      if (patch.offerDiscountMode != null) {
-        nextDraft.offerDiscountMode = normalizeOfferDiscountMode(patch.offerDiscountMode);
-      }
-      if (patch.offerDiscountValue != null) {
-        nextDraft.offerDiscountValue = String(patch.offerDiscountValue);
-      }
-      return {
-        ...previous,
-        [normalizedId]: nextDraft,
-      };
-    });
-    setOfferDirtyById((previous) => ({
-      ...previous,
-      [normalizedId]: true,
-    }));
-  };
-
-  const resetOfferDrafts = () => {
-    setOfferDraftById({});
-    setOfferDirtyById({});
-  };
-
-  const handleSaveOffersDraft = async () => {
-    if (!hasPendingOfferChanges || offersSaving || typeof onSaveOffers !== "function") return;
-    const payload = {};
-    Object.entries(offerDraftById).forEach(([productId, draft]) => {
-      if (!offerDirtyById[productId]) return;
-      payload[productId] = {
-        offerEnabled: Boolean(draft.offerEnabled),
-        offerDiscountMode: normalizeOfferDiscountMode(draft.offerDiscountMode),
-        offerDiscountValue: draft.offerDiscountValue,
-      };
-    });
-    const result = await onSaveOffers(payload);
-    if (result?.ok) {
-      setOfferDraftById({});
-      setOfferDirtyById({});
-    }
-  };
-
-  const metricsEndpoints = securityMetrics?.endpoints && typeof securityMetrics.endpoints === "object"
-    ? Object.entries(securityMetrics.endpoints)
-    : [];
-  const securityTotals = metricsEndpoints.reduce((accumulator, [, entry]) => {
-    const source = entry || {};
-    accumulator.requests += Number(source.requests) || 0;
-    accumulator.errors += Number(source.errors) || 0;
-    accumulator.rateLimited += Number(source.rateLimited) || 0;
-    accumulator.csrfRejected += Number(source.csrfRejected) || 0;
-    accumulator.invalidJson += Number(source.invalidJson) || 0;
-    accumulator.invalidContentType += Number(source.invalidContentType) || 0;
-    accumulator.payloadTooLarge += Number(source.payloadTooLarge) || 0;
-    return accumulator;
-  }, {
-    requests: 0,
-    errors: 0,
-    rateLimited: 0,
-    csrfRejected: 0,
-    invalidJson: 0,
-    invalidContentType: 0,
-    payloadTooLarge: 0,
-  });
-
-  return (
-    <AnimatePresence>
-      <Motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="modal-backdrop" onClick={onClose}>
-        <Motion.div initial={{ opacity: 0, y: 24, scale: 0.98 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 18, scale: 0.98 }} transition={{ duration: ANIMATION.base }} className="admin-modal-shell" onClick={(event) => event.stopPropagation()}>
-          <button type="button" className="icon-btn admin-modal-close-top" onClick={onClose} aria-label="Cerrar panel admin">
-            <X size={18} />
-          </button>
-          <div className="admin-sidebar-nav">
-            <div>
-              <p style={{ margin: 0, textTransform: "uppercase", letterSpacing: ".25em", fontSize: 12, color: "rgba(255,255,255,.65)" }}>Panel admin</p>
-              <h3 style={{ margin: "8px 0 0", fontSize: 30 }}>Administración</h3>
-              <p style={{ margin: "10px 0 0", color: "rgba(255,255,255,.72)", lineHeight: 1.7 }}>Gestiona catalogo, pedidos, contacto y contenido del local desde un solo lugar.</p>
-            </div>
-            <div className="grid" style={{ gap: 10 }}>
-              {tabs.map((tab) => (
-                <button key={tab.id} className={`admin-tab-btn ${adminTab === tab.id ? "active" : ""}`} onClick={() => setAdminTab(tab.id)}>{tab.label}</button>
-              ))}
-            </div>
-            <button className="btn btn-outline" onClick={onClose}><X size={16} />Cerrar panel</button>
-          </div>
-
-          <div className="admin-modal-content">
-            {(editorMessage || editorError) && (
-              <div>
-                {editorMessage && <div className="status-message status-success">{editorMessage}</div>}
-                {editorError && <div className="status-message status-error" style={{ marginTop: editorMessage ? 10 : 0 }}>{editorError}</div>}
-              </div>
-            )}
-
-            {adminTab === "resumen" && (
-              <div className="admin-tab-panel">
-                <div className="card" style={{ padding: 22 }}>
-                  <div className="admin-toolbar">
-                    <div>
-                      <p className="muted" style={{ textTransform: "uppercase", letterSpacing: ".25em", fontSize: 13 }}>Resumen operativo</p>
-                      <h4 style={{ margin: "6px 0 0", fontSize: 28 }}>Panel ejecutivo</h4>
-                      <p className="helper-text" style={{ marginTop: 8 }}>Inventario, ventas, usuarios y seguridad en una sola vista.</p>
-                    </div>
-                    <div className="admin-actions">
-                      <button className="btn btn-soft" onClick={() => refreshAdminUsers({ force: true, preferCache: false })} disabled={adminUsersBusy}>
-                        <RotateCcw size={16} />
-                        {adminUsersBusy ? "Usuarios..." : "Usuarios"}
-                      </button>
-                      <button className="btn btn-soft" onClick={() => refreshSecurityMetrics({ force: true, preferCache: false })} disabled={securityMetricsBusy}>
-                        <RotateCcw size={16} />
-                        {securityMetricsBusy ? "Seguridad..." : "Seguridad"}
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="admin-kpi-grid" style={{ marginTop: 18 }}>
-                    <div className="admin-kpi-card">
-                      <p className="admin-kpi-title">Productos</p>
-                      <strong className="admin-kpi-value">{adminProductCount}</strong>
-                      <p className="admin-kpi-hint">{adminOutOfStockCount} sin stock · {adminLowStockCount} stock bajo</p>
-                    </div>
-                    <div className="admin-kpi-card">
-                      <p className="admin-kpi-title">Cobertura de catálogo</p>
-                      <strong className="admin-kpi-value">{adminColorVariantCount}</strong>
-                      <p className="admin-kpi-hint">{adminPhotoCount} fotos cargadas</p>
-                    </div>
-                    <div className="admin-kpi-card">
-                      <p className="admin-kpi-title">Pedidos pendientes</p>
-                      <strong className="admin-kpi-value">{adminPendingOrders}</strong>
-                      <p className="admin-kpi-hint">{adminOrdersToday} pedidos hoy</p>
-                    </div>
-                    <div className="admin-kpi-card">
-                      <p className="admin-kpi-title">Usuarios registrados</p>
-                      <strong className="admin-kpi-value">{adminRegisteredUsers}</strong>
-                      <p className="admin-kpi-hint">Gestiona cuentas en la pestaña Usuarios</p>
-                    </div>
-                    <div className="admin-kpi-card">
-                      <p className="admin-kpi-title">Ventas acumuladas</p>
-                      <strong className="admin-kpi-value" style={{ fontSize: 20 }}>{currency(adminRevenueTotal)}</strong>
-                      <p className="admin-kpi-hint">Ticket promedio: {currency(adminAverageOrderTotal)}</p>
-                    </div>
-                    <div className="admin-kpi-card">
-                      <p className="admin-kpi-title">Eventos de seguridad</p>
-                      <strong className="admin-kpi-value">{securityTotals.rateLimited + securityTotals.csrfRejected + securityTotals.errors}</strong>
-                      <p className="admin-kpi-hint">Rate-limit + CSRF + errores</p>
-                    </div>
-                    <div className="admin-kpi-card">
-                      <p className="admin-kpi-title">Ultima lectura</p>
-                      <strong className="admin-kpi-value" style={{ fontSize: 16 }}>{formatAdminTimestamp(securityMetricsUpdatedAt || securityMetrics?.generatedAt)}</strong>
-                      <p className="admin-kpi-hint">Monitoreo en tiempo real</p>
-                    </div>
-                  </div>
-
-                  <div className="admin-quick-actions" style={{ marginTop: 18 }}>
-                    <button className="btn btn-primary" onClick={() => { resetEditor(); setAdminTab("producto"); }}>
-                      <Plus size={16} />
-                      Nuevo producto
-                    </button>
-                    <button className="btn btn-outline" onClick={() => setAdminTab("pedidos")}>
-                      <Package size={16} />
-                      Revisar pedidos
-                    </button>
-                    <button className="btn btn-outline" onClick={() => setAdminTab("usuarios")}>
-                      <UserRound size={16} />
-                      Gestionar usuarios
-                    </button>
-                    <button className="btn btn-outline" onClick={() => setAdminTab("contacto")}>
-                      <Navigation size={16} />
-                      Editar contacto
-                    </button>
-                    <button className="btn btn-outline" onClick={() => setAdminTab("seguridad")}>
-                      <ShieldCheck size={16} />
-                      Ver seguridad
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {adminTab === "usuarios" && (
-              <div className="admin-tab-panel">
-                <div className="card admin-users-card" style={{ padding: 22 }}>
-                  <div className="admin-toolbar admin-users-toolbar">
-                    <div>
-                      <p className="muted" style={{ textTransform: "uppercase", letterSpacing: ".25em", fontSize: 13 }}>Clientes y cuentas</p>
-                      <h4 className="admin-users-title" style={{ margin: "6px 0 0", fontSize: 28 }}>Usuarios registrados</h4>
-                      <p className="helper-text" style={{ marginTop: 8 }}>Busca por nombre o correo, edita perfil y elimina cuentas.</p>
-                    </div>
-                    <div className="admin-actions admin-users-top-actions">
-                      <span className="badge badge-light">{visibleAdminUsers.length} visibles</span>
-                      <button className="btn btn-soft" onClick={() => refreshAdminUsers({ force: true, preferCache: false })} disabled={adminUsersBusy}>
-                        <RotateCcw size={16} />
-                        {adminUsersBusy ? "Actualizando..." : "Actualizar"}
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="admin-search-row admin-users-search-row" style={{ marginTop: 14 }}>
-                    <Search size={16} />
-                    <input
-                      className="input"
-                      placeholder="Buscar por nombre, correo o usuario"
-                      value={adminUsersSearch}
-                      onChange={(event) => setAdminUsersSearch(event.target.value)}
-                    />
-                  </div>
-
-                  {adminUsersError && (
-                    <div className="status-message status-error" style={{ marginTop: 12 }}>
-                      {adminUsersError}
-                    </div>
-                  )}
-
-                  <div className="admin-list" style={{ marginTop: 18 }}>
-                    {visibleAdminUsers.length === 0 ? (
-                      <div className="empty-admin-note">{adminUsersBusy ? "Cargando usuarios..." : "No hay usuarios que coincidan con la búsqueda."}</div>
-                    ) : visibleAdminUsers.map((user) => {
-                      const userId = String(user.id || "");
-                      const isEditing = editingUserId === userId;
-                      const isDeleting = adminUserDeleteBusyId === userId;
-                      const isResetting = adminUserResetBusyId === userId;
-                      const isCopyingReset = adminUserCopyResetBusyId === userId;
-                      const canResetPassword = isValidEmail(user.email || "");
-                      return (
-                        <div key={userId || user.email} className="admin-product-row admin-user-row" style={{ alignItems: "flex-start" }}>
-                          <div className="admin-user-avatar" style={{ width: 56, height: 56, borderRadius: 14, background: "rgba(0,0,0,.06)", display: "grid", placeItems: "center", fontWeight: 700 }}>
-                            {String((user.name || user.email || "U").trim().charAt(0) || "U").toUpperCase()}
-                          </div>
-                          <div className="admin-user-main" style={{ width: "100%" }}>
-                            {!isEditing && (
-                              <div className="stack admin-user-meta" style={{ gap: 6 }}>
-                                <h5 className="admin-card-title admin-user-name">{sanitizeLine([user.name, user.lastName].filter(Boolean).join(" ")) || "Sin nombre"}</h5>
-                                <p className="muted admin-user-line" style={{ margin: 0 }}>{user.email || "Sin correo"}{user.username ? ` - @${user.username}` : ""}</p>
-                                <p className="muted admin-user-line" style={{ margin: 0 }}>{user.phone ? `Tel: ${user.phone}` : "Sin telefono"}{user.shippingAddress ? ` - ${user.shippingAddress}` : ""}</p>
-                                <p className="helper-text admin-user-line" style={{ margin: 0 }}>
-                                  Actualizado: {formatAdminTimestamp(user.updatedAt || user.createdAt)}
-                                </p>
-                              </div>
-                            )}
-
-                            {isEditing && (
-                              <div className="settings-grid admin-user-edit-grid">
-                                <input className="input" placeholder="Nombre" value={adminUserDraft.name} onChange={(event) => setAdminUserDraft((previous) => ({ ...previous, name: event.target.value }))} />
-                                <input className="input" placeholder="Apellido" value={adminUserDraft.lastName} onChange={(event) => setAdminUserDraft((previous) => ({ ...previous, lastName: event.target.value }))} />
-                                <input className="input" placeholder="Correo" value={adminUserDraft.email} onChange={(event) => setAdminUserDraft((previous) => ({ ...previous, email: event.target.value }))} />
-                                <input className="input" placeholder="Usuario" value={adminUserDraft.username} onChange={(event) => setAdminUserDraft((previous) => ({ ...previous, username: event.target.value }))} />
-                                <input className="input" placeholder="Telefono" value={adminUserDraft.phone} onChange={(event) => setAdminUserDraft((previous) => ({ ...previous, phone: event.target.value }))} />
-                                <div className="admin-full">
-                                  <textarea className="textarea" placeholder="Direccion de envio" value={adminUserDraft.shippingAddress} onChange={(event) => setAdminUserDraft((previous) => ({ ...previous, shippingAddress: event.target.value }))} />
-                                </div>
-                              </div>
-                            )}
-                          </div>
-                          <div className="admin-actions admin-user-actions">
-                            {!isEditing && (
-                              <>
-                                <button className="btn btn-soft" onClick={() => startEditingUser(user)}><PencilLine size={16} />Editar</button>
-                                <button
-                                  className="btn btn-soft"
-                                  onClick={() => { void sendResetLinkToUser(user); }}
-                                  disabled={!canResetPassword || isResetting || isCopyingReset}
-                                  title={canResetPassword ? "Enviar correo de restablecimiento" : "El usuario no tiene un correo valido"}
-                                >
-                                  <Mail size={16} />
-                                  {isResetting ? "Enviando..." : "Enviar reset"}
-                                </button>
-                                <button
-                                  className="btn btn-soft"
-                                  onClick={() => { void copyResetLinkForUser(user); }}
-                                  disabled={!canResetPassword || isCopyingReset || isResetting}
-                                  title={canResetPassword ? "Generar y copiar enlace de restablecimiento" : "El usuario no tiene un correo valido"}
-                                >
-                                  <Copy size={16} />
-                                  {isCopyingReset ? "Copiando..." : "Copiar enlace"}
-                                </button>
-                                <button className="btn btn-danger" onClick={() => { void deleteUserFromAdmin(user); }} disabled={isDeleting}>
-                                  <Trash2 size={16} />
-                                  {isDeleting ? "Eliminando..." : "Eliminar"}
-                                </button>
-                              </>
-                            )}
-                            {isEditing && (
-                              <>
-                                <button className="btn btn-primary" onClick={() => { void saveEditingUser(); }} disabled={adminUserSaveBusy}>
-                                  <ShieldCheck size={16} />
-                                  {adminUserSaveBusy ? "Guardando..." : "Guardar"}
-                                </button>
-                                <button className="btn btn-outline" onClick={cancelEditingUser}>
-                                  <X size={16} />
-                                  Cancelar
-                                </button>
-                              </>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {adminTab === "catalogo" && (
-              <div className="admin-tab-panel">
-                <div className="card" style={{ padding: 22 }}>
-                  <div className="admin-toolbar">
-                    <div>
-                      <p className="muted" style={{ textTransform: "uppercase", letterSpacing: ".25em", fontSize: 13 }}>Catálogo</p>
-                      <h4 style={{ margin: "6px 0 0", fontSize: 28 }}>Productos disponibles</h4>
-                    </div>
-                    <button className="btn btn-primary" onClick={() => { resetEditor(); setAdminTab("producto"); }}><Plus size={16} />Nuevo producto</button>
-                  </div>
-                  <div className="admin-actions" style={{ marginTop: 12, flexWrap: "wrap" }}>
-                    <span className="badge badge-light">{selectedCatalogSet.size} seleccionados</span>
-                    <button className="btn btn-soft" type="button" onClick={toggleSelectAllVisibleCatalogProducts}>
-                      <CheckCircle2 size={16} />
-                      {allVisibleCatalogSelected ? "Quitar visibles" : "Seleccionar visibles"}
-                    </button>
-                    <button className="btn btn-outline" type="button" onClick={clearCatalogSelection} disabled={!selectedCatalogSet.size}>
-                      <X size={16} />
-                      Limpiar selección
-                    </button>
-                    <button
-                      className="btn btn-soft"
-                      type="button"
-                      disabled={catalogBulkBusy || !selectedCatalogSet.size}
-                      onClick={() => {
-                        void runCatalogBulkAction(
-                          (ids) => bulkSetCatalogFeatured(ids, true),
-                          "Selecciona al menos un producto para destacar.",
-                        );
-                      }}
-                    >
-                      <Star size={16} />
-                      Destacar
-                    </button>
-                    <button
-                      className="btn btn-soft"
-                      type="button"
-                      disabled={catalogBulkBusy || !selectedCatalogSet.size}
-                      onClick={() => {
-                        void runCatalogBulkAction(
-                          (ids) => bulkSetCatalogFeatured(ids, false),
-                          "Selecciona al menos un producto para quitar destacado.",
-                        );
-                      }}
-                    >
-                      <Star size={16} />
-                      Quitar destacado
-                    </button>
-                    <button
-                      className="btn btn-danger"
-                      type="button"
-                      disabled={catalogBulkBusy || !selectedCatalogSet.size}
-                      onClick={() => {
-                        if (typeof window !== "undefined" && !window.confirm(`Eliminar ${selectedCatalogSet.size} producto(s) seleccionados?`)) return;
-                        void runCatalogBulkAction(
-                          (ids) => bulkDeleteCatalogProducts(ids),
-                          "Selecciona al menos un producto para eliminar.",
-                        );
-                      }}
-                    >
-                      <Trash2 size={16} />
-                      {catalogBulkBusy ? "Procesando..." : "Eliminar seleccionados"}
-                    </button>
-                  </div>
-                  <div className="admin-search-row" style={{ marginTop: 14 }}>
-                    <Search size={16} />
-                    <input
-                      className="input"
-                      placeholder="Buscar por nombre, categoría, tipo o tag"
-                      value={adminCatalogQuery}
-                      onChange={(event) => setAdminCatalogQuery(event.target.value)}
-                    />
-                  </div>
-                  <div className="admin-list" style={{ marginTop: 18 }}>
-                    {adminCatalogProducts.length === 0 ? (
-                      <div className="empty-admin-note">No hay productos que coincidan con la búsqueda actual.</div>
-                    ) : adminCatalogProducts.map((product) => (
-                      <div key={product.id} className="admin-product-row admin-catalog-row">
-                        <label className="admin-catalog-select">
-                          <input
-                            className="checkbox"
-                            type="checkbox"
-                            checked={selectedCatalogSet.has(String(product.id))}
-                            onChange={() => toggleCatalogSelection(product.id)}
-                          />
-                        </label>
-                        <img src={getCurrentImageForProduct(product, product.colors[0])} alt={product.name} className="admin-product-thumb" loading="lazy" decoding="async" />
-                        <div>
-                          <p className="muted" style={{ margin: 0, fontSize: 14 }}>{product.category}</p>
-                          <h5 className="admin-card-title">{product.name}</h5>
-                          <p className="muted" style={{ margin: "6px 0 0", lineHeight: 1.6 }}>{product.colors.length} color{product.colors.length === 1 ? "" : "es"} - {product.sizes.join(", ")}</p>
-                          <div className="chip-row" style={{ marginTop: 8 }}>
-                            <span className="badge badge-light">{product.productType || "General"}</span>
-                            {product.featured ? <span className="badge badge-success">Destacado</span> : null}
-                            {product.isPublic === false ? <span className="badge badge-warning">Oculto</span> : <span className="badge badge-light">Publico</span>}
-                            {!!product.filterTags?.length && product.filterTags.slice(0, 3).map((tag) => <span key={tag} className="badge badge-light">{tag}</span>)}
-                          </div>
-                        </div>
-                        <div className="admin-actions">
-                          <button className="btn btn-outline" type="button" onClick={() => toggleProductPublicVisibility(product.id)}>
-                            {product.isPublic === false ? "Publicar" : "Ocultar"}
-                          </button>
-                          <button className="btn btn-soft" onClick={() => { startEditingProduct(product); setAdminTab("producto"); }}><PencilLine size={16} />Editar</button>
-                          <button className="btn btn-danger" onClick={() => handleDeleteProduct(product.id)}><Trash2 size={16} />Eliminar</button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {adminTab === "ofertas" && (
-              <div className="admin-tab-panel">
-                <div className="card" style={{ padding: 22 }}>
-                  <div className="admin-toolbar">
-                    <div>
-                      <p className="muted" style={{ textTransform: "uppercase", letterSpacing: ".25em", fontSize: 13 }}>Ofertas</p>
-                      <h4 style={{ margin: "6px 0 0", fontSize: 28 }}>Descuento extra por prenda</h4>
-                      <p className="helper-text" style={{ marginTop: 8 }}>
-                        Configura descuentos por porcentaje o valor fijo y guarda los cambios para que queden persistidos.
-                      </p>
-                    </div>
-                    <div className="admin-actions">
-                      <span className="badge badge-light">{activeOfferCount} en oferta</span>
-                      {hasPendingOfferChanges && <span className="badge badge-warning">{offerPendingCount} sin guardar</span>}
-                      <button
-                        className="btn btn-outline"
-                        type="button"
-                        onClick={resetOfferDrafts}
-                        disabled={!hasPendingOfferChanges || offersSaving}
-                      >
-                        <RotateCcw size={16} />
-                        Restablecer
-                      </button>
-                      <button
-                        className="btn btn-primary"
-                        type="button"
-                        onClick={() => { void handleSaveOffersDraft(); }}
-                        disabled={!hasPendingOfferChanges || offersSaving}
-                      >
-                        <ShieldCheck size={16} />
-                        {offersSaving ? "Guardando..." : "Guardar ofertas"}
-                      </button>
-                    </div>
-                  </div>
-                  <div className="admin-search-row" style={{ marginTop: 14 }}>
-                    <Search size={16} />
-                    <input
-                      className="input"
-                      placeholder="Buscar producto para oferta"
-                      value={adminCatalogQuery}
-                      onChange={(event) => setAdminCatalogQuery(event.target.value)}
-                    />
-                  </div>
-                  <div className="admin-list" style={{ marginTop: 18 }}>
-                    {adminCatalogProducts.length === 0 ? (
-                      <div className="empty-admin-note">No hay productos para mostrar con esa búsqueda.</div>
-                    ) : adminCatalogProducts.map((product) => {
-                      const productId = String(product.id);
-                      const draft = getOfferDraftForProduct(product);
-                      const basePrice = Math.max(0, Number(product.basePrice != null ? product.basePrice : product.price) || 0);
-                      const offerMode = normalizeOfferDiscountMode(draft.offerDiscountMode);
-                      const resolvedOffer = resolveOfferDiscount(basePrice, offerMode, draft.offerDiscountValue);
-                      const offerPercent = Math.round(resolvedOffer.percent);
-                      const offerEnabled = Boolean(draft.offerEnabled);
-                      const finalOfferPrice = offerEnabled ? computeOfferPrice(basePrice, resolvedOffer.percent) : basePrice;
-
-                      return (
-                        <div key={`offer-${product.id}`} className="admin-product-row offer-admin-row">
-                          <img src={getCurrentImageForProduct(product, product.colors[0])} alt={product.name} className="admin-product-thumb" loading="lazy" decoding="async" />
-                          <div>
-                            <p className="muted" style={{ margin: 0, fontSize: 14 }}>{product.category}</p>
-                            <h5 className="admin-card-title">{product.name}</h5>
-                            <div className="offer-admin-summary">
-                              <span>Base: <strong>{currency(basePrice)}</strong></span>
-                              <span className={`offer-admin-final ${offerEnabled ? "active" : ""}`}>
-                                Final: <strong>{currency(finalOfferPrice)}</strong>
-                              </span>
-                              {offerEnabled && offerPercent > 0 && <span className="offer-admin-percent">-{offerPercent}%</span>}
-                              {offerDirtyById[productId] && <span className="badge badge-warning">Pendiente</span>}
-                            </div>
-                          </div>
-                          <div className="offer-admin-controls">
-                            <label className="offer-admin-toggle">
-                              <input
-                                className="checkbox"
-                                type="checkbox"
-                                checked={offerEnabled}
-                                onChange={(event) => updateOfferDraft(product.id, { offerEnabled: event.target.checked })}
-                              />
-                              Activar
-                            </label>
-                            <select
-                              className="select"
-                              value={offerMode}
-                              onChange={(event) => updateOfferDraft(product.id, { offerDiscountMode: event.target.value })}
-                              disabled={!offerEnabled}
-                            >
-                              <option value="percent">%</option>
-                              <option value="amount">$</option>
-                            </select>
-                            <input
-                              className="input"
-                              type="text"
-                              inputMode="decimal"
-                              value={String(draft.offerDiscountValue != null ? draft.offerDiscountValue : 0)}
-                              placeholder={offerMode === "amount" ? "Valor $" : "Porcentaje"}
-                              disabled={!offerEnabled}
-                              onChange={(event) => updateOfferDraft(product.id, { offerDiscountValue: event.target.value })}
-                            />
-                            <button className="btn btn-soft offer-admin-edit-btn" type="button" onClick={() => { startEditingProduct(product); setAdminTab("producto"); }}>
-                              <PencilLine size={14} />
-                              Editar
-                            </button>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {adminTab === "producto" && (
-              <div className="admin-layout" style={{ gridTemplateColumns: "minmax(0, 1.1fr) minmax(320px, .9fr)" }}>
-                <div className="admin-tab-panel" id="admin-editor">
-                  <div className="card" style={{ padding: 22 }}>
-                    <div className="admin-toolbar">
-                      <div>
-                        <p className="muted" style={{ textTransform: "uppercase", letterSpacing: ".25em", fontSize: 13 }}>{productForm.id ? "Edicion" : "Alta"}</p>
-                        <h4 style={{ margin: "6px 0 0", fontSize: 28 }}>{productForm.id ? "Editar producto" : "Agregar producto"}</h4>
-                      </div>
-                      {productForm.id && (<button className="btn btn-outline" onClick={resetEditor}><X size={16} />Cancelar edicion</button>)}
-                    </div>
-                    <div className="admin-grid" style={{ marginTop: 18 }}>
-                      <input className="input" placeholder="Nombre del producto" value={productForm.name} onChange={(event) => handleProductFieldChange("name", event.target.value)} />
-                      <input className="input" placeholder="Categoria" value={productForm.category} onChange={(event) => handleProductFieldChange("category", event.target.value)} />
-
-                      <div className="admin-full surface">
-                        <div style={{ display: "grid", gap: 12 }}>
-                          <div>
-                            <p style={{ margin: 0, fontWeight: 600 }}>Tipo de producto</p>
-                            <p className="helper-text">Ahora tambien puedes editarlo o eliminarlo desde la pestana "Tipos y filtros".</p>
-                          </div>
-                          <select className="select" value={productForm.productType} onChange={(event) => handleProductFieldChange("productType", event.target.value)}>
-                            {productTypeOptions.map((item) => <option key={item} value={item}>{item}</option>)}
-                          </select>
-                          <div className="chip-row">
-                            {productTypeOptions.map((item) => (
-                              <button key={item} type="button" className={`chip ${productForm.productType === item ? "active" : ""}`} onClick={() => handleProductFieldChange("productType", item)}>{item}</button>
-                            ))}
-                          </div>
-                          <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 10 }}>
-                            <input className="input" placeholder="Agregar nuevo tipo" value={customProductTypeInput} onChange={(event) => setCustomProductTypeInput(event.target.value)} />
-                            <button type="button" className="btn btn-outline" onClick={addManagedProductType}><Plus size={16} />Agregar</button>
-                          </div>
-                        </div>
-                      </div>
-
-                      <input className="input" type="number" placeholder="Precio actual" value={productForm.price} onChange={(event) => handleProductFieldChange("price", event.target.value)} />
-                      <input className="input" type="number" placeholder="Precio anterior" value={productForm.oldPrice} onChange={(event) => handleProductFieldChange("oldPrice", event.target.value)} />
-                      <input className="input" type="number" min="0" max="5" step="0.1" placeholder="Rating" value={productForm.rating} onChange={(event) => handleProductFieldChange("rating", event.target.value)} />
-                      <div className="admin-full"><textarea className="textarea" placeholder="Descripcion" value={productForm.description} onChange={(event) => handleProductFieldChange("description", event.target.value)} /></div>
-
-                      <div className="admin-full surface">
-                        <div style={{ display: "grid", gap: 12 }}>
-                          <div>
-                            <p style={{ margin: 0, fontWeight: 600 }}>Filtros / tags del producto</p>
-                            <p className="helper-text">Puedes crearlos aqui rapidamente y luego editarlos o depurarlos en la pestana "Tipos y filtros".</p>
-                          </div>
-                          {!!formTags.length && (
-                            <div className="chip-row">
-                              {formTags.map((tag) => (
-                                <button key={tag} type="button" className="badge badge-light" style={{ border: 0, cursor: "pointer" }} onClick={() => removeFilterTagFromForm(tag)}>
-                                  {tag}
-                                  <X size={12} />
-                                </button>
-                              ))}
-                            </div>
-                          )}
-                          <div className="chip-row">
-                              {filterTagOptions.map((tag) => (
-                                <button key={tag} type="button" className={`chip ${formTags.includes(tag) ? "active" : ""}`} onClick={() => appendFilterTagToForm(tag)}>{tag}</button>
-                              ))}
-                            </div>
-                          <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 10 }}>
-                            <input className="input" placeholder="Agregar nuevo filtro" value={customFilterTagInput} onChange={(event) => setCustomFilterTagInput(event.target.value)} />
-                            <button type="button" className="btn btn-outline" onClick={addManagedFilterTag}><Plus size={16} />Agregar</button>
-                          </div>
-                        </div>
-                      </div>
-                    
-
-                      <div className="admin-full surface">
-                        <div style={{ display: "grid", gap: 12 }}>
-                          <div className="chip-row" style={{ justifyContent: "space-between" }}>
-                            <label style={{ display: "inline-flex", alignItems: "center", gap: 10, fontWeight: 600 }}><input className="checkbox" type="checkbox" checked={productForm.featured} onChange={(event) => handleProductFieldChange("featured", event.target.checked)} />Marcar como destacado</label>
-                            <label style={{ display: "inline-flex", alignItems: "center", gap: 10, fontWeight: 600 }}><input className="checkbox" type="checkbox" checked={productForm.newArrival} onChange={(event) => handleProductFieldChange("newArrival", event.target.checked)} />Mostrar como nuevo</label>
-                          </div>
-                          <label style={{ display: "inline-flex", alignItems: "center", gap: 10, fontWeight: 600 }}>
-                            <input
-                              className="checkbox"
-                              type="checkbox"
-                              checked={Boolean(productForm.isPublic)}
-                              onChange={(event) => handleProductFieldChange("isPublic", event.target.checked)}
-                            />
-                            Visible al publico
-                          </label>
-                          <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 140px 140px", gap: 10, alignItems: "end" }}>
-                            <label style={{ display: "inline-flex", alignItems: "center", gap: 10, fontWeight: 600 }}>
-                              <input
-                                className="checkbox"
-                                type="checkbox"
-                                checked={Boolean(productForm.offerEnabled)}
-                                onChange={(event) => handleProductFieldChange("offerEnabled", event.target.checked)}
-                              />
-                              Incluir en pestana de ofertas
-                            </label>
-                            <select
-                              className="select"
-                              value={productForm.offerDiscountMode || "percent"}
-                              onChange={(event) => handleProductFieldChange("offerDiscountMode", event.target.value)}
-                              disabled={!productForm.offerEnabled}
-                            >
-                              <option value="percent">Extra %</option>
-                              <option value="amount">Extra $</option>
-                            </select>
-                            <input
-                              className="input"
-                              type="text"
-                              inputMode="decimal"
-                              placeholder={productForm.offerDiscountMode === "amount" ? "Valor $" : "Porcentaje"}
-                              value={productForm.offerDiscountValue}
-                              onChange={(event) => handleProductFieldChange("offerDiscountValue", event.target.value)}
-                              disabled={!productForm.offerEnabled}
-                            />
-                          </div>
-                          <p className="helper-text">Activalo para mostrar esta prenda en la tienda y aplicar descuento extra por porcentaje o valor fijo.</p>
-                        </div>
-                      </div>
-
-                      <div className="admin-full">
-                        <div className="admin-toolbar" style={{ marginBottom: 14 }}>
-                          <div>
-                            <h5 style={{ margin: 0, fontSize: 20 }}>Variantes por color + talla</h5>
-                            <p className="helper-text">Cada color tiene su propia galeria y stock por talla.</p>
-                          </div>
-                          <button className="btn btn-soft" type="button" onClick={addColorVariant}><Plus size={16} />Agregar color</button>
-                        </div>
-                        <div className="grid" style={{ gap: 14 }}>
-                          {productForm.colorsData.map((color) => (
-                            <div key={color.uid} className="variant-card">
-                              <div className="variant-header">
-                                <input className="input" style={{ flex: 1 }} placeholder="Nombre del color" value={color.name} onChange={(event) => handleColorFieldChange(color.uid, "name", event.target.value)} />
-                                <button className="btn btn-outline" style={{ padding: "12px 16px" }} type="button" onClick={() => removeColorVariant(color.uid)} disabled={productForm.colorsData.length === 1}><Trash2 size={16} />Quitar color</button>
-                              </div>
-
-                              <div className="upload-box">
-                                <div className="admin-toolbar">
-                                  <div>
-                                    <p style={{ margin: 0, fontWeight: 600 }}>Fotos de {color.name || "este color"}</p>
-                                    <p className="helper-text">Puedes pegar URLs, subir varias imágenes y eliminar las que no quieras conservar.</p>
-                                  </div>
-                                  <div className="admin-actions">
-                                    <button className="btn btn-soft" type="button" onClick={() => addImageField(color.uid)}><Plus size={16} />Agregar campo</button>
-                                    <label className="btn btn-outline" style={{ cursor: "pointer" }}><Plus size={16} />Subir fotos<input type="file" accept="image/*" multiple style={{ display: "none" }} onChange={(event) => handleColorFilesUpload(color.uid, event)} /></label>
-                                  </div>
-                                </div>
-                              </div>
-
-                              <div className="image-row">
-                                {color.images.map((image, imageIndex) => (
-                                  <div key={`${color.uid}-${imageIndex}`} className="image-editor">
-                                    <input className="input" placeholder={`URL de imagen ${imageIndex + 1}`} value={image} onChange={(event) => handleColorImageChange(color.uid, imageIndex, event.target.value)} />
-                                    <button className="btn btn-outline" type="button" onClick={() => removeImageField(color.uid, imageIndex)}><Trash2 size={16} />Quitar</button>
-                                  </div>
-                                ))}
-                                {!!color.images.filter(Boolean).length && (
-                                  <div className="mini-thumb-row">
-                                    {color.images.filter(Boolean).map((image, index) => <img key={`${color.uid}-thumb-${index}`} src={image} alt={`${color.name || "color"} ${index + 1}`} className="mini-thumb" loading="lazy" decoding="async" />)}
-                                  </div>
-                                )}
-                              </div>
-
-                              <div className="surface">
-                                <div className="admin-toolbar" style={{ marginBottom: 12 }}>
-                                  <div>
-                                    <p style={{ margin: 0, fontWeight: 600 }}>Tallas de {color.name || "este color"}</p>
-                                    <p className="helper-text">Edita cada combinacin color+talla con su stock exacto.</p>
-                                  </div>
-                                  <button type="button" className="btn btn-soft" onClick={() => addSizeRow(color.uid)}><Plus size={16} />Agregar talla</button>
-                                </div>
-                                <div className="stack">
-                                  {(color.sizes || []).map((sizeRow) => (
-                                    <div key={sizeRow.uid} className="variant-size-row">
-                                      <input className="input" placeholder="Talla" value={sizeRow.size} onChange={(event) => handleSizeRowChange(color.uid, sizeRow.uid, "size", event.target.value)} />
-                                      <input className="input" type="number" min="0" placeholder="Stock" value={sizeRow.stock} onChange={(event) => handleSizeRowChange(color.uid, sizeRow.uid, "stock", event.target.value)} />
-                                      <button type="button" className="btn btn-outline" onClick={() => removeSizeRow(color.uid, sizeRow.uid)}><Trash2 size={16} />Quitar</button>
-                                    </div>
-                                  ))}
-                                </div>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    
-
-                    <div className="product-editor-footer">
-                      <button className="btn btn-primary" type="button" onClick={saveProduct}><ShieldCheck size={16} />Guardar producto</button>
-                      <button className="btn btn-outline" type="button" onClick={resetEditor}>Restablecer datos</button>
-                    </div>
-                  </div>
-                </div>
-                </div>
-
-                <ProductDraftPreview
-                  form={productForm}
-                  activeColor={previewColor}
-                  setActiveColor={setPreviewColor}
-                  imageIndex={previewImageIndex}
-                  setImageIndex={setPreviewImageIndex}
-                />
-              </div>
-            )}
-
-            {adminTab === "taxonomias" && (
-              <div className="admin-tab-panel entity-columns">
-                <ManagedEntitiesEditor
-                  title="Tipos de producto"
-                  description="Edita, ocualta o elimina tipos sin romper productos asociados. Si un tipo esta en uso, puedes reasignar sus productos antes de borrarlo."
-                  icon={Tag}
-                  records={productTypeRecords}
-                  products={products}
-                  entityType="productType"
-                  addInput={customProductTypeInput}
-                  setAddInput={setCustomProductTypeInput}
-                  onAdd={addManagedProductType}
-                  onDraftChange={handleManagedProductTypeDraftChange}
-                  onSave={saveManagedProductType}
-                  onDelete={deleteManagedProductType}
-                  onToggleActive={toggleManagedProductTypeActive}
-                />
-                <ManagedEntitiesEditor
-                  title="Filtros y tags"
-                  description="Administra nombres, slug y visibilidad de los filtros. Al eliminar uno puedes reemplazarlo o quitarlo de los productos relacionados."
-                  icon={Tags}
-                  records={filterTagRecords}
-                  products={products}
-                  entityType="filterTag"
-                  addInput={customFilterTagInput}
-                  setAddInput={setCustomFilterTagInput}
-                  onAdd={addManagedFilterTag}
-                  onDraftChange={handleManagedFilterTagDraftChange}
-                  onSave={saveManagedFilterTag}
-                  onDelete={deleteManagedFilterTag}
-                  onToggleActive={toggleManagedFilterTagActive}
-                />
-              </div>
-            )}
-
-            {adminTab === "cupones" && (
-              <CouponManagerPanel
-                coupons={coupons}
-                couponDraft={couponDraft}
-                couponEditorMessage={couponEditorMessage}
-                couponEditorError={couponEditorError}
-                products={products}
-                productTypeOptions={productTypeOptions}
-                onCouponDraftFieldChange={handleCouponDraftFieldChange}
-                onToggleCouponDraftProduct={toggleCouponDraftProduct}
-                onToggleCouponDraftProductType={toggleCouponDraftProductType}
-                onSaveCoupon={saveCoupon}
-                onResetCouponDraft={resetCouponDraft}
-                onEditCoupon={startEditingCoupon}
-                onToggleCouponActive={toggleCouponActive}
-                onDeleteCoupon={deleteCoupon}
-              />
-            )}
-
-            {adminTab === "contacto" && (
-              <div className="admin-tab-panel">
-                <div className="card" style={{ padding: 22 }}>
-                  <div className="admin-toolbar">
-                    <div>
-                      <p className="muted" style={{ textTransform: "uppercase", letterSpacing: ".25em", fontSize: 13 }}>Configuracin de contacto</p>
-                      <h4 style={{ margin: "6px 0 0", fontSize: 28 }}>WhatsApp, direccion y redes</h4>
-                    </div>
-                  </div>
-                  <div className="settings-grid" style={{ marginTop: 18 }}>
-                    <div className="admin-full"><input className="input" placeholder="Direccion del local" value={contactDraft.address} onChange={(event) => setContactDraft((previous) => ({ ...previous, address: event.target.value }))} /></div>
-                    <input className="input" placeholder="Numero de WhatsApp para pedidos" value={contactDraft.whatsappNumber} onChange={(event) => setContactDraft((previous) => ({ ...previous, whatsappNumber: event.target.value }))} />
-                    <input className="input" placeholder="Enlace directo de WhatsApp (opcional)" value={contactDraft.whatsappLink} onChange={(event) => setContactDraft((previous) => ({ ...previous, whatsappLink: event.target.value }))} />
-                    <input className="input" placeholder="Telefono de contacto (opcional)" value={contactDraft.phone || ""} onChange={(event) => setContactDraft((previous) => ({ ...previous, phone: event.target.value }))} />
-                    <input className="input" placeholder="Correo de contacto (opcional)" value={contactDraft.email || ""} onChange={(event) => setContactDraft((previous) => ({ ...previous, email: event.target.value }))} />
-                    <input className="input" placeholder="Enlace de Google Maps" value={contactDraft.mapsLink || ""} onChange={(event) => setContactDraft((previous) => ({ ...previous, mapsLink: event.target.value }))} />
-                    <div className="admin-full">
-                      <textarea
-                        className="textarea"
-                        placeholder="Texto breve debajo de la ubicacion (como llegar)"
-                        value={contactDraft.locationNote || ""}
-                        onChange={(event) => setContactDraft((previous) => ({ ...previous, locationNote: event.target.value }))}
-                      />
-                    </div>
-                    <div className="admin-full">
-                      <input
-                        className="input"
-                        placeholder="Titulo del bloque de contacto visible en la web"
-                        value={storeDraft.footerTitle || ""}
-                        onChange={(event) => setStoreDraft((previous) => ({ ...previous, footerTitle: event.target.value }))}
-                      />
-                    </div>
-                    <div className="admin-full">
-                      <textarea
-                        className="textarea"
-                        placeholder="Texto del bloque de contacto visible en la web"
-                        value={storeDraft.footerText || ""}
-                        onChange={(event) => setStoreDraft((previous) => ({ ...previous, footerText: event.target.value }))}
-                      />
-                    </div>
-                    <input className="input" placeholder="Enlace de Instagram" value={contactDraft.instagram} onChange={(event) => setContactDraft((previous) => ({ ...previous, instagram: event.target.value }))} />
-                    <input className="input" placeholder="Enlace de Facebook" value={contactDraft.facebook} onChange={(event) => setContactDraft((previous) => ({ ...previous, facebook: event.target.value }))} />
-                    <input className="input" placeholder="Enlace de TikTok" value={contactDraft.tiktok} onChange={(event) => setContactDraft((previous) => ({ ...previous, tiktok: event.target.value }))} />
-                    <div className="admin-full">
-                      <button className="btn btn-primary" onClick={saveContactConfiguration}>
-                        <ShieldCheck size={16} />
-                        Guardar contacto y redes
-                      </button>
-                    </div>
-                    {contactSyncFeedback?.message && (
-                      <div className="admin-full">
-                        <div className={`status-message ${contactSyncFeedback.tone === "success" ? "status-success" : (contactSyncFeedback.tone === "error" ? "status-error" : "status-warning")}`}>
-                          {contactSyncFeedback.message}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {adminTab === "portada" && (
-              <div className="admin-tab-panel">
-                <div className="card" style={{ padding: 22 }}>
-                  <div className="admin-toolbar">
-                    <div>
-                      <p className="muted" style={{ textTransform: "uppercase", letterSpacing: ".25em", fontSize: 13 }}>Branding y portada</p>
-                      <h4 style={{ margin: "6px 0 0", fontSize: 28 }}>Hero y slides restaurados</h4>
-                      <p className="muted" style={{ marginBottom: 0, lineHeight: 1.8 }}>Configura titulo, subtitulo y destino de cada slide. Tambien puedes ajustar etiqueta y porcentaje del bloque de ofertas del catalogo.</p>
-                    </div>
-                  </div>
-
-                  <div className="settings-grid" style={{ marginTop: 18 }}>
-                    <input className="input" placeholder="Etiqueta de marca" value={storeDraft.brandLabel} onChange={(event) => setStoreDraft((previous) => ({ ...previous, brandLabel: event.target.value }))} />
-                    <input className="input" placeholder="Nombre de marca" value={storeDraft.brandName} onChange={(event) => setStoreDraft((previous) => ({ ...previous, brandName: event.target.value }))} />
-                    <input className="input" placeholder="Badge principal del hero" value={storeDraft.heroBadgeText || ""} onChange={(event) => setStoreDraft((previous) => ({ ...previous, heroBadgeText: event.target.value }))} />
-                    <input className="input" placeholder="Texto CTA principal" value={storeDraft.primaryCtaText || ""} onChange={(event) => setStoreDraft((previous) => ({ ...previous, primaryCtaText: event.target.value }))} />
-                    <input className="input" placeholder="Etiqueta de ofertas (ej: Ofertas)" value={storeDraft.offerLabel || ""} onChange={(event) => setStoreDraft((previous) => ({ ...previous, offerLabel: event.target.value }))} />
-                    <input className="input" placeholder="Porcentaje de oferta (ej: 30)" value={storeDraft.offerPercentage ?? ""} onChange={(event) => setStoreDraft((previous) => ({ ...previous, offerPercentage: event.target.value }))} />
-                    <div className="admin-full"><input className="input" placeholder="Texto breve de oferta (opcional)" value={storeDraft.offerText || ""} onChange={(event) => setStoreDraft((previous) => ({ ...previous, offerText: event.target.value }))} /></div>
-                    <input className="input" placeholder="Titulo del bloque de WhatsApp" value={storeDraft.saleTitle} onChange={(event) => setStoreDraft((previous) => ({ ...previous, saleTitle: event.target.value }))} />
-                    <div className="admin-full"><textarea className="textarea" placeholder="Descripcion del bloque de WhatsApp" value={storeDraft.saleDescription} onChange={(event) => setStoreDraft((previous) => ({ ...previous, saleDescription: event.target.value }))} /></div>
-                    <input className="input" placeholder="Titulo del footer" value={storeDraft.footerTitle} onChange={(event) => setStoreDraft((previous) => ({ ...previous, footerTitle: event.target.value }))} />
-                    <input className="input" placeholder="Texto del footer" value={storeDraft.footerText} onChange={(event) => setStoreDraft((previous) => ({ ...previous, footerText: event.target.value }))} />
-
-                    <div className="admin-full">
-                      <div className="slides-toolbar" style={{ margin: "6px 0 12px" }}>
-                        <h5 style={{ margin: 0, fontSize: 20 }}>Slides del hero</h5>
-                        <button className="btn btn-soft" onClick={addHeroSlide}><Plus size={16} />Agregar slide</button>
-                      </div>
-                      <div className="grid" style={{ gap: 14 }}>
-                        {storeDraft.heroSlides.map((slide, index) => (
-                          <div key={slide.id} className="slide-card">
-                            <div className="admin-toolbar">
-                              <strong>Slide {index + 1}</strong>
-                              <div className="admin-actions">
-                                <label className="btn btn-outline" style={{ cursor: "pointer" }}><Plus size={16} />Subir imagen<input type="file" accept="image/*" style={{ display: "none" }} onChange={(event) => handleStoreSlideImageUpload(slide.id, event)} /></label>
-                                <button className="btn btn-outline" onClick={() => removeHeroSlide(slide.id)} disabled={storeDraft.heroSlides.length === 1}><Trash2 size={16} />Quitar</button>
-                              </div>
-                            </div>
-                            <input className="input" placeholder="Titulo del slide" value={slide.title || ""} onChange={(event) => setStoreDraft((previous) => ({ ...previous, heroSlides: previous.heroSlides.map((entry) => entry.id === slide.id ? { ...entry, title: event.target.value } : entry) }))} />
-                            <textarea className="textarea" placeholder="Subtitulo del slide" value={slide.subtitle || ""} onChange={(event) => setStoreDraft((previous) => ({ ...previous, heroSlides: previous.heroSlides.map((entry) => entry.id === slide.id ? { ...entry, subtitle: event.target.value } : entry) }))} />
-                            <select className="select" value={slide.linkedProductId || ""} onChange={(event) => setStoreDraft((previous) => ({ ...previous, heroSlides: previous.heroSlides.map((entry) => entry.id === slide.id ? { ...entry, linkedProductId: event.target.value } : entry) }))}>
-                              <option value="">Sin producto relacionado</option>
-                              {products.map((product) => <option key={product.id} value={String(product.id)}>{product.name}</option>)}
-                            </select>
-                            <input className="input" placeholder="URL externa opcional (tiene prioridad sobre el producto)" value={slide.targetUrl || ""} onChange={(event) => setStoreDraft((previous) => ({ ...previous, heroSlides: previous.heroSlides.map((entry) => entry.id === slide.id ? { ...entry, targetUrl: event.target.value } : entry) }))} />
-                            <input className="input" placeholder="URL de imagen" value={slide.image} onChange={(event) => setStoreDraft((previous) => ({ ...previous, heroSlides: previous.heroSlides.map((entry) => entry.id === slide.id ? { ...entry, image: event.target.value } : entry) }))} />
-                            <p className="helper-text">La imagen conserva el clic al producto relacionado o a la URL configurada, pero el slide vuelve a mostrar su texto editorial.</p>
-                            {slide.image && <img src={slide.image} alt={slide.title || `Slide ${index + 1}`} className="preview-image" loading="lazy" decoding="async" />}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div className="admin-full"><button className="btn btn-primary" onClick={saveStoreConfiguration}><ShieldCheck size={16} />Guardar portada y branding</button></div>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {adminTab === "pedidos" && (
-              <div className="admin-tab-panel">
-                <div className="card" style={{ padding: 22 }}>
-                  <div className="admin-toolbar">
-                    <div>
-                      <p className="muted" style={{ textTransform: "uppercase", letterSpacing: ".25em", fontSize: 13 }}>Seguimiento</p>
-                      <h4 style={{ margin: "6px 0 0", fontSize: 28 }}>Pedidos guardados</h4>
-                    </div>
-                    <div className="admin-actions">
-                      <span className="badge badge-light">{filteredOrderHistory.length} registros</span>
-                      <span className="badge badge-light">Ultima: {formatAdminTimestamp(liveOrdersUpdatedAt)}</span>
-                      <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontWeight: 600 }}>
-                        <input
-                          className="checkbox"
-                          type="checkbox"
-                          checked={liveOrdersEnabled}
-                          onChange={(event) => setLiveOrdersEnabled(event.target.checked)}
-                        />
-                        En vivo
-                      </label>
-                      <button className="btn btn-soft" onClick={() => refreshOrdersFromServer({ force: true, preferCache: false, notifyAdminOnNew: false })} disabled={liveOrdersRefreshing}>
-                        <RotateCcw size={16} />
-                        {liveOrdersRefreshing ? "Actualizando..." : "Actualizar"}
-                      </button>
-                    </div>
-                  </div>
-                  {orderLiveAlert && (
-                    <div className="order-live-alert-card">
-                      <div>
-                        <p className="order-live-alert-kicker">Alerta en vivo</p>
-                        <h5 className="order-live-alert-title">
-                          {orderLiveAlert.totalNew > 1 ? `${orderLiveAlert.totalNew} pedidos nuevos` : "Nuevo pedido recibido"}
-                        </h5>
-                        <p className="order-live-alert-copy">
-                          {orderLiveAlert.orderCode
-                            ? `Pedido ${orderLiveAlert.orderCode} - ${orderLiveAlert.customerName} - ${currency(orderLiveAlert.total)}`
-                            : "Hay nuevos pedidos pendientes de revision inmediata."}
-                        </p>
-                        <p className="helper-text">Detectado: {formatAdminTimestamp(orderLiveAlert.detectedAt || orderLiveAlert.createdAt)}</p>
-                      </div>
-                      <button className="btn btn-outline" type="button" onClick={clearOrderLiveAlert}>
-                        Ocultar alerta
-                      </button>
-                    </div>
-                  )}
-                  <div className="stack" style={{ marginTop: 18 }}>
-                    <div className="admin-order-filters">
-                      <div className="admin-order-filters-grid">
-                        <input
-                          className="input"
-                          placeholder="Buscar por codigo, cliente, correo, telefono o producto"
-                          value={orderSearch}
-                          onChange={(event) => setOrderSearch(event.target.value)}
-                        />
-                        <input
-                          className="input"
-                          list="admin-order-customer-options"
-                          placeholder="Filtrar por cliente"
-                          value={orderCustomerFilter}
-                          onChange={(event) => setOrderCustomerFilter(event.target.value)}
-                        />
-                        <datalist id="admin-order-customer-options">
-                          {adminOrderCustomerOptions.map((label) => (
-                            <option key={label} value={label} />
-                          ))}
-                        </datalist>
-                        <select className="select" value={orderStatusFilter} onChange={(event) => setOrderStatusFilter(event.target.value)}>
-                          {ADMIN_ORDER_STATUS_FILTERS.map((status) => (
-                            <option key={status} value={status}>
-                              {status === "all" ? "Todos los estados" : status}
-                            </option>
-                          ))}
-                        </select>
-                        <select className="select" value={orderDeliveryFilter} onChange={(event) => setOrderDeliveryFilter(event.target.value)}>
-                          {ADMIN_ORDER_DELIVERY_FILTERS.map((deliveryType) => (
-                            <option key={deliveryType} value={deliveryType}>
-                              {deliveryType === "all"
-                                ? "Todas las entregas"
-                                : (deliveryType === "delivery" ? "Solo domicilio" : "Solo retiro")}
-                            </option>
-                          ))}
-                        </select>
-                        <select className="select" value={orderDateFilter} onChange={(event) => setOrderDateFilter(event.target.value)}>
-                          {ADMIN_ORDER_DATE_FILTERS.map((dateFilter) => (
-                            <option key={dateFilter} value={dateFilter}>
-                              {dateFilter === "all"
-                                ? "Todas las fechas"
-                                : (dateFilter === "today"
-                                  ? "Hoy"
-                                  : (dateFilter === "last7" ? "Ultimos 7 dias" : "Ultimos 30 dias"))}
-                            </option>
-                          ))}
-                        </select>
-                        <button
-                          className="btn btn-outline"
-                          type="button"
-                          onClick={clearAdminOrderFilters}
-                          disabled={orderStatusFilter === "all"
-                            && orderDeliveryFilter === "all"
-                            && orderDateFilter === "all"
-                            && !orderSearch.trim()
-                            && !orderCustomerFilter.trim()}
-                        >
-                          Limpiar filtros
-                        </button>
-                      </div>
-                    </div>
-                    <div className="admin-list">
-                      {filteredOrderHistory.length === 0 ? (
-                        <div className="empty-admin-note">No hay pedidos que coincidan con la busqueda.</div>
-                      ) : filteredOrderHistory.map((order) => {
-                        const orderSla = getOrderSlaMeta(order);
-                        const normalizedOrderStatus = normalizeOrderStatusForOrder(order.status, order.deliveryType);
-                        const isPickupOrder = order.deliveryType === "pickup";
-                        const isDeliveryOrder = order.deliveryType === "delivery";
-                        const isCancelledOrder = normalizedOrderStatus === "Cancelado";
-                        const orderStatusOptions = getOrderStatusOptions(order.deliveryType);
-                        const canMarkPickupReady = isPickupOrder && ["Pendiente", "Confirmado", "Preparando"].includes(normalizedOrderStatus);
-                        const canConfirmPickup = isPickupOrder && normalizedOrderStatus === "Listo para retiro";
-                        const stockReservationState = order?.stockReservation?.state === "released" ? "released" : "reserved";
-                        const deliveryContactName = order.deliveryFullName || order.customerName || "Cliente";
-                        const deliveryPhone = order.deliveryPhone || order.customerPhone || "";
-                        return (
-                        <div key={order.id} className="cart-item admin-order-card">
-                          <div className="admin-toolbar admin-order-header">
-                            <div className="admin-order-main">
-                              <div className="order-code-row">
-                                <p className="admin-order-code">{order.code}</p>
-                                <button type="button" className="btn btn-outline order-copy-btn" onClick={() => onCopyOrderCode(order.code)}>
-                                  <Copy size={13} />
-                                  Copiar
-                                </button>
-                              </div>
-                              <p className="muted" style={{ margin: "6px 0 0", fontSize: 13 }}>{formatOrderDate(order.createdAt)} - {order.itemCount} item(s)</p>
-                              <p className="muted" style={{ margin: "6px 0 0", fontSize: 13 }}>{order.customerName || "Cliente"}{order.customerEmail ? ` - ${order.customerEmail}` : ""}</p>
-                              <p className="muted" style={{ margin: "6px 0 0", fontSize: 13 }}>
-                                Entrega: {order.deliveryLabel || (isDeliveryOrder ? "Envio a domicilio" : "Retiro en local")}
-                              </p>
-                              <div className="chip-row" style={{ marginTop: 8 }}>
-                                <span className={`badge ${orderSla.tone === "danger" ? "badge-danger" : (orderSla.tone === "warning" ? "badge-warning" : (orderSla.tone === "success" ? "badge-success" : "badge-light"))}`}>
-                                  {orderSla.label}
-                                </span>
-                                <span className="badge badge-light">{orderSla.ageMinutes} min</span>
-                                <span className={`badge ${stockReservationState === "released" ? "badge-warning" : "badge-light"}`}>
-                                  Stock: {stockReservationState === "released" ? "Liberado" : "Reservado"}
-                                </span>
-                              </div>
-                            </div>
-                            <div className="admin-order-summary">
-                              <button className="btn btn-outline admin-order-reference-btn" onClick={() => onOpenOrderReference(order)}>
-                                Referencia visual
-                              </button>
-                              <p style={{ margin: 0, fontWeight: 700 }}>{currency(order.total || order.subtotal)}</p>
-                            </div>
-                          </div>
-                          {(order.discountAmount > 0 || order.couponCode) && (
-                            <div className="order-money-block">
-                              <div>
-                                <span className="muted">Subtotal</span>
-                                <strong>{currency(order.subtotal)}</strong>
-                              </div>
-                              <div>
-                                <span className="muted">Descuento</span>
-                                <strong>-{currency(order.discountAmount || 0)}</strong>
-                              </div>
-                              <div>
-                                <span className="muted">Total</span>
-                                <strong>{currency(order.total || order.subtotal)}</strong>
-                              </div>
-                            </div>
-                          )}
-                          {order.couponCode && <span className="badge badge-light">Cupon: {order.couponCode}</span>}
-
-                          <OrderStatusProgress status={order.status} deliveryType={order.deliveryType} />
-                          {isCancelledOrder && (
-                            <div className={`order-stock-sync-note ${stockReservationState === "released" ? "is-ok" : "is-warning"}`}>
-                              {stockReservationState === "released"
-                                ? "Stock reintegrado correctamente para este pedido cancelado."
-                                : "Pedido cancelado con stock pendiente de reintegro. Revisa inventario."}
-                            </div>
-                          )}
-
-                          {isDeliveryOrder ? (
-                            <div className="admin-delivery-highlight">
-                              <div className="admin-delivery-highlight-head">
-                                <span className="badge badge-warning">Envio a domicilio</span>
-                                <strong>{order.deliveryCity || "Ciudad no definida"}</strong>
-                              </div>
-                              <p className="admin-delivery-address">{order.deliveryAddress || "Direccion no registrada"}</p>
-                              <div className="admin-delivery-grid">
-                                <p>
-                                  <span>Referencia</span>
-                                  <strong>{order.deliveryReference || "Sin referencia"}</strong>
-                                </p>
-                                <p>
-                                  <span>Cliente</span>
-                                  <strong>{deliveryContactName}</strong>
-                                </p>
-                                <p>
-                                  <span>Telefono</span>
-                                  <strong>{deliveryPhone || "Sin telefono"}</strong>
-                                </p>
-                              </div>
-                            </div>
-                          ) : (
-                            <div className="admin-pickup-summary">
-                              <strong>Retiro en local</strong>
-                              <p>{order.pickupAddress || "Sin direccion de retiro registrada"}</p>
-                              {order.pickupNote && <p className="muted">Referencia: {order.pickupNote}</p>}
-                            </div>
-                          )}
-
-                          {isPickupOrder && (
-                            <div className="pickup-order-panel">
-                              <div>
-                                <p className="pickup-order-panel-title">Retiro en local</p>
-                                <p className="pickup-order-panel-text">
-                                  {normalizedOrderStatus === "Entregado"
-                                    ? "Entrega confirmada al cliente."
-                                    : (normalizedOrderStatus === "Listo para retiro"
-                                      ? "Pedido listo para entrega en tienda. Confirma cuando el cliente retire."
-                                      : "Cuando este preparado, marca el pedido como listo para retiro para notificar internamente.")}
-                                </p>
-                              </div>
-                              <div className="pickup-order-panel-actions">
-                                {canMarkPickupReady && (
-                                  <button className="btn btn-soft" onClick={() => updateOrderStatus(order.id, "Listo para retiro")}>
-                                    Marcar listo para retiro
-                                  </button>
-                                )}
-                                {canConfirmPickup && (
-                                  <button className="btn btn-primary" onClick={() => updateOrderStatus(order.id, "Entregado")}>
-                                    Confirmar entrega
-                                  </button>
-                                )}
-                                {!canMarkPickupReady && !canConfirmPickup && (
-                                  <span className="badge badge-light">Estado: {normalizedOrderStatus}</span>
-                                )}
-                              </div>
-                            </div>
-                          )}
-
-                          <div className="stack admin-order-actions">
-                            <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: 10, alignItems: "center" }}>
-                              <select className="select" value={normalizedOrderStatus} onChange={(event) => updateOrderStatus(order.id, event.target.value)}>
-                                {orderStatusOptions.map((status) => <option key={status} value={status}>{status}</option>)}
-                              </select>
-                              <button className="btn btn-danger" onClick={() => deleteOrder(order.id)}><Trash2 size={16} />Borrar</button>
-                            </div>
-                            <input className="input" placeholder="Guia de envio" value={order.guideNumber || ""} onChange={(event) => updateOrderGuide(order.id, event.target.value)} />
-                            <div className="stack surface">
-                              <input className="input" placeholder="Comprobante de pago (URL o data URL)" value={order.paymentProof || ""} onChange={(event) => updateOrderPaymentProof(order.id, event.target.value)} />
-                              <div className="admin-actions">
-                                <label className="btn btn-outline" style={{ cursor: "pointer", width: "fit-content" }}>
-                                  <Plus size={16} />Subir comprobante
-                                  <input type="file" accept="image/*" style={{ display: "none" }} onChange={(event) => handleOrderProofUpload(order.id, event)} />
-                                </label>
-                                {order.paymentProof && <button className="btn btn-outline" onClick={() => clearOrderPaymentProof(order.id)}><Trash2 size={16} />Eliminar foto</button>}
-                              </div>
-                              {order.paymentProof && <img src={normalizeImageSource(order.paymentProof) || FALLBACK_IMAGE} alt={`Comprobante ${order.code}`} className="preview-image" loading="lazy" decoding="async" />}
-                            </div>
-                            <div className="grid admin-order-items">
-                              {order.items.map((item) => (
-                                <div key={item.key} className="admin-order-item-row">
-                                  <span>{item.name} - {item.color} - {item.size} x{item.quantity}</span>
-                                  <strong>{currency(item.price * item.quantity)}</strong>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {adminTab === "seguridad" && (
-              <div className="admin-tab-panel">
-                <div className="card" style={{ padding: 22 }}>
-                  <div className="admin-toolbar">
-                    <div>
-                      <p className="muted" style={{ textTransform: "uppercase", letterSpacing: ".25em", fontSize: 13 }}>Seguridad y trafico</p>
-                      <h4 style={{ margin: "6px 0 0", fontSize: 28 }}>Metricas por endpoint</h4>
-                      <p className="helper-text" style={{ marginTop: 8 }}>Monitorea bloqueos CSRF, rate-limit y errores para detectar cuellos de botella y abuso.</p>
-                    </div>
-                    <div className="admin-actions">
-                      <button className="btn btn-soft" onClick={() => refreshSecurityMetrics({ force: true, preferCache: false })} disabled={securityMetricsBusy}>
-                        <RotateCcw size={16} />
-                        {securityMetricsBusy ? "Actualizando..." : "Actualizar"}
-                      </button>
-                      <button className="btn btn-outline" onClick={resetSecurityMetricsData} disabled={securityMetricsResetBusy}>
-                        <Trash2 size={16} />
-                        {securityMetricsResetBusy ? "Reiniciando..." : "Reiniciar metricas"}
-                      </button>
-                    </div>
-                  </div>
-
-                  {securityMetricsError && (
-                    <div className="status-message status-error" style={{ marginTop: 14 }}>
-                      {securityMetricsError}
-                    </div>
-                  )}
-
-                  <div className="admin-kpi-grid" style={{ marginTop: 18 }}>
-                    <div className="admin-kpi-card">
-                      <p className="admin-kpi-title">Requests</p>
-                      <strong className="admin-kpi-value">{securityTotals.requests}</strong>
-                    </div>
-                    <div className="admin-kpi-card">
-                      <p className="admin-kpi-title">Rate limited</p>
-                      <strong className="admin-kpi-value">{securityTotals.rateLimited}</strong>
-                    </div>
-                    <div className="admin-kpi-card">
-                      <p className="admin-kpi-title">CSRF rechazados</p>
-                      <strong className="admin-kpi-value">{securityTotals.csrfRejected}</strong>
-                    </div>
-                    <div className="admin-kpi-card">
-                      <p className="admin-kpi-title">Errores 4xx/5xx</p>
-                      <strong className="admin-kpi-value">{securityTotals.errors}</strong>
-                    </div>
-                  </div>
-
-                  <p className="helper-text" style={{ marginTop: 14 }}>
-                    Ultima actualizacion: {formatAdminTimestamp(securityMetricsUpdatedAt || securityMetrics?.generatedAt)}
-                  </p>
-
-                  <div className="security-endpoint-list" style={{ marginTop: 14 }}>
-                    {metricsEndpoints.length === 0 ? (
-                      <div className="empty-admin-note">Sin actividad registrada an.</div>
-                    ) : metricsEndpoints
-                      .sort((left, right) => {
-                        const leftData = left[1] || {};
-                        const rightData = right[1] || {};
-                        return (Number(rightData.requests) || 0) - (Number(leftData.requests) || 0);
-                      })
-                      .map(([endpointName, endpointStats]) => (
-                        <div key={endpointName} className="security-endpoint-card">
-                          <div className="security-endpoint-head">
-                            <strong>{endpointName}</strong>
-                            <span className="badge badge-light">{Number(endpointStats?.requests) || 0} req</span>
-                          </div>
-                          <div className="security-endpoint-grid">
-                            <span className={`badge ${(Number(endpointStats?.rateLimited) || 0) > 0 ? "badge-warning" : "badge-light"}`}>Rate limit: {Number(endpointStats?.rateLimited) || 0}</span>
-                            <span className={`badge ${(Number(endpointStats?.csrfRejected) || 0) > 0 ? "badge-danger" : "badge-light"}`}>CSRF: {Number(endpointStats?.csrfRejected) || 0}</span>
-                            <span className={`badge ${(Number(endpointStats?.invalidJson) || 0) > 0 ? "badge-warning" : "badge-light"}`}>JSON invalido: {Number(endpointStats?.invalidJson) || 0}</span>
-                            <span className={`badge ${(Number(endpointStats?.payloadTooLarge) || 0) > 0 ? "badge-warning" : "badge-light"}`}>Payload grande: {Number(endpointStats?.payloadTooLarge) || 0}</span>
-                            <span className={`badge ${(Number(endpointStats?.errors) || 0) > 0 ? "badge-danger" : "badge-light"}`}>Errores: {Number(endpointStats?.errors) || 0}</span>
-                          </div>
-                        </div>
-                      ))}
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        </Motion.div>
-      </Motion.div>
-    </AnimatePresence>
-  );
-}
-
-const MemoShowcaseProductCard = React.memo(
-  ShowcaseProductCard,
-  (prev, next) => prev.product === next.product,
-);
-
-const MemoCatalogProductCard = React.memo(
-  CatalogProductCard,
-  (prev, next) => (
-    prev.product === next.product
-    && prev.selection === next.selection
-    && prev.isFavorite === next.isFavorite
-    && prev.isAdmin === next.isAdmin
-  ),
-);
-
 export default function App() {
   const [products, setProducts] = useState(() => getStoredProducts());
   const [selections, setSelections] = useState({});
   const [cart, setCart] = useState(() => normalizeStoredCart(readStorage(STORAGE_KEYS.cart, [])));
   const [favorites, setFavorites] = useState(() => normalizeStoredFavorites(readStorage(STORAGE_KEYS.favorites, [])));
+  const [recentlyViewedProductIds, setRecentlyViewedProductIds] = useState(() => (
+    normalizeRecentlyViewedProductIds(readStorage(STORAGE_KEYS.recentlyViewedProducts, []))
+  ));
   const [orderHistory, setOrderHistory] = useState([]);
   const [coupons, setCoupons] = useState([]);
   const [currentUser, setCurrentUser] = useState(null);
@@ -4883,15 +2045,17 @@ export default function App() {
     getStoredProducts().flatMap((product) => product.filterTags || []),
     "filter-tag",
   ));
-  const [search, setSearch] = useState("");
-  const [category, setCategory] = useState("Todos");
-  const [productTypeFilter, setProductTypeFilter] = useState("Todos");
-  const [sortBy, setSortBy] = useState("destacados");
-  const [catalogPage, setCatalogPage] = useState(1);
+  const [initialCatalogRouteState] = useState(readCatalogRouteState);
+  const [search, setSearch] = useState(initialCatalogRouteState.search);
+  const [category, setCategory] = useState(initialCatalogRouteState.category);
+  const [productTypeFilter, setProductTypeFilter] = useState(initialCatalogRouteState.productType);
+  const [sortBy, setSortBy] = useState(initialCatalogRouteState.sortBy);
+  const [catalogPage, setCatalogPage] = useState(initialCatalogRouteState.page);
   const [selectedProduct, setSelectedProduct] = useState(null);
   const [editingCartItemKey, setEditingCartItemKey] = useState(null);
   const [heroIndex, setHeroIndex] = useState(0);
   const [showAdminPanel, setShowAdminPanel] = useState(false);
+  const [destructiveConfirmation, setDestructiveConfirmation] = useState(null);
   const [showMobileNav, setShowMobileNav] = useState(false);
   const [adminTab, setAdminTab] = useState("resumen");
   const [showCartSummary, setShowCartSummary] = useState(false);
@@ -4938,6 +2102,10 @@ export default function App() {
   const [liveOrdersUpdatedAt, setLiveOrdersUpdatedAt] = useState("");
   const [userOrderSearch, setUserOrderSearch] = useState("");
   const [productForm, setProductForm] = useState(() => createEmptyProductForm());
+  const [productFormBaseline, setProductFormBaseline] = useState(() => getProductFormSignature(createEmptyProductForm()));
+  const [productDraftRecovery, setProductDraftRecovery] = useState(() => readStoredProductDraft());
+  const [productDraftSavedAt, setProductDraftSavedAt] = useState("");
+  const [productDraftSaveError, setProductDraftSaveError] = useState("");
   const [previewColor, setPreviewColor] = useState("Negro");
   const [previewImageIndex, setPreviewImageIndex] = useState(0);
   const [customProductTypeInput, setCustomProductTypeInput] = useState("");
@@ -4945,6 +2113,8 @@ export default function App() {
   const [editorMessage, setEditorMessage] = useState("");
   const [editorError, setEditorError] = useState("");
   const [offerSaveBusy, setOfferSaveBusy] = useState(false);
+  const [contactSaveBusy, setContactSaveBusy] = useState(false);
+  const [bankQrUploadBusy, setBankQrUploadBusy] = useState(false);
   const [contactSyncFeedback, setContactSyncFeedback] = useState(null);
   const [securityMetrics, setSecurityMetrics] = useState(null);
   const [securityMetricsBusy, setSecurityMetricsBusy] = useState(false);
@@ -4972,11 +2142,18 @@ export default function App() {
   const [confettiBursts, setConfettiBursts] = useState([]);
   const [flyToCartFx, setFlyToCartFx] = useState(null);
   const [activeMobileSection, setActiveMobileSection] = useState("inicio");
+  const [pathname, setPathname] = useState(() => {
+    if (typeof window === "undefined") return "/";
+    return window.location.pathname || "/";
+  });
+  const productFormSignature = useMemo(() => getProductFormSignature(productForm), [productForm]);
+  const hasUnsavedProductChanges = productFormSignature !== productFormBaseline;
   const catalogSearchInputRef = useRef(null);
   const productsRef = useRef(products);
   const couponsRef = useRef(coupons);
   const cartRef = useRef(cart);
   const favoritesRef = useRef(favorites);
+  const pendingGuestStateMergeRef = useRef(null);
   const contactSettingsRef = useRef(contactSettings);
   const storeSettingsRef = useRef(storeSettings);
   const productTypeRecordsRef = useRef(productTypeRecords);
@@ -4990,11 +2167,6 @@ export default function App() {
   const flyToCartTimerRef = useRef(null);
   const desktopCartAnchorRef = useRef(null);
   const mobileCartAnchorRef = useRef(null);
-  const userStateSyncTimerRef = useRef(null);
-  const userStateSyncBusyRef = useRef(false);
-  const userStateSyncQueuedRef = useRef(false);
-  const userStateLastSignatureRef = useRef("");
-  const applyingRemoteUserStateRef = useRef(false);
   const realtimeSyncVersionsRef = useRef({
     global: 0,
     catalog: 0,
@@ -5005,8 +2177,246 @@ export default function App() {
   });
   const storageBackendWarningShownRef = useRef(false);
   const adminTouchWarningShownRef = useRef(false);
+  const resetLinkHandledRef = useRef(false);
+  const catalogFiltersInitializedRef = useRef(false);
+  const restoringCatalogRouteRef = useRef(false);
+  const lastCatalogSearchSignatureRef = useRef("");
+  const destructiveConfirmationResolverRef = useRef(null);
+  const adminPanelHistoryEntryRef = useRef(false);
+
+  const discardProductDraft = useCallback(() => {
+    removeStoredProductDraft();
+    setProductDraftRecovery(null);
+    setProductDraftSavedAt("");
+    setProductDraftSaveError("");
+  }, []);
+
+  const restoreProductDraft = useCallback(() => {
+    if (!productDraftRecovery?.form) return;
+    const restoredForm = productDraftRecovery.form;
+    setProductForm(restoredForm);
+    setProductFormBaseline(
+      productDraftRecovery.baselineSignature || getProductFormSignature(createEmptyProductForm()),
+    );
+    setPreviewColor(restoredForm.colorsData?.[0]?.name || "");
+    setPreviewImageIndex(0);
+    setProductDraftSavedAt(productDraftRecovery.savedAt || "");
+    setProductDraftSaveError("");
+    setProductDraftRecovery(null);
+    setEditorMessage("Borrador recuperado. Revísalo y guarda cuando esté listo.");
+    setEditorError("");
+  }, [productDraftRecovery]);
+
+  const persistProductDraftNow = useCallback(() => {
+    if (typeof window === "undefined") return false;
+    try {
+      const savedAt = new Date().toISOString();
+      const payload = createProductDraftPayload(productForm, productFormBaseline, savedAt);
+      const serialized = JSON.stringify(payload);
+      if (serialized.length > PRODUCT_DRAFT_MAX_CHARS) {
+        setProductDraftSaveError("El borrador contiene demasiadas imágenes para guardarse automáticamente.");
+        return false;
+      }
+      window.localStorage.setItem(STORAGE_KEYS.adminProductDraft, serialized);
+      setProductDraftSavedAt(savedAt);
+      setProductDraftSaveError("");
+      return true;
+    } catch {
+      setProductDraftSaveError("No se pudo guardar el borrador en este navegador.");
+      return false;
+    }
+  }, [productForm, productFormBaseline]);
+
+  const discardCurrentProductChanges = useCallback(() => {
+    const normalizedProductId = normalizeEntityId(productForm.id);
+    const savedProduct = normalizedProductId
+      ? products.find((product) => normalizeEntityId(product.id) === normalizedProductId)
+      : null;
+    const cleanForm = savedProduct ? createProductForm(savedProduct) : createEmptyProductForm();
+    setProductForm(cleanForm);
+    setProductFormBaseline(getProductFormSignature(cleanForm));
+    setPreviewColor(cleanForm.colorsData?.[0]?.name || "");
+    setPreviewImageIndex(0);
+    setCustomProductTypeInput("");
+    setCustomFilterTagInput("");
+    setEditorMessage("");
+    setEditorError("");
+    discardProductDraft();
+  }, [discardProductDraft, productForm.id, products]);
+
+  const closeAdminPanel = useCallback(() => {
+    if (
+      typeof window !== "undefined"
+      && adminPanelHistoryEntryRef.current
+      && window.history.state?.[ADMIN_PANEL_HISTORY_KEY]
+    ) {
+      adminPanelHistoryEntryRef.current = false;
+      setShowAdminPanel(false);
+      window.history.back();
+      return;
+    }
+    adminPanelHistoryEntryRef.current = false;
+    setShowAdminPanel(false);
+  }, []);
+
+  const requestDestructiveConfirmation = useCallback((request) => new Promise((resolve) => {
+    destructiveConfirmationResolverRef.current = resolve;
+    setDestructiveConfirmation(request);
+  }), []);
+
+  const settleDestructiveConfirmation = useCallback((confirmed) => {
+    const resolve = destructiveConfirmationResolverRef.current;
+    destructiveConfirmationResolverRef.current = null;
+    setDestructiveConfirmation(null);
+    resolve?.(confirmed);
+  }, []);
+
+  const requestProductExitDecision = useCallback(async ({ title, description }) => {
+    const decision = await requestDestructiveConfirmation({
+      title,
+      description,
+      cancelLabel: "Quedarme",
+      secondaryLabel: "Salir sin guardar",
+      secondaryValue: "discard",
+      confirmLabel: "Guardar borrador y salir",
+      confirmTone: "primary",
+    });
+    if (!decision) return "stay";
+    if (decision === "discard") {
+      discardCurrentProductChanges();
+      return "discard";
+    }
+    return persistProductDraftNow() ? "save" : "stay";
+  }, [discardCurrentProductChanges, persistProductDraftNow, requestDestructiveConfirmation]);
+
+  const requestCloseAdminPanel = useCallback(async () => {
+    if (adminTab === "producto" && hasUnsavedProductChanges) {
+      const decision = await requestProductExitDecision({
+        title: "¿Salir del editor?",
+        description: "Tienes cambios sin publicar. Puedes guardar el borrador para continuar después o salir descartándolos.",
+      });
+      if (decision === "stay") return;
+    }
+    closeAdminPanel();
+  }, [adminTab, closeAdminPanel, hasUnsavedProductChanges, requestProductExitDecision]);
+
+  const requestAdminTabChange = useCallback(async (requestedTab) => {
+    const nextTab = requestedTab === "inventario" ? "resumen" : requestedTab;
+    if (adminTab === "producto" && nextTab !== "producto" && hasUnsavedProductChanges) {
+      const decision = await requestProductExitDecision({
+        title: "¿Cambiar de sección?",
+        description: "Tienes cambios sin publicar. Puedes guardar el borrador para retomarlo después o descartarlos antes de cambiar de sección.",
+      });
+      if (decision === "stay") return;
+    }
+    setAdminTab(nextTab);
+  }, [adminTab, hasUnsavedProductChanges, requestProductExitDecision]);
+
+  const normalizedPathname = pathname.replace(/\/+$/, "") || "/";
+  const productRouteMatch = normalizedPathname.match(/^\/producto\/([^/]+)$/);
+  const productRouteSlug = productRouteMatch ? decodeRouteSegment(productRouteMatch[1]) : "";
+  const isResetRoute = normalizedPathname === "/cuenta/restablecer";
+  const routedProduct = productRouteSlug
+    ? products.find((entry) => (
+      entry?.isPublic !== false
+      && slugify(entry?.slug || entry?.name || entry?.id || "") === productRouteSlug
+    ))
+    : null;
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    const handlePopState = () => {
+      const nextPathname = window.location.pathname || "/";
+      setPathname(nextPathname);
+      if (nextPathname !== "/") return;
+      const nextCatalogState = readCatalogRouteState();
+      restoringCatalogRouteRef.current = true;
+      setSearch(nextCatalogState.search);
+      setCategory(nextCatalogState.category);
+      setProductTypeFilter(nextCatalogState.productType);
+      setSortBy(nextCatalogState.sortBy);
+      setCatalogPage(nextCatalogState.page);
+    };
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, []);
+
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const isMissingRoute = normalizedPathname !== "/"
+      && !isResetRoute
+      && (!productRouteSlug || (catalogReady && !routedProduct));
+    const robots = isResetRoute || isMissingRoute
+      ? "noindex, nofollow"
+      : "index, follow";
+    let robotsMeta = document.querySelector('meta[name="robots"]');
+    if (!robotsMeta) {
+      robotsMeta = document.createElement("meta");
+      robotsMeta.setAttribute("name", "robots");
+      document.head.appendChild(robotsMeta);
+    }
+    robotsMeta.setAttribute("content", robots);
+    const origin = window.location.origin;
+    const productName = sanitizeLine(routedProduct?.name || "Producto");
+    const productDescription = sanitizeParagraph(
+      routedProduct?.description || `Compra ${productName} en Adriego Store. Pedidos directos por WhatsApp.`,
+    ).slice(0, 160);
+    const productImage = normalizeSafeUrl(
+      routedProduct?.images?.[0] || routedProduct?.image || FALLBACK_IMAGE,
+    ) || FALLBACK_IMAGE;
+    const title = isResetRoute
+      ? "Restablecer contraseña | Adriego Store"
+      : (isMissingRoute
+        ? "Página no encontrada | Adriego Store"
+        : (routedProduct ? `${productName} | Adriego Store` : "Adriego Store | Moda seleccionada"));
+    const description = routedProduct ? productDescription : "Descubre Adriego Store. Moda seleccionada con atención personalizada por WhatsApp.";
+    document.title = title;
+    upsertRouteMeta('meta[name="description"]', ["name", "description"], description);
+    upsertRouteMeta('meta[property="og:title"]', ["property", "og:title"], title);
+    upsertRouteMeta('meta[property="og:description"]', ["property", "og:description"], description);
+    upsertRouteMeta('meta[property="og:type"]', ["property", "og:type"], routedProduct ? "product" : "website");
+    upsertRouteMeta('meta[property="og:url"]', ["property", "og:url"], `${origin}${normalizedPathname}`);
+    upsertRouteMeta('meta[name="twitter:title"]', ["name", "twitter:title"], title);
+    upsertRouteMeta('meta[name="twitter:description"]', ["name", "twitter:description"], description);
+
+    let canonical = document.querySelector('link[rel="canonical"]');
+    if (!canonical) {
+      canonical = document.createElement("link");
+      canonical.setAttribute("rel", "canonical");
+      document.head.appendChild(canonical);
+    }
+    canonical.setAttribute("href", `${origin}${normalizedPathname}`);
+
+    const existingSchema = document.getElementById("route-product-jsonld");
+    if (!routedProduct || isMissingRoute) {
+      existingSchema?.remove();
+      return;
+    }
+    const schema = existingSchema || document.createElement("script");
+    schema.id = "route-product-jsonld";
+    schema.type = "application/ld+json";
+    schema.textContent = JSON.stringify({
+      "@context": "https://schema.org",
+      "@type": "Product",
+      name: productName,
+      image: [productImage],
+      description: productDescription,
+      sku: String(routedProduct.id || productRouteSlug),
+      offers: {
+        "@type": "Offer",
+        priceCurrency: "USD",
+        price: Number(routedProduct.price || 0).toFixed(2),
+        availability: hasProductAvailableStock(routedProduct)
+          ? "https://schema.org/InStock"
+          : "https://schema.org/OutOfStock",
+        url: `${origin}${normalizedPathname}`,
+      },
+    });
+    if (!existingSchema) document.head.appendChild(schema);
+  }, [catalogReady, isResetRoute, normalizedPathname, productRouteSlug, routedProduct]);
   const knownAdminOrderIdsRef = useRef(new Set());
   const adminOrdersHydratedRef = useRef(false);
+  const checkoutAttemptRef = useRef({ signature: "", idempotencyKey: "" });
   const deferredSearch = useDeferredValue(search);
   const deferredOrderSearch = useDeferredValue(orderSearch);
   const deferredOrderCustomerFilter = useDeferredValue(orderCustomerFilter);
@@ -5030,6 +2440,17 @@ export default function App() {
     || showProfileModal
     || Boolean(selectedProduct);
   const heroAutoplayDelayMs = isMobileViewport ? 5600 : 4200;
+  const showPreviousHeroSlide = useCallback(() => {
+    setHeroIndex((previous) => (previous - 1 + heroSlides.length) % heroSlides.length);
+  }, [heroSlides.length]);
+  const showNextHeroSlide = useCallback(() => {
+    setHeroIndex((previous) => (previous + 1) % heroSlides.length);
+  }, [heroSlides.length]);
+  const heroSwipeHandlers = useSwipeGesture({
+    enabled: isMobileViewport && heroSlides.length > 1,
+    onSwipeLeft: showNextHeroSlide,
+    onSwipeRight: showPreviousHeroSlide,
+  });
 
   const catalogOfferLabel = useMemo(() => {
     const normalized = normalizeOptionLabel(storeSettings.offerLabel);
@@ -5075,6 +2496,10 @@ export default function App() {
     ];
   }, [products, category, catalogOfferTabLabel]);
   const productsById = useMemo(() => new Map(products.map((product) => [product.id, product])), [products]);
+  const recentlyViewedProducts = useMemo(() => recentlyViewedProductIds
+    .map((productId) => productsById.get(productId))
+    .filter((product) => product && product.isPublic !== false)
+    .slice(0, MAX_RECENTLY_VIEWED_PRODUCTS), [productsById, recentlyViewedProductIds]);
   const activeProductTypeNames = useMemo(
     () => productTypeRecords
       .filter((record) => record.active)
@@ -5246,6 +2671,7 @@ export default function App() {
 
   const recommendedProducts = useMemo(() => {
     const cartProductIds = new Set(cart.map((item) => String(item.id)));
+    const selectedProductId = selectedProduct ? String(selectedProduct.id) : "";
     const cartProducts = cart
       .map((item) => productsById.get(normalizeEntityId(item.id)))
       .filter(Boolean);
@@ -5257,7 +2683,7 @@ export default function App() {
     }
 
     const scoredProducts = stockReadyProducts
-      .filter((product) => !cartProductIds.has(String(product.id)))
+      .filter((product) => String(product.id) !== selectedProductId && !cartProductIds.has(String(product.id)))
       .map((product) => {
         const normalizedType = normalizeOptionLabel(product.productType || "").toLowerCase();
         const normalizedCategory = normalizeOptionLabel(product.category || "").toLowerCase();
@@ -5341,11 +2767,95 @@ export default function App() {
 
   const footerWhatsAppLink = useMemo(() => contactSettings.whatsappLink || buildWhatsAppLink(contactSettings.whatsappNumber), [contactSettings.whatsappLink, contactSettings.whatsappNumber]);
   const footerEmailLink = useMemo(() => buildMailtoLink(contactSettings.email), [contactSettings.email]);
-  const footerLocationNote = useMemo(() => {
-    const normalized = sanitizeParagraph(contactSettings.locationNote || "");
-    return normalized || defaultContactSettings.locationNote;
-  }, [contactSettings.locationNote]);
+  const publicContactSettings = useMemo(() => {
+    const publicLocation = resolvePublicLocation(contactSettings, defaultContactSettings.address);
+    const normalizedDefaultWhatsapp = normalizePhoneNumber(defaultContactSettings.whatsappNumber);
+    const hasExplicitWhatsappLink = Boolean(sanitizeLine(contactSettings.whatsappLink || ""));
+    const isLegacySocialLink = (value) => /atelierstudio/i.test(String(value || ""));
+    const hasPublicWhatsapp = Boolean(
+      footerWhatsAppLink
+      && (hasExplicitWhatsappLink || normalizePhoneNumber(contactSettings.whatsappNumber) !== normalizedDefaultWhatsapp)
+    );
+
+    return {
+      ...publicLocation,
+      whatsappLink: hasPublicWhatsapp ? footerWhatsAppLink : "",
+      emailLink: footerEmailLink,
+      instagram: isLegacySocialLink(contactSettings.instagram) ? "" : contactSettings.instagram,
+      facebook: isLegacySocialLink(contactSettings.facebook) ? "" : contactSettings.facebook,
+      tiktok: contactSettings.tiktok,
+      paymentSettings: contactSettings.paymentSettings,
+    };
+  }, [contactSettings, footerEmailLink, footerWhatsAppLink]);
   const isAdmin = Boolean(adminSession);
+
+  useEffect(() => {
+    if (
+      typeof window === "undefined"
+      || !isAdmin
+      || adminTab !== "producto"
+      || !hasUnsavedProductChanges
+      || productDraftRecovery
+    ) return undefined;
+
+    const timeoutId = window.setTimeout(persistProductDraftNow, 650);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [
+    adminTab,
+    hasUnsavedProductChanges,
+    isAdmin,
+    persistProductDraftNow,
+    productDraftRecovery,
+  ]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !showAdminPanel || adminTab !== "producto" || !hasUnsavedProductChanges) return undefined;
+    const preventAccidentalUnload = (event) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", preventAccidentalUnload);
+    return () => window.removeEventListener("beforeunload", preventAccidentalUnload);
+  }, [adminTab, hasUnsavedProductChanges, showAdminPanel]);
+
+  useEffect(() => {
+    if (!showAdminPanel || !isAdmin || typeof window === "undefined") return undefined;
+
+    const currentState = window.history.state && typeof window.history.state === "object"
+      ? window.history.state
+      : {};
+    if (!currentState[ADMIN_PANEL_HISTORY_KEY]) {
+      window.history.pushState({
+        ...currentState,
+        [ADMIN_PANEL_HISTORY_KEY]: true,
+      }, document.title, window.location.href);
+    }
+    adminPanelHistoryEntryRef.current = true;
+
+    const closeFromBrowserHistory = async () => {
+      if (!adminPanelHistoryEntryRef.current) return;
+      if (adminTab === "producto" && hasUnsavedProductChanges) {
+        const decision = await requestProductExitDecision({
+          title: "¿Salir del editor?",
+          description: "Tienes cambios sin publicar. Puedes guardar el borrador para continuar después o salir descartándolos.",
+        });
+        if (decision === "stay") {
+          const currentState = window.history.state && typeof window.history.state === "object"
+            ? window.history.state
+            : {};
+          window.history.pushState({ ...currentState, [ADMIN_PANEL_HISTORY_KEY]: true }, document.title, window.location.href);
+          adminPanelHistoryEntryRef.current = true;
+          return;
+        }
+      }
+      adminPanelHistoryEntryRef.current = false;
+      setShowAdminPanel(false);
+    };
+    window.addEventListener("popstate", closeFromBrowserHistory);
+    return () => window.removeEventListener("popstate", closeFromBrowserHistory);
+  }, [adminTab, hasUnsavedProductChanges, isAdmin, requestProductExitDecision, showAdminPanel]);
+
   const securityMetricsGeneratedAt = String(securityMetrics?.generatedAt || "");
   const mobileQuickActive = showCartSummary
     ? "carrito"
@@ -5687,72 +3197,30 @@ export default function App() {
     return true;
   }, [currentUser?.id, isAdmin, showToastMessage]);
 
-  const buildUserStateSignature = useCallback((nextCart = [], nextFavorites = []) => {
-    const normalizedCart = normalizeAccountCartState(nextCart);
-    const normalizedFavorites = normalizeStoredFavorites(nextFavorites);
-    return JSON.stringify({
-      cart: normalizedCart,
-      favorites: normalizedFavorites,
-    });
-  }, []);
+  const getUserStateSignature = useCallback((nextCart = [], nextFavorites = []) => (
+    buildUserStateSignature(nextCart, nextFavorites, {
+      normalizeCart: normalizeAccountCartState,
+      normalizeFavorites: normalizeStoredFavorites,
+    })
+  ), []);
 
-  const syncUserStateNow = useCallback(async () => {
-    if (!currentUser?.id) return;
-    if (userStateSyncBusyRef.current) {
-      userStateSyncQueuedRef.current = true;
-      return;
-    }
-
-    const payloadCart = normalizeAccountCartState(cartRef.current);
-    const payloadFavorites = normalizeStoredFavorites(favoritesRef.current);
-    const nextSignature = buildUserStateSignature(payloadCart, payloadFavorites);
-    if (!nextSignature || nextSignature === userStateLastSignatureRef.current) {
-      return;
-    }
-
-    userStateSyncBusyRef.current = true;
-    try {
-      const baseStateVersion = Math.max(
-        Number(realtimeSyncVersionsRef.current.currentUserStateVersion || 0),
-        Number(currentUser?.stateVersion || 0),
-      );
-      const result = await syncUserAccountState({
-        cart: payloadCart,
-        favorites: payloadFavorites,
-        baseStateVersion,
-      });
-      if (!result?.ok || !result.user) {
-        return;
-      }
-      userStateLastSignatureRef.current = nextSignature;
-      realtimeSyncVersionsRef.current.currentUserStateVersion = Math.max(
-        Number(realtimeSyncVersionsRef.current.currentUserStateVersion || 0),
-        Number(result.user.stateVersion || 0),
-      );
-      setCurrentUser(result.user);
-    } finally {
-      userStateSyncBusyRef.current = false;
-      if (userStateSyncQueuedRef.current) {
-        userStateSyncQueuedRef.current = false;
-        if (userStateSyncTimerRef.current) {
-          window.clearTimeout(userStateSyncTimerRef.current);
-        }
-        userStateSyncTimerRef.current = window.setTimeout(() => {
-          void syncUserStateNow();
-        }, 120);
-      }
-    }
-  }, [buildUserStateSignature, currentUser?.id, currentUser?.stateVersion]);
-
-  const queueUserStateSync = useCallback((delayMs = 480) => {
-    if (!currentUser?.id) return;
-    if (userStateSyncTimerRef.current) {
-      window.clearTimeout(userStateSyncTimerRef.current);
-    }
-    userStateSyncTimerRef.current = window.setTimeout(() => {
-      void syncUserStateNow();
-    }, Math.max(120, Number(delayMs) || 480));
-  }, [currentUser?.id, syncUserStateNow]);
+  const {
+    applyingRemoteStateRef: applyingRemoteUserStateRef,
+    flushUserStateSync,
+    lastSignatureRef: userStateLastSignatureRef,
+    queueUserStateSync,
+    resetUserStateSync,
+  } = useUserStateSync({
+    currentUserId: currentUser?.id,
+    currentUserStateVersion: currentUser?.stateVersion,
+    cartRef,
+    favoritesRef,
+    realtimeVersionsRef: realtimeSyncVersionsRef,
+    normalizeCart: normalizeAccountCartState,
+    normalizeFavorites: normalizeStoredFavorites,
+    getSignature: getUserStateSignature,
+    setCurrentUser,
+  });
 
   const getVisibleCartAnchorElement = () => {
     const candidates = [mobileCartAnchorRef.current, desktopCartAnchorRef.current].filter(Boolean);
@@ -5899,11 +3367,7 @@ export default function App() {
       return result;
     };
 
-    const queuedSync = catalogSyncQueueRef.current
-      .catch(() => undefined)
-      .then(() => runSync());
-    catalogSyncQueueRef.current = queuedSync.then(() => undefined).catch(() => undefined);
-    return queuedSync;
+    return enqueueAsyncOperation(catalogSyncQueueRef, runSync);
   }, [applyCatalogStateFromServer, catalogReady, isAdmin, showToastMessage]);
 
   useEffect(() => {
@@ -6009,8 +3473,80 @@ export default function App() {
   }, [favorites]);
 
   useEffect(() => {
+    saveStorage(STORAGE_KEYS.recentlyViewedProducts, recentlyViewedProductIds);
+  }, [recentlyViewedProductIds]);
+
+  useEffect(() => {
+    const productId = normalizeEntityId(selectedProduct?.id);
+    if (!productId || selectedProduct?.isPublic === false) return;
+
+    setRecentlyViewedProductIds((previous) => {
+      const next = normalizeRecentlyViewedProductIds([
+        productId,
+        ...previous.filter((entry) => entry !== productId),
+      ]);
+      const unchanged = next.length === previous.length
+        && next.every((entry, index) => entry === previous[index]);
+      return unchanged ? previous : next;
+    });
+  }, [selectedProduct?.id, selectedProduct?.isPublic]);
+
+  useEffect(() => {
+    if (!catalogReady) return;
+    setRecentlyViewedProductIds((previous) => {
+      const next = previous.filter((productId) => {
+        const product = productsById.get(productId);
+        return Boolean(product) && product.isPublic !== false;
+      });
+      return next.length === previous.length ? previous : next;
+    });
+  }, [catalogReady, productsById]);
+
+  useEffect(() => {
+    if (!catalogFiltersInitializedRef.current) {
+      catalogFiltersInitializedRef.current = true;
+      return;
+    }
+    if (restoringCatalogRouteRef.current) {
+      restoringCatalogRouteRef.current = false;
+      return;
+    }
     setCatalogPage(1);
   }, [search, category, productTypeFilter, sortBy]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !catalogReady || normalizedPathname !== "/") return;
+    const currentUrl = new URL(window.location.href);
+    const params = currentUrl.searchParams;
+    ["q", "categoria", "tipo", "orden", "pagina"].forEach((key) => params.delete(key));
+    if (search.trim()) params.set("q", search.trim());
+    if (category !== "Todos") params.set("categoria", category);
+    if (productTypeFilter !== "Todos") params.set("tipo", productTypeFilter);
+    if (sortBy !== "destacados") params.set("orden", sortBy);
+    if (safeCatalogPage > 1) params.set("pagina", String(safeCatalogPage));
+    const nextUrl = `${currentUrl.pathname}${params.toString() ? `?${params.toString()}` : ""}${currentUrl.hash}`;
+    const currentPath = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    if (nextUrl !== currentPath) {
+      window.history.replaceState(window.history.state, document.title, nextUrl);
+    }
+  }, [catalogReady, category, normalizedPathname, productTypeFilter, safeCatalogPage, search, sortBy]);
+
+  useEffect(() => {
+    const query = search.trim();
+    if (!query) return undefined;
+    const signature = `${query}|${category}|${productTypeFilter}|${sortBy}|${filteredProducts.length}`;
+    const timerId = window.setTimeout(() => {
+      if (lastCatalogSearchSignatureRef.current === signature) return;
+      lastCatalogSearchSignatureRef.current = signature;
+      trackAnalyticsEvent("catalog_search", {
+        query_term: query,
+        category: category === "Todos" ? "" : category,
+        results_count: filteredProducts.length,
+        has_discount_filter: category === OFFER_TAB_VALUE,
+      });
+    }, 450);
+    return () => window.clearTimeout(timerId);
+  }, [category, filteredProducts.length, productTypeFilter, search, sortBy]);
 
   useEffect(() => {
     if (catalogPage <= totalCatalogPages) return;
@@ -6025,84 +3561,78 @@ export default function App() {
   useEffect(() => {
     if (currentUser?.id) return;
     realtimeSyncVersionsRef.current.currentUserStateVersion = 0;
-    userStateLastSignatureRef.current = "";
-    userStateSyncQueuedRef.current = false;
-    userStateSyncBusyRef.current = false;
-    applyingRemoteUserStateRef.current = false;
-    if (userStateSyncTimerRef.current) {
-      window.clearTimeout(userStateSyncTimerRef.current);
-      userStateSyncTimerRef.current = null;
-    }
-  }, [currentUser?.id]);
+    resetUserStateSync();
+  }, [currentUser?.id, resetUserStateSync]);
 
   useEffect(() => {
     if (!currentUser?.id) return;
 
     const remoteCart = normalizeAccountCartState(currentUser.cart || []);
     const remoteFavorites = normalizeStoredFavorites(currentUser.favorites || []);
-    const remoteSignature = buildUserStateSignature(remoteCart, remoteFavorites);
-    const localSignature = buildUserStateSignature(cartRef.current, favoritesRef.current);
+    const remoteSignature = getUserStateSignature(remoteCart, remoteFavorites);
+    const localSignature = getUserStateSignature(cartRef.current, favoritesRef.current);
+    const pendingGuestState = pendingGuestStateMergeRef.current;
+    const shouldMergeGuestState = Boolean(
+      pendingGuestState
+      && String(pendingGuestState.userId || "") === String(currentUser.id || ""),
+    );
+    if (pendingGuestState && !shouldMergeGuestState) {
+      pendingGuestStateMergeRef.current = null;
+    }
 
     realtimeSyncVersionsRef.current.currentUserStateVersion = Math.max(
       Number(realtimeSyncVersionsRef.current.currentUserStateVersion || 0),
       Number(currentUser.stateVersion || 0),
     );
 
-    if (!remoteSignature || remoteSignature === localSignature) {
+    if (!shouldMergeGuestState && (!remoteSignature || remoteSignature === localSignature)) {
       userStateLastSignatureRef.current = remoteSignature || localSignature;
       return;
     }
 
-    const currentCartByKey = new Map(
-      normalizeStoredCart(cartRef.current).map((entry) => [String(entry.key || ""), entry]),
-    );
-    const liveProductsById = new Map(
-      (Array.isArray(productsRef.current) ? productsRef.current : []).map((product) => [normalizeEntityId(product?.id), product]),
-    );
-    const hydratedRemoteCart = remoteCart.filter((entry) => {
-      const product = liveProductsById.get(normalizeEntityId(entry.id));
-      return Boolean(product) && product.isPublic !== false;
-    }).map((entry) => {
-      const key = String(entry.key || "");
-      const previousLine = currentCartByKey.get(key);
-      const product = liveProductsById.get(normalizeEntityId(entry.id));
-      return {
-        ...entry,
-        name: sanitizeLine(product?.name || previousLine?.name || "Producto"),
-        price: Number(product?.price || previousLine?.price || 0) || 0,
-        image: normalizeImageSource(
-          getCurrentImageForProduct(product, entry.color)
-          || previousLine?.image
-          || FALLBACK_IMAGE,
-        ) || FALLBACK_IMAGE,
-      };
+    const hydratedState = hydrateRemoteUserState({
+      remoteCart,
+      remoteFavorites,
+      localCart: shouldMergeGuestState ? pendingGuestState.cart : cartRef.current,
+      localFavorites: shouldMergeGuestState ? pendingGuestState.favorites : favoritesRef.current,
+      mergeLocalState: shouldMergeGuestState,
+      products: productsRef.current,
+      getImageForProduct: getCurrentImageForProduct,
+      normalizeCart: normalizeAccountCartState,
+      normalizeFavorites: normalizeStoredFavorites,
     });
-    const hydratedRemoteFavorites = remoteFavorites.filter((favoriteId) => {
-      const product = liveProductsById.get(normalizeEntityId(favoriteId));
-      return Boolean(product) && product.isPublic !== false;
-    });
+    const hydratedSignature = getUserStateSignature(hydratedState.cart, hydratedState.favorites);
+    if (shouldMergeGuestState) {
+      pendingGuestStateMergeRef.current = null;
+    }
 
     applyingRemoteUserStateRef.current = true;
-    setCart(hydratedRemoteCart);
-    setFavorites(hydratedRemoteFavorites);
+    setCart(hydratedState.cart);
+    setFavorites(hydratedState.favorites);
     userStateLastSignatureRef.current = remoteSignature;
     window.setTimeout(() => {
       applyingRemoteUserStateRef.current = false;
+      if (shouldMergeGuestState && hydratedSignature !== remoteSignature) {
+        queueUserStateSync(120);
+      }
     }, 0);
   }, [
-    buildUserStateSignature,
+    getUserStateSignature,
     currentUser?.cart,
     currentUser?.favorites,
     currentUser?.id,
     currentUser?.stateVersion,
     currentUser?.stateUpdatedAt,
+    applyingRemoteUserStateRef,
+    queueUserStateSync,
+    userStateLastSignatureRef,
   ]);
 
   useEffect(() => {
     if (!currentUser?.id) return;
     if (applyingRemoteUserStateRef.current) return;
     queueUserStateSync();
-  }, [cart, favorites, currentUser?.id, queueUserStateSync]);
+  }, [cart, favorites, currentUser?.id, applyingRemoteUserStateRef, queueUserStateSync]);
 
   useEffect(() => {
     let cancelled = false;
@@ -6160,6 +3690,7 @@ export default function App() {
 
     const email = normalizeEmail(currentUrl.searchParams.get("email") || "").slice(0, AUTH_FIELD_LIMITS.email);
     const hasTrustedResetEmail = Boolean(email);
+    resetLinkHandledRef.current = true;
 
     setAuthForm((previous) => ({
       ...previous,
@@ -6176,13 +3707,37 @@ export default function App() {
     setShowProfileModal(false);
     setShowUserAuth(true);
 
+    // Old reset links used the home page. Keep them working but replace the
+    // visible address with the dedicated, noindex recovery route immediately.
+    currentUrl.pathname = "/cuenta/restablecer";
     currentUrl.searchParams.delete("resetToken");
     currentUrl.searchParams.delete("token");
     currentUrl.searchParams.delete("email");
     const nextQuery = currentUrl.searchParams.toString();
     const nextUrl = `${currentUrl.pathname}${nextQuery ? `?${nextQuery}` : ""}${currentUrl.hash || ""}`;
     window.history.replaceState({}, document.title, nextUrl);
+    setPathname(currentUrl.pathname);
   }, []);
+
+  useEffect(() => {
+    if (!isResetRoute || resetLinkHandledRef.current) return;
+    setAuthMode("forgot");
+    setAuthResetEmailLocked(false);
+    setAuthError("");
+    setAuthBusy(false);
+    setShowProfileModal(false);
+    setShowUserAuth(true);
+  }, [isResetRoute]);
+
+  useEffect(() => {
+    if (!productRouteSlug || !catalogReady) return;
+    const product = products.find((entry) => (
+      entry?.isPublic !== false
+      && slugify(entry?.slug || entry?.name || entry?.id || "") === productRouteSlug
+    ));
+    if (!product) return;
+    setSelectedProduct((previous) => (String(previous?.id) === String(product.id) ? previous : product));
+  }, [catalogReady, productRouteSlug, products]);
 
   useEffect(() => {
     void ensureCsrfToken();
@@ -6217,152 +3772,27 @@ export default function App() {
     };
   }, []);
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      const result = await getCatalogState({ preferCache: true, force: false });
-      if (cancelled) return;
-      if (result.ok && result.data) {
-        applyCatalogStateFromServer(result.data);
-      }
-      setCatalogReady(true);
-
-      if (result.cache?.hit) {
-        const freshResult = await getCatalogState({ preferCache: false, force: true });
-        if (cancelled) return;
-        if (freshResult.ok && freshResult.data) {
-          applyCatalogStateFromServer(freshResult.data);
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [applyCatalogStateFromServer]);
+  useCatalogBootstrap({
+    applyCatalogState: applyCatalogStateFromServer,
+    setCatalogReady,
+  });
 
   useEffect(() => {
     void refreshOrdersFromServer({ silent: true });
   }, [refreshOrdersFromServer]);
 
-  useEffect(() => {
-    if (!catalogReady) return undefined;
-    let cancelled = false;
-    let timerId = null;
-
-    const scheduleNext = () => {
-      if (cancelled) return;
-      const isVisible = typeof document === "undefined" || document.visibilityState === "visible";
-      timerId = window.setTimeout(() => {
-        void pollRealtimeSync();
-      }, isVisible ? 3500 : 10000);
-    };
-
-    const pollRealtimeSync = async (force = false) => {
-      const result = await getRealtimeSyncStatus({
-        force,
-        preferCache: !force,
-        maxAgeMs: force ? 0 : 2500,
-      });
-      if (cancelled || !result?.ok || !result.versions) {
-        scheduleNext();
-        return;
-      }
-
-      const previousVersions = realtimeSyncVersionsRef.current;
-      const nextVersions = {
-        global: Math.max(0, Number(result.versions.global) || 0),
-        catalog: Math.max(0, Number(result.versions.catalog) || 0),
-        orders: Math.max(0, Number(result.versions.orders) || 0),
-        users: Math.max(0, Number(result.versions.users) || 0),
-        userState: Math.max(0, Number(result.versions.userState) || 0),
-        currentUserStateVersion: Math.max(0, Number(result.currentUser?.stateVersion) || 0),
-      };
-      realtimeSyncVersionsRef.current = nextVersions;
-
-      const catalogChanged = nextVersions.catalog > Math.max(0, Number(previousVersions.catalog) || 0);
-      const ordersChanged = nextVersions.orders > Math.max(0, Number(previousVersions.orders) || 0);
-      const usersChanged = nextVersions.users > Math.max(0, Number(previousVersions.users) || 0);
-      const userStateChanged = Boolean(currentUser?.id)
-        && nextVersions.currentUserStateVersion > Math.max(0, Number(previousVersions.currentUserStateVersion) || 0);
-
-      if (catalogChanged && !(showAdminPanel && isAdmin && adminTab === "producto")) {
-        const catalogResult = await getCatalogState({ preferCache: false, force: true });
-        if (!cancelled && catalogResult.ok && catalogResult.data) {
-          applyCatalogStateFromServer(catalogResult.data);
-        }
-      }
-
-      if (ordersChanged && (currentUser?.id || isAdmin)) {
-        void refreshOrdersFromServer({
-          silent: true,
-          force: true,
-          preferCache: false,
-          notifyAdminOnNew: Boolean(isAdmin),
-        });
-      }
-
-      if (usersChanged && isAdmin && showAdminPanel && (adminTab === "usuarios" || adminTab === "resumen")) {
-        void refreshAdminUsers({
-          silent: true,
-          force: true,
-          preferCache: false,
-        });
-      }
-
-      if (userStateChanged) {
-        const sessionResult = await getUserSessionStatus();
-        if (!cancelled) {
-          if (sessionResult.ok && sessionResult.authenticated && sessionResult.user) {
-            setCurrentUser(sessionResult.user);
-          } else {
-            setCurrentUser(null);
-          }
-        }
-      }
-
-      scheduleNext();
-    };
-
-    const handleFocus = () => {
-      void pollRealtimeSync(true);
-    };
-    const handleOnline = () => {
-      void pollRealtimeSync(true);
-    };
-    const handleVisibility = () => {
-      if (typeof document === "undefined") return;
-      if (document.visibilityState !== "visible") return;
-      void pollRealtimeSync(true);
-    };
-
-    window.addEventListener("focus", handleFocus);
-    window.addEventListener("online", handleOnline);
-    if (typeof document !== "undefined") {
-      document.addEventListener("visibilitychange", handleVisibility);
-    }
-    void pollRealtimeSync(true);
-
-    return () => {
-      cancelled = true;
-      if (timerId) {
-        window.clearTimeout(timerId);
-      }
-      window.removeEventListener("focus", handleFocus);
-      window.removeEventListener("online", handleOnline);
-      if (typeof document !== "undefined") {
-        document.removeEventListener("visibilitychange", handleVisibility);
-      }
-    };
-  }, [
+  useRealtimeSync({
     adminTab,
-    applyCatalogStateFromServer,
+    applyCatalogState: applyCatalogStateFromServer,
     catalogReady,
-    currentUser?.id,
+    currentUserId: currentUser?.id,
     isAdmin,
+    realtimeVersionsRef: realtimeSyncVersionsRef,
     refreshAdminUsers,
-    refreshOrdersFromServer,
+    refreshOrders: refreshOrdersFromServer,
+    setCurrentUser,
     showAdminPanel,
-  ]);
+  });
 
   useEffect(() => {
     if (!showAdminPanel || !isAdmin || !liveOrdersEnabled) return undefined;
@@ -6534,20 +3964,20 @@ export default function App() {
     const remaining = adminSession.expiresAt - Date.now();
     if (remaining <= 0) {
       setAdminSession(null);
-      setShowAdminPanel(false);
+      closeAdminPanel();
       setEditorMessage("La sesion de administracion expiro por seguridad.");
       setEditorError("");
       return undefined;
     }
     const timerId = window.setTimeout(() => {
       setAdminSession(null);
-      setShowAdminPanel(false);
+      closeAdminPanel();
       setSelectedProduct(null);
       setEditorMessage("La sesion de administracion expiro por seguridad.");
       setEditorError("");
     }, remaining);
     return () => window.clearTimeout(timerId);
-  }, [adminSession]);
+  }, [adminSession, closeAdminPanel]);
 
   useEffect(() => {
     if (!isAdmin || typeof window === "undefined") return undefined;
@@ -6575,7 +4005,7 @@ export default function App() {
         const status = Number(result?.status) || 0;
         if (status === 401 || status === 403) {
           setAdminSession(null);
-          setShowAdminPanel(false);
+          closeAdminPanel();
           setSelectedProduct(null);
           setEditorMessage("La sesion de administracion expiro por seguridad.");
           setEditorError("");
@@ -6597,7 +4027,7 @@ export default function App() {
       window.removeEventListener("pointerdown", touchSession);
       window.removeEventListener("keydown", touchSession);
     };
-  }, [isAdmin, showToastMessage]);
+  }, [closeAdminPanel, isAdmin, showToastMessage]);
 
   useEffect(() => {
     productsRef.current = products;
@@ -6635,7 +4065,7 @@ export default function App() {
     const editingContact =
       showAdminPanel
       && isAdmin
-      && adminTab === "contacto";
+      && (adminTab === "contacto" || adminTab === "cuentas");
     if (editingContact) return;
     setContactDraft(contactSettings);
   }, [adminTab, contactSettings, isAdmin, showAdminPanel]);
@@ -6814,7 +4244,6 @@ export default function App() {
       { id: "inicio", tab: "inicio" },
       { id: "destacados", tab: "inicio" },
       { id: "coleccion", tab: "catalogo" },
-      { id: "recomendados", tab: "inicio" },
       { id: "contacto", tab: "inicio" },
     ];
 
@@ -6895,10 +4324,6 @@ export default function App() {
       window.clearTimeout(flyToCartTimerRef.current);
       flyToCartTimerRef.current = null;
     }
-    if (userStateSyncTimerRef.current) {
-      window.clearTimeout(userStateSyncTimerRef.current);
-      userStateSyncTimerRef.current = null;
-    }
   }, []);
 
   const buildWhatsAppOrderMessage = (order, { variant = "full" } = {}) => {
@@ -6909,8 +4334,12 @@ export default function App() {
         `Hola Adriego Store, pedido ${order.code}.`,
         `Cliente: ${order.customerName || "Cliente"}`,
         `Entrega: ${deliveryMode}`,
+        `Pago: ${order.paymentMethodLabel || getPaymentMethodLabel(order.paymentMethod)}`,
+        order.paymentBankAccount?.bankName ? `Banco: ${order.paymentBankAccount.bankName}` : "",
         `Total: ${currency(order.total || order.subtotal)}`,
-        "Ayudame con disponibilidad y forma de pago, por favor.",
+        normalizePaymentMethod(order.paymentMethod) === "card_link"
+          ? "Por favor envienme el enlace de pago con tarjeta."
+          : "Realizare el pago por transferencia.",
       ].filter(Boolean).join("\n");
     }
 
@@ -6939,9 +4368,14 @@ export default function App() {
       `Subtotal: ${currency(order.subtotal)}`,
       order.discountAmount > 0 ? `Descuento: -${currency(order.discountAmount)}` : "",
       order.couponCode ? `Cupon aplicado: ${order.couponCode}` : "",
+      `Forma de pago: ${order.paymentMethodLabel || getPaymentMethodLabel(order.paymentMethod)}`,
+      order.paymentBankAccount?.bankName ? `Banco elegido: ${order.paymentBankAccount.bankName}` : "",
+      order.paymentFeeAmount > 0 ? `Comision tarjeta (${order.paymentFeePercent}%): ${currency(order.paymentFeeAmount)}` : "",
       `Total final: ${currency(order.total || order.subtotal)}`,
       "",
-      "Por favor indiquenme disponibilidad y forma de pago.",
+      normalizePaymentMethod(order.paymentMethod) === "card_link"
+        ? "Por favor envienme el enlace seguro para pagar con tarjeta."
+        : "Realizare el pago mediante transferencia bancaria.",
     ].filter(Boolean).join("\n");
   };
 
@@ -7075,7 +4509,7 @@ export default function App() {
   const openProductDetail = (product, selectionOverride = null, options = {}) => {
     if (!product) return;
     if (!isAdmin && product.isPublic === false) {
-      showToastMessage("Este producto ya no esta visible en catalogo.", "info");
+      showToastMessage("Esta prenda ya no está disponible.", "info");
       return;
     }
     if (!options?.fromCartEdit) {
@@ -7083,6 +4517,15 @@ export default function App() {
     }
     const preferredInput = selectionOverride || selections[product.id] || {};
     const preferred = getFallbackSelection(product, preferredInput);
+    trackAnalyticsEvent("product_opened", {
+      product_id: String(product.id || ""),
+      slug: String(product.slug || product.id || ""),
+      category: String(product.category || ""),
+      price: Number(product.price || 0),
+      has_offer: Boolean(product.offerEnabled),
+      discount_percentage: discountPercent(product.price, product.oldPrice),
+      source: String(options.source || "catalog"),
+    });
 
     setSelections((previous) => ({
       ...previous,
@@ -7094,6 +4537,14 @@ export default function App() {
 
     setShowCartSummary(false);
     setShowFavoritesPanel(false);
+    const productSlug = slugify(product.slug || product.name || product.id || "");
+    if (productSlug && options.syncRoute !== false && typeof window !== "undefined") {
+      const nextPath = `/producto/${encodeURIComponent(productSlug)}`;
+      if (window.location.pathname !== nextPath) {
+        window.history.pushState({}, document.title, nextPath);
+        setPathname(nextPath);
+      }
+    }
     window.setTimeout(() => {
       setSelectedProduct(product);
     }, 150);
@@ -7101,6 +4552,10 @@ export default function App() {
 
   const closeProductModal = ({ returnToCart = false } = {}) => {
     const wasEditingCartItem = Boolean(editingCartItemKey);
+    if (productRouteSlug && typeof window !== "undefined") {
+      window.history.replaceState({}, document.title, "/");
+      setPathname("/");
+    }
     setSelectedProduct(null);
     setEditingCartItemKey(null);
     if (returnToCart && wasEditingCartItem) {
@@ -7122,7 +4577,7 @@ export default function App() {
 
   const addToCart = (product, animationMeta = null, selectionOverride = null) => {
     if (!isAdmin && product?.isPublic === false) {
-      showToastMessage("Este producto ya no esta disponible para compra.", "info");
+      showToastMessage("Esta prenda ya no está disponible.", "info");
       return;
     }
     const selection = getFallbackSelection(product, selectionOverride || selections[product.id] || {});
@@ -7146,7 +4601,7 @@ export default function App() {
         }
 
         if (availableStock <= 0) {
-          showToastMessage("Esa talla esta agotada por ahora.", "error");
+          showToastMessage("Esa talla está agotada por ahora.", "error");
           return previous;
         }
 
@@ -7238,7 +4693,7 @@ export default function App() {
         return previous.map((item) => item.key === key ? { ...item, quantity: item.quantity + 1 } : item);
       }
       if (availableStock <= 0) {
-        showToastMessage("Esa talla esta agotada por ahora.", "error");
+        showToastMessage("Esa talla está agotada por ahora.", "error");
         return previous;
       }
       showToastMessage(`"${product.name}" se agrego al carrito.`, "success");
@@ -7259,6 +4714,13 @@ export default function App() {
     });
 
     if (!cartWasUpdated) return;
+    trackAnalyticsEvent("cart_item_added", {
+      product_id: String(product.id || ""),
+      variant_size: String(selection.size || ""),
+      variant_color: String(selection.color || ""),
+      unit_price: Number(product.price || 0),
+      quantity: 1,
+    });
     triggerFlyToCart({
       sourceElement: animationMeta?.sourceElement,
       image: animationMeta?.image || chosenImage,
@@ -7353,7 +4815,7 @@ export default function App() {
   const handleOpenOrderWhatsApp = (order) => {
     const normalizedStatus = normalizeOrderStatusForOrder(order?.status, order?.deliveryType);
     if (normalizedStatus !== "Listo para retiro" && normalizedStatus !== "Enviado") {
-      showToastMessage("WhatsApp se habilita cuando el pedido esta enviado o listo para retiro.", "info");
+      showToastMessage("Podrás escribirnos por WhatsApp cuando el pedido esté enviado o listo para retirar.", "info");
       return;
     }
 
@@ -7361,7 +4823,7 @@ export default function App() {
     const targetUrl = buildWhatsAppOrderFollowupUrl(order, { mobile: isMobileViewport });
     if (!targetUrl) {
       closeExternalWindow(pendingExternalWindow);
-      showToastMessage("Configura un numero o enlace de WhatsApp para continuar.", "error");
+      showToastMessage("WhatsApp no está disponible en este momento. Escríbenos por otro medio de contacto.", "error");
       return;
     }
 
@@ -7372,12 +4834,27 @@ export default function App() {
     });
     if (!launchResult.launched) {
       closeExternalWindow(pendingExternalWindow);
-      showToastMessage("No pudimos abrir WhatsApp automaticamente. Intenta de nuevo.", "warning");
+      showToastMessage("No pudimos abrir WhatsApp automáticamente. Inténtalo nuevamente.", "warning");
     }
   };
 
   const handleUserLogout = async ({ closeMobileNav = false } = {}) => {
-    await logoutUserAccount();
+    await flushUserStateSync();
+    const logoutResult = await logoutUserAccount();
+    if (!logoutResult?.ok) {
+      showToastMessage("No pudimos cerrar la sesión. Revisa tu conexión e inténtalo nuevamente.", "error");
+      return;
+    }
+    // ASVS V7.4: only terminate local state after the server confirms session invalidation.
+    resetUserStateSync();
+    pendingGuestStateMergeRef.current = null;
+    // ASVS V14.3: remove account-scoped browser data on logout to prevent cross-user disclosure.
+    cartRef.current = [];
+    favoritesRef.current = [];
+    setCart([]);
+    setFavorites([]);
+    removeStorage(STORAGE_KEYS.cart);
+    removeStorage(STORAGE_KEYS.favorites);
     setCurrentUser(null);
     setOrderHistory([]);
     clearActiveCoupon();
@@ -7423,7 +4900,7 @@ export default function App() {
     setSecurityMetricsUpdatedAt("");
     setOrderLiveAlert(null);
     setContactSyncFeedback(null);
-    setShowAdminPanel(false);
+    closeAdminPanel();
     setSelectedProduct(null);
     setEditorMessage("Sesion de administracion cerrada.");
     setEditorError("");
@@ -7459,7 +4936,7 @@ export default function App() {
       return;
     }
     setAdminSession(null);
-    setShowAdminPanel(false);
+    closeAdminPanel();
     if (closeMobileNav) {
       setShowMobileNav(false);
     }
@@ -7560,7 +5037,7 @@ export default function App() {
 
   const syncAddressBookForCurrentUser = async (nextBook = [], options = {}) => {
     if (!currentUser?.id) {
-      return { ok: false, message: "Debes iniciar sesion para actualizar tu libreta." };
+      return { ok: false, message: "Inicia sesión para actualizar tus direcciones." };
     }
 
     const normalizedAddressBook = normalizeAddressBook(nextBook);
@@ -7575,7 +5052,7 @@ export default function App() {
     });
 
     if (!response.ok || !response.user) {
-      const errorMessage = options.errorMessage || response.message || "No pudimos sincronizar la libreta de direcciones.";
+      const errorMessage = options.errorMessage || "No pudimos guardar tus direcciones. Inténtalo nuevamente.";
       if (!options.silent) {
         setProfileFeedback({ tone: "error", message: errorMessage });
       }
@@ -7624,8 +5101,8 @@ export default function App() {
       addressBook: nextBook,
     }));
     await syncAddressBookForCurrentUser(nextBook, {
-      successMessage: "Direccion principal actualizada.",
-      errorMessage: "No pudimos actualizar la direccion principal.",
+      successMessage: "Dirección principal actualizada.",
+      errorMessage: "No pudimos actualizar la dirección principal.",
     });
   };
 
@@ -7660,8 +5137,8 @@ export default function App() {
       resetAddressBookEditor();
     }
     await syncAddressBookForCurrentUser(nextBook, {
-      successMessage: "Direccion eliminada de tu libreta.",
-      errorMessage: "No pudimos eliminar la direccion en este momento.",
+      successMessage: "Dirección eliminada de tu libreta.",
+      errorMessage: "No pudimos eliminar la dirección en este momento.",
     });
   };
 
@@ -7671,7 +5148,7 @@ export default function App() {
       id: addressBookEditingId || createUid(),
     });
     if (!normalizedEntry || !normalizedEntry.address) {
-      setProfileFeedback({ tone: "error", message: "Ingresa una direccion valida para guardarla." });
+      setProfileFeedback({ tone: "error", message: "Ingresa una dirección válida para guardarla." });
       return;
     }
 
@@ -7695,8 +5172,8 @@ export default function App() {
     }));
 
     const syncResult = await syncAddressBookForCurrentUser(nextBook, {
-      successMessage: addressBookEditingId ? "Direccion guardada correctamente." : "Direccion agregada a tu libreta.",
-      errorMessage: "No pudimos guardar la direccion en tu libreta.",
+      successMessage: addressBookEditingId ? "Dirección actualizada." : "Dirección guardada.",
+      errorMessage: "No pudimos guardar la dirección.",
     });
     if (syncResult.ok) {
       resetAddressBookEditor();
@@ -7717,11 +5194,11 @@ export default function App() {
       return;
     }
     if (!isValidEmail(email)) {
-      setProfileFeedback({ tone: "error", message: "Ingresa un correo electronico valido." });
+      setProfileFeedback({ tone: "error", message: "Ingresa un correo electrónico válido." });
       return;
     }
     if (phone && phone.length !== AUTH_FIELD_LIMITS.phone) {
-      setProfileFeedback({ tone: "error", message: "El telefono debe tener 10 digitos." });
+      setProfileFeedback({ tone: "error", message: "El teléfono debe tener 10 dígitos." });
       return;
     }
 
@@ -7760,7 +5237,7 @@ export default function App() {
 
   const saveCheckoutAddressToBook = async (payload = {}) => {
     if (!currentUser?.id) {
-      return { ok: false, message: "Debes iniciar sesion para guardar direcciones." };
+      return { ok: false, message: "Inicia sesión para guardar direcciones." };
     }
 
     const normalizedEntry = normalizeAddressBookEntry({
@@ -7774,7 +5251,7 @@ export default function App() {
     });
 
     if (!normalizedEntry || !normalizedEntry.address) {
-      return { ok: false, message: "Ingresa una direccion valida para guardarla." };
+      return { ok: false, message: "Ingresa una dirección válida para guardarla." };
     }
 
     const currentBook = normalizeAddressBook(currentUser.addressBook);
@@ -7794,10 +5271,10 @@ export default function App() {
 
     const syncResult = await syncAddressBookForCurrentUser(nextBook, {
       silent: true,
-      errorMessage: "No pudimos guardar la direccion en tu libreta.",
+      errorMessage: "No pudimos guardar la dirección.",
     });
     if (!syncResult.ok) {
-      return { ok: false, message: syncResult.message || "No pudimos guardar la direccion en tu libreta." };
+      return { ok: false, message: syncResult.message || "No pudimos guardar la dirección." };
     }
 
     const syncedBook = normalizeAddressBook(syncResult.addressBook);
@@ -7820,15 +5297,15 @@ export default function App() {
     const confirmPassword = String(passwordDraft.confirmPassword || "").trim();
 
     if (!currentPassword || !newPassword || !confirmPassword) {
-      setPasswordFeedback({ tone: "error", message: "Completa todos los campos de contrasena." });
+      setPasswordFeedback({ tone: "error", message: "Completa todos los campos de contraseña." });
       return;
     }
     if (!hasStrongPassword(newPassword)) {
-      setPasswordFeedback({ tone: "error", message: `La nueva contrasena debe tener minimo ${PASSWORD_SECURITY.minLength} caracteres con letras y numeros.` });
+      setPasswordFeedback({ tone: "error", message: `La nueva contraseña debe tener mínimo ${PASSWORD_SECURITY.minLength} caracteres con letras y números.` });
       return;
     }
     if (newPassword !== confirmPassword) {
-      setPasswordFeedback({ tone: "error", message: "La confirmacion no coincide con la nueva contrasena." });
+      setPasswordFeedback({ tone: "error", message: "La confirmación no coincide con la nueva contraseña." });
       return;
     }
 
@@ -7838,13 +5315,13 @@ export default function App() {
       confirmPassword,
     });
     if (!response.ok) {
-      setPasswordFeedback({ tone: "error", message: response.message || "No pudimos actualizar la contrasena." });
+      setPasswordFeedback({ tone: "error", message: response.message || "No pudimos actualizar la contraseña." });
       return;
     }
 
     setPasswordDraft({ currentPassword: "", newPassword: "", confirmPassword: "" });
-    setPasswordFeedback({ tone: "success", message: "Contrasena actualizada correctamente." });
-    showToastMessage("Contrasena actualizada.", "success");
+    setPasswordFeedback({ tone: "success", message: "Contraseña actualizada correctamente." });
+    showToastMessage("Contraseña actualizada.", "success");
   };
 
   const handleCouponDraftFieldChange = (field, value) => {
@@ -7969,7 +5446,11 @@ export default function App() {
     const normalizedCouponId = normalizeEntityId(couponId);
     const target = coupons.find((coupon) => normalizeEntityId(coupon.id) === normalizedCouponId);
     if (!target) return;
-    if (typeof window !== "undefined" && !window.confirm(`Eliminar el cupon ${target.code}?`)) return;
+    const confirmed = await requestDestructiveConfirmation({
+      title: `¿Eliminar el cupón “${target.code}”?`,
+      description: "Dejará de ser válido para nuevas compras. Los pedidos históricos no se modificarán.",
+    });
+    if (!confirmed) return;
     const nextCoupons = coupons.filter((coupon) => normalizeEntityId(coupon.id) !== normalizedCouponId);
     setCoupons(nextCoupons);
     couponsRef.current = nextCoupons;
@@ -7992,7 +5473,7 @@ export default function App() {
     if (couponBusy) return;
     const normalized = normalizeCode(couponInputCode);
     if (!normalized) {
-      showToastMessage("Ingresa un codigo de cupon para aplicar.", "error");
+      showToastMessage("Ingresa un código de cupón para aplicarlo.", "error");
       return;
     }
 
@@ -8024,6 +5505,18 @@ export default function App() {
     window.setTimeout(focusSearchField, 420);
   };
 
+  const stageGuestStateMerge = (user) => {
+    const guestCart = normalizeAccountCartState(cart);
+    const guestFavorites = normalizeStoredFavorites(favorites);
+    pendingGuestStateMergeRef.current = guestCart.length || guestFavorites.length
+      ? {
+          userId: String(user?.id || ""),
+          cart: guestCart,
+          favorites: guestFavorites,
+        }
+      : null;
+  };
+
   const handleUserAuthSubmit = async (event) => {
     event.preventDefault();
     if (authBusy) return;
@@ -8042,7 +5535,7 @@ export default function App() {
             setAuthError("Demasiados intentos. Espera un momento e intenta de nuevo.");
             return;
           }
-          setAuthError(response.message || "No pudimos iniciar la recuperacion en este momento.");
+          setAuthError(response.message || "No pudimos iniciar la recuperación en este momento.");
           return;
         }
 
@@ -8058,7 +5551,7 @@ export default function App() {
         }));
         showToastMessage({
           title: "Revisa tu correo",
-          message: "Si existe una cuenta con ese correo, te enviamos un enlace para restablecer tu contrasena.",
+          message: "Si existe una cuenta con ese correo, te enviamos un enlace para restablecer tu contraseña.",
         }, "success");
       } finally {
         setAuthBusy(false);
@@ -8077,7 +5570,7 @@ export default function App() {
           confirmPassword,
         });
         if (!response.ok) {
-          setAuthError(response.message || "No pudimos restablecer tu contrasena.");
+          setAuthError(response.message || "No pudimos restablecer tu contraseña.");
           return;
         }
 
@@ -8092,8 +5585,8 @@ export default function App() {
           confirmPassword: "",
         }));
         showToastMessage({
-          title: "Contrasena actualizada",
-          message: "Ya puedes iniciar sesion con tu nueva contrasena.",
+          title: "Contraseña actualizada",
+          message: "Ya puedes iniciar sesión con tu nueva contraseña.",
         }, "success");
       } finally {
         setAuthBusy(false);
@@ -8127,6 +5620,7 @@ export default function App() {
         }
 
         await logoutAdminSession();
+        stageGuestStateMerge(registerResponse.user);
         setCurrentUser(registerResponse.user);
         setAdminSession(null);
         setShowUserAuth(false);
@@ -8138,7 +5632,7 @@ export default function App() {
         triggerConfetti("welcome");
         showToastMessage({
           title: `Bienvenida ${firstName}`,
-          message: "Tu cuenta esta activa. Gracias por confiar en nosotros.",
+          message: "Tu cuenta está activa. Gracias por confiar en nosotros.",
         }, "success");
         if (nextDestination === "cart") {
           setShowCartSummary(true);
@@ -8156,6 +5650,7 @@ export default function App() {
       if (adminLoginResult.ok && adminLoginResult.isAdmin && adminLoginResult.session) {
         await logoutUserAccount();
         adminTouchWarningShownRef.current = false;
+        pendingGuestStateMergeRef.current = null;
         setCurrentUser(null);
         setAdminSession({
           username: adminLoginResult.session.username,
@@ -8196,7 +5691,7 @@ export default function App() {
         password,
       });
       if (!userLoginResponse.ok || !userLoginResponse.user) {
-        setAuthError(userLoginResponse.message || "Correo, usuario o contrasena incorrectos.");
+        setAuthError(userLoginResponse.message || "Correo, usuario o contraseña incorrectos.");
         return;
       }
 
@@ -8204,6 +5699,7 @@ export default function App() {
       const firstName = ((userLoginResponse.user.name || "cliente").split(" ")[0] || "cliente");
 
       await logoutAdminSession();
+      stageGuestStateMerge(userLoginResponse.user);
       setCurrentUser(userLoginResponse.user);
       setAdminSession(null);
       setShowUserAuth(false);
@@ -8213,7 +5709,7 @@ export default function App() {
       triggerConfetti("welcome");
       showToastMessage({
         title: `Bienvenido de nuevo ${firstName}`,
-        message: "Es un placer volver a verte. Tu cuenta ya esta lista.",
+        message: "Es un placer volver a verte. Tu cuenta ya está lista.",
       }, "success");
 
       if (nextDestination === "cart") {
@@ -8232,13 +5728,13 @@ export default function App() {
       openUserAuth({
         mode: "login",
         destination: "cart",
-        error: "Inicia sesion o crea tu cuenta para guardar y rastrear el pedido antes de enviarlo por WhatsApp.",
+        error: "Inicia sesión o crea tu cuenta para guardar y seguir tu pedido antes de enviarlo por WhatsApp.",
       });
       return;
     }
 
     if (activeCouponCode && !appliedCouponState?.ok) {
-      showToastMessage(appliedCouponState.message || "El cupon no es valido para este carrito. Corrigelo o quitalo para continuar.", "error");
+      showToastMessage(appliedCouponState.message || "El cupón no es válido para este carrito. Corrígelo o quítalo para continuar.", "error");
       return;
     }
 
@@ -8249,7 +5745,7 @@ export default function App() {
       return availableStock <= 0 || Number(line.quantity || 0) > availableStock;
     });
     if (unavailableCartLine) {
-      showToastMessage("Tu carrito tiene productos ocultos o sin stock. Revísalo antes de enviar el pedido.", "warning");
+      showToastMessage("Algunas prendas de tu carrito ya no están disponibles. Revísalo antes de continuar.", "warning");
       setShowCartSummary(true);
       return;
     }
@@ -8258,6 +5754,13 @@ export default function App() {
     let whatsappLaunched = false;
 
     const deliveryType = checkoutPayload?.deliveryType === "delivery" ? "delivery" : "pickup";
+    const paymentMethod = normalizePaymentMethod(checkoutPayload?.paymentMethod);
+    const paymentProof = paymentMethod === PAYMENT_METHODS.transfer
+      ? normalizeImageSource(checkoutPayload?.paymentProof || "")
+      : "";
+    const bankAccountId = paymentMethod === PAYMENT_METHODS.transfer
+      ? sanitizeLine(checkoutPayload?.bankAccountId || "")
+      : "";
     const selectedAddressId = normalizeEntityId(checkoutPayload?.selectedAddressId || "");
     const payloadDetails = checkoutPayload?.deliveryDetails || {};
     const deliveryDetails = {
@@ -8272,12 +5775,12 @@ export default function App() {
     if (deliveryType === "delivery") {
       if (!deliveryDetails.fullName || !deliveryDetails.idNumber || !deliveryDetails.city || !deliveryDetails.address || !deliveryDetails.reference) {
         closeExternalWindow(pendingExternalWindow);
-        showToastMessage("Completa todos los datos de envio antes de confirmar el pedido.", "error");
+        showToastMessage("Completa todos los datos de envío antes de confirmar el pedido.", "error");
         return;
       }
       if (deliveryDetails.phone.length !== AUTH_FIELD_LIMITS.phone) {
         closeExternalWindow(pendingExternalWindow);
-        showToastMessage("El telefono para envio debe tener 10 digitos.", "error");
+        showToastMessage("El teléfono para envío debe tener 10 dígitos.", "error");
         return;
       }
 
@@ -8295,31 +5798,57 @@ export default function App() {
         });
         if (!saveAddressResult.ok) {
           closeExternalWindow(pendingExternalWindow);
-          showToastMessage(saveAddressResult.message || "No pudimos guardar tu direccion en la libreta.", "error");
+          showToastMessage(saveAddressResult.message || "No pudimos guardar tu dirección.", "error");
           return;
         }
       }
     }
 
+    trackAnalyticsEvent("checkout_started", {
+      subtotal: Number(subtotal || 0),
+      item_count: Number(totalItems || 0),
+      unique_products: new Set(cart.map((line) => String(line.id || ""))).size,
+      coupon_applied: Boolean(activeCouponCode),
+      delivery_type_selected: deliveryType,
+    });
     setCheckoutBusy(true);
     showToastMessage({
       tone: "info",
-      title: "Gracias por tu compra",
-      message: "Estamos registrando tu pedido y validando disponibilidad.",
+      title: "Estamos preparando tu pedido",
+      message: "Un momento mientras confirmamos los datos.",
     }, "info");
     try {
-      const response = await createServerCheckoutOrder({
+      const checkoutRequest = {
         cart,
         couponCode: activeCouponCode,
+        paymentMethod,
+        paymentProof,
+        bankAccountId,
         delivery: {
           type: deliveryType,
           ...deliveryDetails,
         },
-      });
+      };
+      const checkoutSignature = JSON.stringify(checkoutRequest);
+      const idempotencyKey = checkoutAttemptRef.current.signature === checkoutSignature
+        ? checkoutAttemptRef.current.idempotencyKey
+        : createUuid();
+      checkoutAttemptRef.current = { signature: checkoutSignature, idempotencyKey };
+      const response = await createServerCheckoutOrder({ ...checkoutRequest, idempotencyKey });
       if (!response.ok || !response.order) {
-        showToastMessage(response.message || "No pudimos procesar el pedido en el servidor.", "error");
+        showToastMessage("No pudimos recibir tu pedido. Revisa tu carrito e inténtalo nuevamente.", "error");
         return;
       }
+      checkoutAttemptRef.current = { signature: "", idempotencyKey: "" };
+
+      trackAnalyticsEvent("order_created", {
+        order_id: String(response.order.id || ""),
+        total: Number(response.order.total || response.order.subtotal || 0),
+        discount_amount: Number(response.order.discountAmount || 0),
+        item_count: Number(response.order.itemCount || cart.length),
+        delivery_type: deliveryType,
+        coupon_used: Boolean(activeCouponCode),
+      });
 
       if (Array.isArray(response.products)) {
         setProducts(response.products.map(normalizeProduct));
@@ -8353,17 +5882,15 @@ export default function App() {
       const launched = Boolean(launchResult.launched);
       if (!launched) {
         closeExternalWindow(pendingExternalWindow);
-        showToastMessage("Pedido registrado. No pudimos abrir WhatsApp automaticamente; abre la app manualmente para enviarlo.", "warning");
+        showToastMessage("Recibimos tu pedido, pero no pudimos abrir WhatsApp. Ábrelo y envíanos el resumen desde Mis pedidos.", "warning");
       } else {
         whatsappLaunched = true;
-        if (launchResult.mode === "deep-link" || launchResult.mode === "deep-link-window") {
-          showToastMessage("Pedido registrado. Intentamos abrir WhatsApp directamente en tu aplicacion.", "success");
-        }
-        if (["number-compact", "api-compact", "link-compact", "web-compact"].includes(whatsappTarget.mode)) {
-          showToastMessage("Pedido registrado. Abrimos WhatsApp con un resumen compacto para evitar errores de enlace largo.", "info");
-        } else if (["number-minimal", "api-minimal", "link-minimal", "web-minimal"].includes(whatsappTarget.mode)) {
-          showToastMessage("Pedido registrado. Abrimos WhatsApp con un mensaje breve para asegurar el texto prellenado.", "info");
-        }
+        trackAnalyticsEvent("whatsapp_opened", {
+          order_id: String(response.order.id || ""),
+          total: Number(response.order.total || response.order.subtotal || 0),
+          device_type: isMobileViewport ? "mobile" : "desktop",
+          is_reopen: false,
+        });
       }
 
       clearActiveCoupon();
@@ -8371,15 +5898,12 @@ export default function App() {
       setShowOrdersModal(true);
       triggerConfetti("checkout");
       showToastMessage({
-        title: `Pedido ${response.order.code} confirmado`,
-        message: `Gracias ${firstName}. Tu pedido esta guardado y listo para finalizar por WhatsApp.`,
+        title: `Pedido ${response.order.code} recibido`,
+        message: `Gracias ${firstName}. Envíanos el resumen por WhatsApp para confirmarlo.`,
       }, "success");
-    } catch (error) {
+    } catch {
       closeExternalWindow(pendingExternalWindow);
-      const message = error instanceof Error
-        ? error.message
-        : "No pudimos registrar el pedido en este momento. Intenta de nuevo.";
-      showToastMessage(message, "error");
+      showToastMessage("No pudimos recibir tu pedido. Revisa tu conexión e inténtalo nuevamente.", "error");
     } finally {
       if (!whatsappLaunched) {
         closeExternalWindow(pendingExternalWindow);
@@ -8416,6 +5940,8 @@ export default function App() {
     emptyForm.productType = activeProductTypeNames[0] || "General";
     emptyForm.isPublic = true;
     setProductForm(emptyForm);
+    setProductFormBaseline(getProductFormSignature(emptyForm));
+    discardProductDraft();
     setPreviewColor(emptyForm.colorsData[0]?.name || "");
     setPreviewImageIndex(0);
     setCustomProductTypeInput("");
@@ -8427,6 +5953,8 @@ export default function App() {
   const startEditingProduct = (product) => {
     const form = createProductForm(product);
     setProductForm(form);
+    setProductFormBaseline(getProductFormSignature(form));
+    discardProductDraft();
     setPreviewColor(form.colorsData[0]?.name || "");
     setPreviewImageIndex(0);
     setCustomProductTypeInput("");
@@ -8444,11 +5972,48 @@ export default function App() {
     }
   };
 
+  const openRecommendedProduct = (product) => {
+    if (!product) return;
+    const productSlug = slugify(product.slug || product.name || product.id || "");
+    if (productSlug && typeof window !== "undefined") {
+      const nextPath = `/producto/${encodeURIComponent(productSlug)}`;
+      window.history.replaceState(window.history.state, document.title, nextPath);
+      setPathname(nextPath);
+    }
+    openProductDetail(product, null, { source: "product_recommendation", syncRoute: false });
+  };
+
+  const duplicateProductForAdmin = (product) => {
+    const form = createProductForm(product);
+    form.id = null;
+    form.name = `${sanitizeLine(product?.name || "Producto")} copia`;
+    form.isPublic = false;
+    form.featured = false;
+    const emptyBaseline = createEmptyProductForm();
+    emptyBaseline.productType = activeProductTypeNames[0] || "General";
+    setProductForm(form);
+    setProductFormBaseline(getProductFormSignature(emptyBaseline));
+    discardProductDraft();
+    setPreviewColor(form.colorsData[0]?.name || "");
+    setPreviewImageIndex(0);
+    setCustomProductTypeInput("");
+    setCustomFilterTagInput("");
+    setEditorMessage(`Copia de "${product?.name || "Producto"}" lista para revisar. Se mantendrá oculta hasta que decidas publicarla.`);
+    setEditorError("");
+    setSelectedProduct(null);
+    setShowAdminPanel(true);
+    setAdminTab("producto");
+  };
+
   const handleDeleteProduct = async (productId) => {
     const normalizedProductId = normalizeEntityId(productId);
     const target = products.find((product) => normalizeEntityId(product.id) === normalizedProductId);
     if (!target) return;
-    if (typeof window !== "undefined" && !window.confirm(`Eliminar "${target.name}" del catalogo?`)) return;
+    const confirmed = await requestDestructiveConfirmation({
+      title: `¿Eliminar “${target.name}”?`,
+      description: "Esta acción no se puede deshacer. El producto se quitará del catálogo y de los favoritos de los usuarios.",
+    });
+    if (!confirmed) return;
 
     const nextProducts = products.filter((product) => normalizeEntityId(product.id) !== normalizedProductId);
     const nextFavorites = favorites.filter((favoriteId) => normalizeEntityId(favoriteId) !== normalizedProductId);
@@ -8702,7 +6267,7 @@ export default function App() {
     setProductTypeRecords((previous) => previous.map((record) => record.id === recordId ? { ...record, active: !record.active } : record));
   };
 
-  const deleteManagedProductType = (recordId, replacementName) => {
+  const deleteManagedProductType = async (recordId, replacementName) => {
     const record = productTypeRecords.find((entry) => entry.id === recordId);
     if (!record) return;
 
@@ -8717,7 +6282,13 @@ export default function App() {
       return;
     }
 
-    if (typeof window !== "undefined" && !window.confirm(`Eliminar el tipo de producto "${record.name}"?`)) return;
+    const confirmed = await requestDestructiveConfirmation({
+      title: `¿Eliminar el tipo “${record.name}”?`,
+      description: associatedCount > 0
+        ? `Los ${associatedCount} producto(s) afectados se reasignarán a “${effectiveReplacement}”. Esta acción no se puede deshacer.`
+        : "Esta acción no se puede deshacer.",
+    });
+    if (!confirmed) return;
 
     if (associatedCount > 0) {
       setProducts((previous) => previous.map((product) => normalizeOptionLabel(product.productType || "").toLowerCase() === record.name.toLowerCase() ? { ...product, productType: effectiveReplacement } : product));
@@ -8829,13 +6400,22 @@ export default function App() {
     setFilterTagRecords((previous) => previous.map((record) => record.id === recordId ? { ...record, active: !record.active } : record));
   };
 
-  const deleteManagedFilterTag = (recordId, replacementName) => {
+  const deleteManagedFilterTag = async (recordId, replacementName) => {
     const record = filterTagRecords.find((entry) => entry.id === recordId);
     if (!record) return;
 
     const replacement = normalizeOptionLabel(replacementName);
 
-    if (typeof window !== "undefined" && !window.confirm(`Eliminar el filtro "${record.name}"?`)) return;
+    const associatedCount = products.filter((product) => (
+      product.filterTags || []
+    ).some((tag) => normalizeOptionLabel(tag).toLowerCase() === record.name.toLowerCase())).length;
+    const confirmed = await requestDestructiveConfirmation({
+      title: `¿Eliminar el filtro “${record.name}”?`,
+      description: associatedCount > 0
+        ? `Se eliminará de ${associatedCount} producto(s)${replacement ? ` y se reemplazará por “${replacement}”` : ""}. Esta acción no se puede deshacer.`
+        : "Esta acción no se puede deshacer.",
+    });
+    if (!confirmed) return;
 
     setProducts((previous) => previous.map((product) => {
       const currentTags = splitFilterTagsText((product.filterTags || []).join(", "));
@@ -9000,6 +6580,36 @@ export default function App() {
       const message = error instanceof Error ? error.message : "No pudimos subir la imagen del slide.";
       setEditorError(message);
       showToastMessage(message, "error");
+    }
+    event.target.value = "";
+  };
+
+  const handleBankImageUpload = async (accountId, field, event) => {
+    if (field !== "bankLogoImage" && field !== "bankQrImage") return;
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setBankQrUploadBusy(true);
+    try {
+      const bankImage = await fileToDataUrl(file);
+      setContactDraft((previous) => ({
+        ...previous,
+        paymentSettings: withBankAccounts(
+          previous.paymentSettings,
+          normalizeBankAccounts(
+            previous.paymentSettings,
+            { keepEmpty: true, preserveWhitespace: true },
+          ).map((account) => (
+            account.id === accountId ? { ...account, [field]: bankImage } : account
+          )),
+        ),
+      }));
+      showToastMessage(field === "bankLogoImage" ? "Logo bancario cargado." : "QR bancario cargado.", "success");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "No pudimos cargar la imagen bancaria.";
+      setEditorError(message);
+      showToastMessage(message, "error");
+    } finally {
+      setBankQrUploadBusy(false);
     }
     event.target.value = "";
   };
@@ -9184,6 +6794,7 @@ export default function App() {
   };
 
   const saveContactConfiguration = async () => {
+    if (contactSaveBusy || bankQrUploadBusy) return;
     const emailDraft = normalizeEmail(contactDraft.email || "");
     if (emailDraft && !isValidEmail(emailDraft)) {
       setEditorError("El correo de contacto no tiene un formato valido.");
@@ -9194,7 +6805,21 @@ export default function App() {
       });
       return;
     }
-    const nextContactSettings = normalizeContactSettings({ ...contactDraft });
+    const rawMapsLink = sanitizeLine(contactDraft.mapsLink || "");
+    const normalizedMapsLink = normalizeSafeUrl(rawMapsLink);
+    if (rawMapsLink && !/^https?:\/\//i.test(normalizedMapsLink)) {
+      setEditorError("El enlace de Google Maps no es válido. Copia el enlace completo desde Google Maps.");
+      setEditorMessage("");
+      setContactSyncFeedback({
+        tone: "error",
+        message: "No se pudo guardar: revisa el enlace de Google Maps.",
+      });
+      return;
+    }
+    const nextContactSettings = normalizeContactSettings({
+      ...contactDraft,
+      mapsLink: normalizedMapsLink,
+    });
     if (!nextContactSettings.whatsappNumber && !nextContactSettings.whatsappLink) {
       setEditorError("Configura al menos un numero o enlace de WhatsApp para permitir checkout.");
       setEditorMessage("");
@@ -9209,50 +6834,94 @@ export default function App() {
       footerTitle: sanitizeLine(storeDraft.footerTitle || ""),
       footerText: sanitizeParagraph(storeDraft.footerText || ""),
     });
-    setContactSettings(nextContactSettings);
-    setStoreSettings(nextStoreSettings);
-    setStoreDraft((previous) => ({
-      ...previous,
-      footerTitle: nextStoreSettings.footerTitle,
-      footerText: nextStoreSettings.footerText,
-    }));
-    contactSettingsRef.current = nextContactSettings;
-    storeSettingsRef.current = nextStoreSettings;
-    setEditorMessage("La informacion de contacto, redes y texto visible del bloque de contacto fue actualizada.");
-    setEditorError("");
-    showToastMessage("Configuracion de contacto guardada.", "success");
-
-    const localTimestamp = new Date().toISOString();
-    setContactSyncFeedback({
-      tone: "warning",
-      message: `Guardado local completado. Sincronizando con servidor... (${formatAdminTimestamp(localTimestamp)})`,
-    });
-
     if (!isAdmin || !catalogReady) {
+      setEditorError("Necesitas una sesión administrativa activa para guardar esta configuración.");
+      setEditorMessage("");
       setContactSyncFeedback({
-        tone: "warning",
-        message: "Guardado localmente. Inicia sesion admin para sincronizar con servidor.",
+        tone: "error",
+        message: "No se guardó: la sesión administrativa no está disponible.",
       });
       return;
     }
 
-    const syncResult = await syncCatalogSnapshot({
-      contactSettings: nextContactSettings,
-      storeSettings: nextStoreSettings,
-    }, { silent: true });
-    if (!syncResult.ok) {
-      showToastMessage("Guardado localmente. No pudimos sincronizar con el servidor todavia.", "warning");
-      setContactSyncFeedback({
-        tone: "warning",
-        message: "Guardado localmente. Falto sincronizar con servidor; intenta nuevamente.",
-      });
-    } else {
+    setContactSaveBusy(true);
+    setEditorError("");
+    setEditorMessage("");
+    setContactSyncFeedback({ tone: "warning", message: "Guardando cuentas bancarias y datos de contacto..." });
+    const previousContactSettings = contactSettingsRef.current;
+    const previousStoreSettings = storeSettingsRef.current;
+    contactSettingsRef.current = nextContactSettings;
+    storeSettingsRef.current = nextStoreSettings;
+    try {
+      const syncResult = await enqueueAsyncOperation(
+        catalogSyncQueueRef,
+        () => syncContactState(nextContactSettings, nextStoreSettings),
+      );
+      if (!syncResult.ok) {
+        if (contactSettingsRef.current === nextContactSettings) {
+          contactSettingsRef.current = previousContactSettings;
+        }
+        if (storeSettingsRef.current === nextStoreSettings) {
+          storeSettingsRef.current = previousStoreSettings;
+        }
+        const message = syncResult.message || "No pudimos guardar la configuración en el servidor.";
+        setEditorError(message);
+        showToastMessage(message, "error");
+        setContactSyncFeedback({ tone: "error", message: `No se guardó: ${message}` });
+        return;
+      }
+
+      const verifiedContactSettings = syncResult.data?.contactSettings
+        ? resolveContactSettingsWithServerFallback(
+            syncResult.data.contactSettings,
+            defaultContactSettings,
+          )
+        : null;
+      if (
+        !verifiedContactSettings
+        || !paymentSettingsMatch(
+          nextContactSettings.paymentSettings,
+          verifiedContactSettings.paymentSettings,
+        )
+      ) {
+        const message = "El servidor no confirmó todas las cuentas bancarias, sus logos o sus QR. Tus cambios siguen en el formulario para que puedas reintentar.";
+        setContactSettings(previousContactSettings);
+        setContactDraft(nextContactSettings);
+        contactSettingsRef.current = previousContactSettings;
+        storeSettingsRef.current = previousStoreSettings;
+        setEditorError(message);
+        showToastMessage(message, "error");
+        setContactSyncFeedback({ tone: "error", message });
+        return;
+      }
+
+      const persistedContactSettings = resolveContactSettingsWithServerFallback(
+        syncResult.data.contactSettings,
+        defaultContactSettings,
+      );
+      const persistedStoreSettings = mergeStoreSettings(
+        syncResult.data?.storeSettings || nextStoreSettings,
+      );
+      setContactSettings(persistedContactSettings);
+      setContactDraft(persistedContactSettings);
+      setStoreSettings(persistedStoreSettings);
+      setStoreDraft((previous) => ({
+        ...previous,
+        footerTitle: persistedStoreSettings.footerTitle,
+        footerText: persistedStoreSettings.footerText,
+      }));
+      contactSettingsRef.current = persistedContactSettings;
+      storeSettingsRef.current = persistedStoreSettings;
       catalogSyncErrorShownRef.current = false;
       const syncedAt = new Date().toISOString();
+      setEditorMessage("Las cuentas bancarias y los datos de contacto quedaron guardados.");
+      showToastMessage("Métodos de pago guardados correctamente.", "success");
       setContactSyncFeedback({
         tone: "success",
-        message: `Sincronizado con servidor: ${formatAdminTimestamp(syncedAt)}`,
+        message: `Guardado en servidor: ${formatAdminTimestamp(syncedAt)}`,
       });
+    } finally {
+      setContactSaveBusy(false);
     }
   };
 
@@ -9352,6 +7021,7 @@ export default function App() {
     await updateOrderPaymentProof(orderId, "");
     setEditorMessage("La foto del comprobante fue eliminada.");
     setEditorError("");
+    showToastMessage("Comprobante eliminado.", "success");
   };
 
   const handleOrderProofUpload = async (orderId, event) => {
@@ -9372,7 +7042,11 @@ export default function App() {
   const deleteOrder = async (orderId) => {
     const target = orderHistory.find((order) => order.id === orderId);
     if (!target) return;
-    if (typeof window !== "undefined" && !window.confirm(`Eliminar el pedido ${target.code}?`)) return;
+    const confirmed = await requestDestructiveConfirmation({
+      title: `¿Eliminar el pedido ${target.code}?`,
+      description: "Se perderá el registro de esta venta y el historial visible para el cliente. Esta acción no se puede deshacer.",
+    });
+    if (!confirmed) return;
     const response = await deleteServerOrder({ orderId });
     if (!response.ok) {
       showToastMessage(response.message || "No pudimos eliminar el pedido.", "error");
@@ -9407,21 +7081,43 @@ export default function App() {
   const ToastIcon = toastTone === "error"
     ? CircleX
     : (toastTone === "warning" ? Clock3 : (toastTone === "info" ? MessageCircle : BadgeCheck));
+  const routeNotFound = normalizedPathname !== "/"
+    && !isResetRoute
+    && (!productRouteSlug || (catalogReady && !routedProduct));
+
+  const returnHomeFromRoute = () => {
+    if (typeof window !== "undefined") {
+      window.history.pushState({}, document.title, "/");
+    }
+    setPathname("/");
+  };
+
+  if (routeNotFound) {
+    return (
+      <MotionConfig reducedMotion="user">
+        <RouteNotFound onReturnHome={returnHomeFromRoute} />
+      </MotionConfig>
+    );
+  }
 
   return (
     <MotionConfig reducedMotion="user">
       <>
+      {selectedProduct && (
+        <Suspense fallback={null}>
       <ProductModal
         product={selectedProduct}
         selection={selectedProduct ? selections[selectedProduct.id] : null}
+        recommendations={recommendedProducts.slice(0, 4)}
+        onOpenRecommendation={openRecommendedProduct}
         onClose={() => closeProductModal({ returnToCart: true })}
         onChange={handleSelection}
         cartEditMode={Boolean(editingCartItemKey)}
         onAddToCart={(product, animationMeta) => {
           const wasEditingCartItem = Boolean(editingCartItemKey);
           addToCart(product, animationMeta);
-          closeProductModal();
           if (wasEditingCartItem) {
+            closeProductModal();
             setShowCartSummary(true);
           }
         }}
@@ -9431,6 +7127,8 @@ export default function App() {
           setSelectedProduct(null);
         }}
       />
+        </Suspense>
+      )}
 
       <AnimatePresence>
         {flyToCartFx && (
@@ -9462,6 +7160,8 @@ export default function App() {
         </AnimatePresence>
       </div>
 
+      {showCartSummary && (
+        <Suspense fallback={null}>
       <CartSummaryModal
         key={`cart-summary-${showCartSummary ? "open" : "closed"}-${currentUser?.id || "guest"}`}
         open={showCartSummary}
@@ -9491,9 +7191,13 @@ export default function App() {
         onBrowseCatalog={browseCatalogFromModal}
         currentUser={currentUser}
         savedAddresses={currentUserAddressBook}
-        contactSettings={contactSettings}
+        contactSettings={publicContactSettings}
       />
+        </Suspense>
+      )}
 
+      {showFavoritesPanel && (
+        <Suspense fallback={null}>
       <FavoritesModal
         open={showFavoritesPanel}
         onClose={() => setShowFavoritesPanel(false)}
@@ -9503,7 +7207,11 @@ export default function App() {
         onToggleFavorite={toggleFavorite}
         onBrowseCatalog={browseCatalogFromModal}
       />
+        </Suspense>
+      )}
 
+      {showProfileQuickMenu && (
+        <Suspense fallback={null}>
       <ProfileQuickMenu
         open={showProfileQuickMenu}
         position={profileQuickMenuPosition}
@@ -9512,8 +7220,11 @@ export default function App() {
         onOpenOrders={openOrdersFromProfileMenu}
         onLogout={() => { void handleUserLogout(); }}
       />
+        </Suspense>
+      )}
 
       <Suspense fallback={null}>
+        {showUserAuth && (
         <UserAuthSheet
           open={showUserAuth}
           mode={authMode}
@@ -9537,7 +7248,9 @@ export default function App() {
           onTogglePasswordVisibility={() => setAuthPasswordVisible((previous) => !previous)}
           onSubmit={handleUserAuthSubmit}
         />
+        )}
 
+        {showProfileModal && (
         <ProfileModal
           open={showProfileModal}
           onClose={() => {
@@ -9563,8 +7276,11 @@ export default function App() {
           onChangePassword={handleChangePassword}
           passwordFeedback={passwordFeedback}
         />
+        )}
       </Suspense>
 
+      {showOrdersModal && (
+        <Suspense fallback={null}>
       <OrdersModal
         open={showOrdersModal}
         onClose={() => setShowOrdersModal(false)}
@@ -9575,12 +7291,16 @@ export default function App() {
         onCopyOrderCode={handleCopyOrderCode}
         onOpenOrderWhatsApp={handleOpenOrderWhatsApp}
       />
+        </Suspense>
+      )}
 
-      <AdminPanelModal
+      {showAdminPanel && isAdmin && (
+        <Suspense fallback={null}>
+      <ExternalAdminPanelModal
         open={showAdminPanel && isAdmin}
-        onClose={() => setShowAdminPanel(false)}
+        onClose={requestCloseAdminPanel}
         adminTab={adminTab === "inventario" ? "resumen" : adminTab}
-        setAdminTab={(nextTab) => setAdminTab(nextTab === "inventario" ? "resumen" : nextTab)}
+        setAdminTab={requestAdminTabChange}
         editorMessage={editorMessage}
         editorError={editorError}
         adminProductCount={adminProductCount}
@@ -9600,16 +7320,25 @@ export default function App() {
         adminCatalogProducts={adminCatalogProducts}
         products={products}
         startEditingProduct={startEditingProduct}
+        duplicateProduct={duplicateProductForAdmin}
         handleDeleteProduct={handleDeleteProduct}
         bulkDeleteCatalogProducts={bulkDeleteCatalogProducts}
         bulkSetCatalogFeatured={bulkSetCatalogFeatured}
         toggleProductPublicVisibility={toggleProductPublicVisibility}
         productForm={productForm}
+        productDraftRecovery={productDraftRecovery}
+        productDraftSavedAt={productDraftSavedAt}
+        productDraftSaveError={productDraftSaveError}
+        hasUnsavedProductChanges={hasUnsavedProductChanges}
+        restoreProductDraft={restoreProductDraft}
+        discardProductDraft={discardProductDraft}
         resetEditor={resetEditor}
         handleProductFieldChange={handleProductFieldChange}
         setContactDraft={setContactDraft}
         contactDraft={contactDraft}
         saveContactConfiguration={saveContactConfiguration}
+        contactSaveBusy={contactSaveBusy}
+        bankQrUploadBusy={bankQrUploadBusy}
         contactSyncFeedback={contactSyncFeedback}
         addColorVariant={addColorVariant}
         handleColorFieldChange={handleColorFieldChange}
@@ -9622,6 +7351,7 @@ export default function App() {
         setStoreDraft={setStoreDraft}
         storeDraft={storeDraft}
         handleStoreSlideImageUpload={handleStoreSlideImageUpload}
+        handleBankImageUpload={handleBankImageUpload}
         saveStoreConfiguration={saveStoreConfiguration}
         addHeroSlide={addHeroSlide}
         removeHeroSlide={removeHeroSlide}
@@ -9709,13 +7439,35 @@ export default function App() {
         removeAdminUser={removeAdminUser}
         sendAdminUserResetLink={sendAdminUserResetLink}
         copyAdminUserResetLink={copyAdminUserResetLink}
+        requestDestructiveConfirmation={requestDestructiveConfirmation}
       />
+        </Suspense>
+      )}
 
+      <ConfirmModal
+        open={Boolean(destructiveConfirmation)}
+        title={destructiveConfirmation?.title || "¿Confirmar acción?"}
+        description={destructiveConfirmation?.description || "Esta acción no se puede deshacer."}
+        confirmLabel={destructiveConfirmation?.confirmLabel || "Eliminar"}
+        cancelLabel={destructiveConfirmation?.cancelLabel || "Cancelar"}
+        secondaryLabel={destructiveConfirmation?.secondaryLabel || ""}
+        confirmTone={destructiveConfirmation?.confirmTone || "danger"}
+        onCancel={() => settleDestructiveConfirmation(false)}
+        onSecondary={() => settleDestructiveConfirmation(destructiveConfirmation?.secondaryValue || "secondary")}
+        onConfirm={() => settleDestructiveConfirmation(true)}
+      >
+        {destructiveConfirmation?.content}
+      </ConfirmModal>
+
+      {referenceOrder && (
+        <Suspense fallback={null}>
       <OrderReferenceModal
         open={Boolean(referenceOrder)}
         order={referenceOrder}
         onClose={() => setReferenceOrder(null)}
       />
+        </Suspense>
+      )}
 
       {isAdmin && !showAdminPanel && orderLiveAlert && (
         <aside className="global-admin-order-alert" role="status" aria-live="polite">
@@ -9765,21 +7517,25 @@ export default function App() {
               {toast.title && <strong className="toast-title">{toast.title}</strong>}
               {toast.message && <span className="toast-message">{toast.message}</span>}
             </span>
-            <button type="button" className="icon-btn toast-close" aria-label="Cerrar notificacin" onClick={() => setToast(null)}>
+            <button type="button" className="icon-btn toast-close" aria-label="Cerrar notificación" onClick={() => setToast(null)}>
               <X size={14} />
             </button>
           </Motion.div>
         )}
       </AnimatePresence>
 
+      <a className="skip-link" href="#main-content">Saltar al catálogo</a>
+
       <header className="topbar">
         <div className="container nav">
           <div className="nav-brand">
             <div>
-              <p style={{ margin: 0, fontSize: 12, letterSpacing: ".35em", textTransform: "uppercase", color: "#71717a" }}>{storeSettings.brandLabel}</p>
-              <h1 style={{ margin: "4px 0 0", fontSize: 28, fontWeight: 600, letterSpacing: ".25em" }}>{storeSettings.brandName}</h1>
+              {storeSettings.brandLabel.toLowerCase() !== storeSettings.brandName.toLowerCase() && (
+                <p className="brand-label">{storeSettings.brandLabel}</p>
+              )}
+              <h1 className="brand-wordmark">{storeSettings.brandName}</h1>
             </div>
-            <div className="mobile-header-tools" role="group" aria-label="Accesos rapidos">
+            <div className="mobile-header-tools" role="group" aria-label="Accesos rápidos">
               <button type="button" className="icon-quick-btn" onClick={openCatalogSearch} aria-label="Buscar prendas">
                 <Search size={18} />
               </button>
@@ -9820,7 +7576,7 @@ export default function App() {
           <nav className="nav-links">
             <a href="#destacados" onClick={() => setShowMobileNav(false)}>Destacados</a>
             <a href="#coleccion" onClick={() => setShowMobileNav(false)}>Coleccion</a>
-            <a href="#recomendados" onClick={() => setShowMobileNav(false)}>Recomendados</a>
+            <a href="#coleccion" onClick={() => { setCategory(OFFER_TAB_VALUE); setShowMobileNav(false); }}>Ofertas</a>
             <a href="#contacto" onClick={() => setShowMobileNav(false)}>Contacto</a>
           </nav>
 
@@ -9917,11 +7673,11 @@ export default function App() {
                     <ChevronRight size={15} />
                   </a>
                   <a href="#coleccion" onClick={() => setShowMobileNav(false)}>
-                    <span>Coleccion</span>
+                    <span>Colección</span>
                     <ChevronRight size={15} />
                   </a>
-                  <a href="#recomendados" onClick={() => setShowMobileNav(false)}>
-                    <span>Recomendados</span>
+                  <a href="#coleccion" onClick={() => { setCategory(OFFER_TAB_VALUE); setShowMobileNav(false); }}>
+                    <span>Ofertas</span>
                     <ChevronRight size={15} />
                   </a>
                   <a href="#contacto" onClick={() => setShowMobileNav(false)}>
@@ -9930,7 +7686,7 @@ export default function App() {
                   </a>
                 </div>
               </div>
-              <div className="mobile-quick-icons" role="group" aria-label="Accesos rapidos">
+              <div className="mobile-quick-icons" role="group" aria-label="Accesos rápidos">
                 <button type="button" className="icon-quick-btn" onClick={() => { setShowMobileNav(false); openCatalogSearch(); }} aria-label="Buscar">
                   <Search size={18} />
                 </button>
@@ -10045,10 +7801,10 @@ export default function App() {
             setActiveMobileSection("catalogo");
             scrollToSection("coleccion");
           }}
-          aria-label="Ir a catalogo"
+          aria-label="Ir al catálogo"
         >
           <LayoutGrid size={17} />
-          <span>Catalogo</span>
+          <span>Catálogo</span>
         </button>
         <button
           type="button"
@@ -10082,9 +7838,9 @@ export default function App() {
         <div className="container hero-grid hero-shell">
           <Motion.div initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: ANIMATION.medium }} className="hero-copy-panel">
             <span className="badge badge-dark hero-badge">{storeSettings.heroBadgeText}</span>
-            <h2 className="section-title hero-title" style={{ fontSize: "clamp(34px, 6vw, 64px)", marginTop: 18 }}>{activeHeroSlide?.title || "Nueva coleccion"}</h2>
+            <h2 className="section-title hero-title" style={{ fontSize: "clamp(34px, 6vw, 64px)", marginTop: 18 }}>{activeHeroSlide?.title || "Nueva colección"}</h2>
             <p className="muted hero-copy" style={{ fontSize: 18, lineHeight: 1.8, maxWidth: 620 }}>
-              {activeHeroSlide?.subtitle || "Descubre prendas con una presentacin visual elegante y lista para convertir."}
+              {activeHeroSlide?.subtitle || "Explora prendas versátiles y encuentra tu próximo look."}
             </p>
             <div className="hero-actions" style={{ marginTop: 20 }}>
               <a href="#coleccion" className="btn btn-primary">{storeSettings.primaryCtaText}</a>
@@ -10096,7 +7852,7 @@ export default function App() {
             <div className="trust-badges-row">
               <span className="trust-badge-pill">
                 <Truck size={14} />
-                Envio rapido
+                Envío rápido
               </span>
               <span className="trust-badge-pill">
                 <ShieldCheck size={14} />
@@ -10104,7 +7860,7 @@ export default function App() {
               </span>
               <span className="trust-badge-pill">
                 <RotateCcw size={14} />
-                Cambios faciles
+                Cambios fáciles
               </span>
             </div>
           </Motion.div>
@@ -10118,16 +7874,17 @@ export default function App() {
             <button
               type="button"
               className={`hero-slide-button ${heroSlideHasAction ? "is-clickable" : "is-static"}`}
+              {...heroSwipeHandlers}
               onClick={() => heroSlideHasAction && handleHeroSlideClick(activeHeroSlide)}
-              aria-label={heroSlideHasAction ? "Abrir destino del slide" : "Slide principal"}
-              disabled={!heroSlideHasAction}
+              aria-label={heroSlideHasAction ? "Abrir contenido de la portada" : "Imagen de portada"}
+              aria-disabled={!heroSlideHasAction}
             >
               <div className="hero-img-wrap">
                 <AnimatePresence mode="wait">
                   <Motion.img
                     key={activeHeroSlide?.image || heroIndex}
                     src={activeHeroSlide?.image || FALLBACK_IMAGE}
-                    alt={activeHeroSlide?.title || "Slide principal"}
+                    alt={activeHeroSlide?.title || "Imagen de portada"}
                     loading="eager"
                     decoding="async"
                     initial={{ opacity: 0, scale: 1.03 }}
@@ -10147,7 +7904,7 @@ export default function App() {
 
             <div className="hero-slide-meta">
               <div>
-                <p className="hero-caption-title" style={{ margin: 0, fontSize: 18, fontWeight: 600 }}>{activeHeroSlide?.title || "Nueva portada"}</p>
+                <p className="hero-caption-title" style={{ margin: 0, fontSize: 18, fontWeight: 600 }}>{activeHeroSlide?.title || "Nueva colección"}</p>
               </div>
               {heroSlideHasAction && (
                 <span className="hero-slide-link-hint">
@@ -10158,13 +7915,13 @@ export default function App() {
             </div>
 
             {heroSlides.length > 1 && (
-              <div className="hero-slide-indicators" aria-label="Indicadores del hero">
+              <div className="hero-slide-indicators" aria-label="Imágenes de portada">
                 {heroSlides.map((slide, index) => (
                   <button
                     key={slide.id || index}
                     type="button"
                     className={`hero-slide-dot ${index === heroIndex ? "active" : ""}`}
-                    aria-label={`Ir al slide ${index + 1}`}
+                    aria-label={`Ir a la imagen ${index + 1}`}
                     onClick={() => setHeroIndex(index)}
                   />
                 ))}
@@ -10174,38 +7931,19 @@ export default function App() {
         </div>
       </section>
 
-      <Motion.section
-        id="destacados"
-        className="container section-shell"
-        style={{ padding: "16px 0 40px" }}
-        initial={{ opacity: 0, y: 24 }}
-        whileInView={{ opacity: 1, y: 0 }}
-        viewport={{ once: true, amount: 0.2 }}
-        transition={{ duration: ANIMATION.medium }}
-      >
-        <p className="muted" style={{ textTransform: "uppercase", letterSpacing: ".25em", fontSize: 13 }}>Seleccion</p>
-        <h3 style={{ marginTop: 8, fontSize: 34 }}>Productos destacados</h3>
-        <div className="featured-grid" style={{ marginTop: 22 }}>
-          {!catalogReady
-            ? Array.from({ length: 4 }, (_, index) => <CatalogSkeletonCard key={`featured-skeleton-${index}`} />)
-            : featuredProducts.map((product) => (
-                <MemoShowcaseProductCard
-                  key={product.id}
-                  product={product}
-                  onOpenDetail={openProductDetail}
-                  onAddToCart={addToCart}
-                />
-              ))}
-        </div>
-      </Motion.section>
+      <ExternalFeaturedProductMarquee
+        products={featuredProducts}
+        catalogReady={catalogReady}
+        onOpenDetail={openProductDetail}
+      />
 
-      <main className="container catalog-main" style={{ paddingBottom: 48 }}>
+      <main id="main-content" className="container catalog-main" style={{ paddingBottom: 48 }} tabIndex={-1}>
         <div style={{ display: "grid", gap: 40 }}>
           <section id="coleccion" className="section-shell catalog-section">
             <div className="catalog-shell">
               <div className="catalog-head">
-                <p className="muted catalog-kicker">Catalogo</p>
-                <h3 className="catalog-title">Coleccion completa</h3>
+                <p className="muted catalog-kicker">Catálogo</p>
+                <h3 className="catalog-title">Colección completa</h3>
               </div>
 
               <div className="catalog-primary-row">
@@ -10263,7 +8001,7 @@ export default function App() {
                 </div>
                 <div className="filter-field filter-field-sort">
                   <Filter size={15} className="filter-icon" />
-                  <select className="select" aria-label="Ordenar catalogo" value={sortBy} onChange={(event) => setSortBy(event.target.value)}>
+                  <select className="select" aria-label="Ordenar catálogo" value={sortBy} onChange={(event) => setSortBy(event.target.value)}>
                     <option value="destacados">Destacados</option>
                     <option value="nuevos">Nuevos</option>
                     <option value="rating">Mejor valorados</option>
@@ -10276,11 +8014,11 @@ export default function App() {
               <div className="catalog-feedback-row">
                 <div className="catalog-feedback-stats">
                   <p className="helper-text catalog-feedback-text">
-                    {filteredProducts.length} resultado(s) de {products.length} productos.
+                    {filteredProducts.length} {filteredProducts.length === 1 ? "prenda encontrada" : "prendas encontradas"}.
                   </p>
                   {catalogReady && filteredProducts.length > 0 && (
                     <p className="helper-text catalog-feedback-text">
-                      Mostrando {catalogRangeStart}-{catalogRangeEnd} - Pagina {safeCatalogPage} de {totalCatalogPages}
+                      Página {safeCatalogPage} de {totalCatalogPages} · prendas {catalogRangeStart}-{catalogRangeEnd}
                     </p>
                   )}
                 </div>
@@ -10313,11 +8051,11 @@ export default function App() {
 
               <div className="products-grid catalog-products-grid">
                 {!catalogReady ? (
-                  Array.from({ length: 8 }, (_, index) => <CatalogSkeletonCard key={`catalog-skeleton-${index}`} />)
+                  Array.from({ length: 8 }, (_, index) => <ExternalCatalogSkeletonCard key={`catalog-skeleton-${index}`} />)
                 ) : filteredProducts.length === 0 ? (
                   <div className="empty-admin-note" style={{ gridColumn: "1 / -1" }}>No encontramos productos con los filtros actuales. Prueba quitando un filtro o buscando otra palabra.</div>
                 ) : paginatedProducts.map((product) => (
-                  <MemoCatalogProductCard
+                  <ExternalMemoCatalogProductCard
                     key={product.id}
                     product={product}
                     selection={selections[product.id]}
@@ -10334,7 +8072,7 @@ export default function App() {
               </div>
 
               {catalogReady && filteredProducts.length > 0 && (
-                <CatalogPagination
+                <ExternalCatalogPagination
                   currentPage={safeCatalogPage}
                   totalPages={totalCatalogPages}
                   pageWindow={catalogPageWindow}
@@ -10351,38 +8089,86 @@ export default function App() {
             viewport={{ once: true, amount: 0.2 }}
             transition={{ duration: ANIMATION.medium }}
           >
-            <div className="sale-panel" style={{ borderRadius: 30, background: "#111", color: "white", padding: 26 }}>
-              <p style={{ margin: 0, textTransform: "uppercase", letterSpacing: ".25em", fontSize: 13, color: "rgba(255,255,255,.65)" }}>Atencion personalizada</p>
-              <h3 style={{ marginTop: 10, fontSize: 34 }}>{storeSettings.saleTitle}</h3>
-              <p style={{ color: "rgba(255,255,255,.75)", maxWidth: 780, lineHeight: 1.8 }}>{storeSettings.saleDescription}</p>
+            <div className="purchase-process">
+              <div className="purchase-process-intro">
+                <h3>{storeSettings.saleTitle}</h3>
+                <p>{storeSettings.saleDescription}</p>
+              </div>
+              <ol className="purchase-process-steps" aria-label="Cómo comprar en Adriego Store">
+                <li className="purchase-process-step">
+                  <span className="purchase-process-icon" aria-hidden="true"><ShoppingBag size={19} /></span>
+                  <div className="purchase-process-step-copy">
+                    <span className="purchase-process-step-number" aria-hidden="true">01</span>
+                    <div>
+                      <h4>Elige tu prenda</h4>
+                      <p>Escoge talla, color y cantidad.</p>
+                    </div>
+                  </div>
+                </li>
+                <li className="purchase-process-step">
+                  <span className="purchase-process-icon" aria-hidden="true"><Package size={19} /></span>
+                  <div className="purchase-process-step-copy">
+                    <span className="purchase-process-step-number" aria-hidden="true">02</span>
+                    <div>
+                      <h4>Revisa tus datos</h4>
+                      <p>Confirma contacto y entrega.</p>
+                    </div>
+                  </div>
+                </li>
+                <li className="purchase-process-step">
+                  <span className="purchase-process-icon purchase-process-icon-final" aria-hidden="true"><Send size={18} /></span>
+                  <div className="purchase-process-step-copy">
+                    <span className="purchase-process-step-number" aria-hidden="true">03</span>
+                    <div>
+                      <h4>Envía por WhatsApp</h4>
+                      <p>Recibe confirmación personalizada.</p>
+                    </div>
+                  </div>
+                </li>
+              </ol>
             </div>
           </Motion.section>
 
-          <Motion.section
-            id="recomendados"
-            className="section-shell"
-            initial={{ opacity: 0, y: 24 }}
-            whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: true, amount: 0.2 }}
-            transition={{ duration: ANIMATION.medium }}
-          >
-            <p className="muted" style={{ textTransform: "uppercase", letterSpacing: ".25em", fontSize: 13 }}>Sugerencias</p>
-            <h3 style={{ marginTop: 8, fontSize: 34 }}>Recomendados para ti</h3>
-            <div className="recommend-grid" style={{ marginTop: 22 }}>
-              {!catalogReady
-                ? Array.from({ length: 3 }, (_, index) => <CatalogSkeletonCard key={`recommend-skeleton-${index}`} />)
-                : recommendedProducts.slice(0, 3).map((product) => (
-                    <MemoShowcaseProductCard
-                      key={product.id}
-                      product={product}
-                      onOpenDetail={openProductDetail}
-                      onAddToCart={addToCart}
-                    />
-                  ))}
-            </div>
-          </Motion.section>
         </div>
       </main>
+
+      {recentlyViewedProducts.length > 0 && (
+        <Motion.section
+          className="recently-viewed-section section-shell"
+          initial={{ opacity: 0, y: 18 }}
+          whileInView={{ opacity: 1, y: 0 }}
+          viewport={{ once: true, amount: 0.2 }}
+          transition={{ duration: ANIMATION.medium }}
+          aria-labelledby="recently-viewed-title"
+        >
+          <div className="container">
+            <div className="recently-viewed-rail">
+              <h3 id="recently-viewed-title">Visto recientemente</h3>
+              <div className="recently-viewed-images">
+                {recentlyViewedProducts.map((product) => (
+                  <button
+                    key={product.id}
+                    type="button"
+                    className="recently-viewed-item"
+                    onClick={() => openProductDetail(product, null, { source: "recently_viewed" })}
+                    aria-label={`Volver a ver ${product.name}`}
+                  >
+                    <img
+                      src={getCurrentImageForProduct(product, selections[product.id]?.color)}
+                      alt={product.name}
+                      loading="lazy"
+                      decoding="async"
+                      onError={(event) => {
+                        if (event.currentTarget.src !== FALLBACK_IMAGE) event.currentTarget.src = FALLBACK_IMAGE;
+                      }}
+                    />
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </Motion.section>
+      )}
 
       <Motion.footer
         id="contacto"
@@ -10394,38 +8180,37 @@ export default function App() {
       >
         <div className="container">
           <div className="footer-card">
-            <div className="footer-grid">
-              <div>
-                <p style={{ margin: 0, textTransform: "uppercase", letterSpacing: ".25em", fontSize: 13, color: "rgba(255,255,255,.65)" }}>Contacto</p>
-                <h3 style={{ marginTop: 10, fontSize: 34 }}>{storeSettings.footerTitle}</h3>
-                <p style={{ color: "rgba(255,255,255,.78)", maxWidth: 640, lineHeight: 1.8 }}>{storeSettings.footerText}</p>
-                <div className="social-row" style={{ marginTop: 18 }}>
-                  {footerWhatsAppLink && (
-                    <a className="social-link" href={footerWhatsAppLink} target="_blank" rel="noopener noreferrer">
+            <div className={`footer-grid${publicContactSettings.address || publicContactSettings.mapsLink ? "" : " footer-grid-single"}`}>
+              <div className="footer-copy">
+                <h3>{storeSettings.footerTitle}</h3>
+                <p>{storeSettings.footerText}</p>
+                <div className="social-row">
+                  {publicContactSettings.whatsappLink && (
+                    <a className="social-link" href={publicContactSettings.whatsappLink} target="_blank" rel="noopener noreferrer">
                       <span className="social-link-icon"><BrandSocialIcon icon="whatsapp" label="WhatsApp" /></span>
                       <span>WhatsApp</span>
                     </a>
                   )}
-                  {footerEmailLink && (
-                    <a className="social-link" href={footerEmailLink}>
+                  {publicContactSettings.emailLink && (
+                    <a className="social-link" href={publicContactSettings.emailLink}>
                       <span className="social-link-icon"><Mail size={15} /></span>
                       <span>Correo</span>
                     </a>
                   )}
-                  {contactSettings.instagram && (
-                    <a className="social-link" href={contactSettings.instagram} target="_blank" rel="noopener noreferrer">
+                  {publicContactSettings.instagram && (
+                    <a className="social-link" href={publicContactSettings.instagram} target="_blank" rel="noopener noreferrer">
                       <span className="social-link-icon"><BrandSocialIcon icon="instagram" label="Instagram" /></span>
                       <span>Instagram</span>
                     </a>
                   )}
-                  {contactSettings.facebook && (
-                    <a className="social-link" href={contactSettings.facebook} target="_blank" rel="noopener noreferrer">
+                  {publicContactSettings.facebook && (
+                    <a className="social-link" href={publicContactSettings.facebook} target="_blank" rel="noopener noreferrer">
                       <span className="social-link-icon"><BrandSocialIcon icon="facebook" label="Facebook" /></span>
                       <span>Facebook</span>
                     </a>
                   )}
-                  {contactSettings.tiktok && (
-                    <a className="social-link" href={contactSettings.tiktok} target="_blank" rel="noopener noreferrer">
+                  {publicContactSettings.tiktok && (
+                    <a className="social-link" href={publicContactSettings.tiktok} target="_blank" rel="noopener noreferrer">
                       <span className="social-link-icon"><BrandSocialIcon icon="tiktok" label="TikTok" /></span>
                       <span>TikTok</span>
                     </a>
@@ -10433,28 +8218,26 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="surface contact-local-card" style={{ background: "rgba(255,255,255,.08)", borderColor: "rgba(255,255,255,.12)" }}>
-                <p className="contact-local-title"><Store size={16} />Informacion del local</p>
-                <div className="contact-location-row">
-                  <span className="social-link-icon contact-location-icon"><Navigation size={14} /></span>
-                  <p style={{ margin: 0, lineHeight: 1.8 }}>{contactSettings.address}</p>
-                </div>
-                {footerLocationNote && <p className="contact-location-note">{footerLocationNote}</p>}
-                {contactSettings.mapsLink && (
-                  <div className="contact-location-cta-wrap">
-                    <a className="social-link contact-location-cta" href={contactSettings.mapsLink} target="_blank" rel="noopener noreferrer">
-                      <span className="social-link-icon"><MapPin size={15} /></span>
-                      <span>Como llegar</span>
-                    </a>
+              {(publicContactSettings.address || publicContactSettings.mapsLink) && (
+                <div className="contact-location-panel">
+                  <span className="contact-location-icon" aria-hidden="true"><MapPin size={20} /></span>
+                  <div className="contact-location-copy">
+                    <strong>{publicContactSettings.address ? "Visítanos" : "Encuéntranos"}</strong>
+                    <p>{publicContactSettings.address || "Consulta nuestra ubicación en Google Maps."}</p>
                   </div>
-                )}
-
-                <div className="divider" style={{ background: "rgba(255,255,255,.12)", marginTop: 18 }} />
-                <p className="helper-text" style={{ color: "rgba(255,255,255,.64)" }}>
-                  Escribenos y te asesoramos en talla, colores y disponibilidad en tiempo real.
-                </p>
-              </div>
+                  {publicContactSettings.mapsLink && (
+                    <a className="contact-location-link" href={publicContactSettings.mapsLink} target="_blank" rel="noopener noreferrer">
+                      Abrir mapa
+                      <ChevronRight size={17} />
+                    </a>
+                  )}
+                </div>
+              )}
             </div>
+            <p className="footer-brand-signature" aria-label="Adriego Store">
+              <span>ADRIEGO</span>
+              <small>STORE</small>
+            </p>
           </div>
         </div>
       </Motion.footer>

@@ -4,6 +4,8 @@ export const STORAGE_KEYS = {
   store: "atelier-store-v2",
   cart: "atelier-cart-v1",
   favorites: "atelier-favorites-v1",
+  recentlyViewedProducts: "atelier-recently-viewed-products-v1",
   productTypes: "atelier-product-types-v2",
   filterTags: "atelier-filter-tags-v2",
+  adminProductDraft: "atelier-admin-product-draft-v1",
 };

@@ -14,6 +14,7 @@ import {
   parseCookies,
   requireJsonBody,
   requireCsrf,
+  resolveVersionedUserSession,
   setCommonSecurityHeaders,
   verifySignedToken,
 } from "./_lib/security.js";
@@ -143,7 +144,7 @@ export default async function handler(req, res) {
   }
 
   const ip = getClientIp(req);
-  const ipLimit = consumeRateLimit("coupon-preview-ip", ip, 30, 10 * 60 * 1000, {
+  const ipLimit = await consumeRateLimit("coupon-preview-ip", ip, 30, 10 * 60 * 1000, {
     endpoint: ENDPOINT_NAME,
     ip,
   });
@@ -169,10 +170,11 @@ export default async function handler(req, res) {
   }
 
   const session = verifyUserSession(req);
-  const currentUser = session?.sub
+  const sessionUser = resolveVersionedUserSession(store.users, session);
+  const currentUser = sessionUser
     ? {
-        id: String(session.sub),
-        email: normalizeEmail(session.email || ""),
+        id: String(sessionUser.id),
+        email: normalizeEmail(sessionUser.email || ""),
       }
     : null;
 

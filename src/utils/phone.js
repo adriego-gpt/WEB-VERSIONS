@@ -1,7 +1,8 @@
 /**
  * Phone number normalization utilities.
  */
-import { AUTH_FIELD_LIMITS, DEFAULT_WHATSAPP_COUNTRY_CODE } from "../constants";
+import { AUTH_FIELD_LIMITS } from "../constants/auth.js";
+import { DEFAULT_WHATSAPP_COUNTRY_CODE } from "../constants/ui.js";
 
 export function normalizePhoneNumber(value = "") {
   return String(value).replace(/\D/g, "").slice(0, 20);

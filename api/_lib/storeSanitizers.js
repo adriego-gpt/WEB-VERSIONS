@@ -1,5 +1,7 @@
 ﻿import crypto from "node:crypto";
 import { normalizeCouponList } from "../../src/services/couponService.js";
+import { normalizeCardFeePercent } from "../../src/domain/orders/payment.js";
+import { normalizeBankAccounts } from "../../src/domain/contact/paymentSettings.js";
 import {
   isValidEmail,
   normalizeImageSource,
@@ -225,6 +227,20 @@ function sanitizeManagedEntities(rawRecords = [], prefix = "item") {
 
 function sanitizeContactSettings(rawSettings = {}) {
   const normalizedEmail = normalizeLine(rawSettings?.email || "").slice(0, 120).toLowerCase();
+  const rawPaymentSettings = rawSettings?.paymentSettings && typeof rawSettings.paymentSettings === "object"
+    ? rawSettings.paymentSettings
+    : {};
+  const bankAccounts = normalizeBankAccounts(rawPaymentSettings).map((account) => ({
+    id: normalizeLine(account.id || crypto.randomUUID()).slice(0, 80),
+    bankName: normalizeLine(account.bankName || "").slice(0, 80),
+    accountType: normalizeLine(account.accountType || "Ahorros").slice(0, 40) || "Ahorros",
+    accountNumber: normalizeLine(account.accountNumber || "").slice(0, 80),
+    accountHolder: normalizeLine(account.accountHolder || "").slice(0, 120),
+    accountId: normalizeLine(account.accountId || "").slice(0, 40),
+    bankLogoImage: normalizeImageSource(account.bankLogoImage || ""),
+    bankQrImage: normalizeImageSource(account.bankQrImage || ""),
+  }));
+  const primaryBankAccount = bankAccounts[0] || {};
   return {
     address: sanitizeParagraph(rawSettings?.address || "").slice(0, 280),
     locationNote: sanitizeParagraph(rawSettings?.locationNote || "").slice(0, 320),
@@ -236,6 +252,17 @@ function sanitizeContactSettings(rawSettings = {}) {
     instagram: normalizeSafeUrl(rawSettings?.instagram || ""),
     facebook: normalizeSafeUrl(rawSettings?.facebook || ""),
     tiktok: normalizeSafeUrl(rawSettings?.tiktok || ""),
+    paymentSettings: {
+      bankAccounts,
+      bankName: primaryBankAccount.bankName || "",
+      accountType: primaryBankAccount.accountType || "Ahorros",
+      accountNumber: primaryBankAccount.accountNumber || "",
+      accountHolder: primaryBankAccount.accountHolder || "",
+      accountId: primaryBankAccount.accountId || "",
+      bankLogoImage: primaryBankAccount.bankLogoImage || "",
+      bankQrImage: primaryBankAccount.bankQrImage || "",
+      cardFeePercent: normalizeCardFeePercent(rawPaymentSettings.cardFeePercent),
+    },
   };
 }
 

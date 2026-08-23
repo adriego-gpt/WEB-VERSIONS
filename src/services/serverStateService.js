@@ -1,5 +1,6 @@
-import { requestJson } from "./httpClient";
-import { cachedRequest, invalidateCachedRequest } from "./smartCache";
+import { requestJson } from "./httpClient.js";
+import { cachedRequest, invalidateCachedRequest } from "./smartCache.js";
+import { createUuid } from "../utils/uid.js";
 
 const SERVER_CACHE_KEYS = {
   catalog: "server:catalog-state",
@@ -7,6 +8,16 @@ const SERVER_CACHE_KEYS = {
   security: "server:security-metrics",
   realtime: "server:realtime-sync",
 };
+
+let latestCatalogVersion = 0;
+
+function rememberCatalogVersion(response) {
+  const version = Number(response?.data?.catalogVersion);
+  if (Number.isInteger(version) && version >= 0) {
+    latestCatalogVersion = version;
+  }
+  return response;
+}
 
 function postJson(endpoint, payload) {
   return requestJson(endpoint, {
@@ -32,12 +43,17 @@ function getCatalogState(options = {}) {
       maxAgeMs,
       persist: true,
     },
-  );
+  ).then(rememberCatalogVersion);
 }
 
-function syncCatalogState(data) {
-  return postJson("/api/catalog-state?action=sync", { data }).then((response) => {
+function syncCatalogState(data, options = {}) {
+  const requestedVersion = Number(options.baseCatalogVersion);
+  const baseCatalogVersion = Number.isInteger(requestedVersion) && requestedVersion >= 0
+    ? requestedVersion
+    : latestCatalogVersion;
+  return postJson("/api/catalog-state?action=sync", { data, baseCatalogVersion }).then((response) => {
     if (response?.ok) {
+      rememberCatalogVersion(response);
       invalidateCachedRequest([
         SERVER_CACHE_KEYS.catalog,
         SERVER_CACHE_KEYS.orders,
@@ -49,8 +65,28 @@ function syncCatalogState(data) {
   });
 }
 
+function syncContactState(contactSettings, storeSettings) {
+  return postJson("/api/catalog-state?action=sync-contact", {
+    contactSettings,
+    storeSettings,
+  }).then((response) => {
+    if (response?.ok) {
+      rememberCatalogVersion(response);
+      invalidateCachedRequest([
+        SERVER_CACHE_KEYS.catalog,
+        SERVER_CACHE_KEYS.realtime,
+      ]);
+    }
+    return response;
+  });
+}
+
 function createServerCheckoutOrder(payload) {
-  return postJson("/api/checkout-order", payload).then((response) => {
+  const requestPayload = {
+    ...payload,
+    idempotencyKey: payload?.idempotencyKey || createUuid(),
+  };
+  return postJson("/api/checkout-order", requestPayload).then((response) => {
     if (response?.ok) {
       invalidateCachedRequest([
         SERVER_CACHE_KEYS.catalog,
@@ -165,6 +201,7 @@ function getRealtimeSyncStatus(options = {}) {
 export {
   getCatalogState,
   syncCatalogState,
+  syncContactState,
   createServerCheckoutOrder,
   previewCouponApplication,
   listServerOrders,

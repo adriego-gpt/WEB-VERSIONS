@@ -4,10 +4,12 @@ import crypto from "node:crypto";
 import { Buffer } from "node:buffer";
 import fs from "node:fs";
 import path from "node:path";
+import { isKvConfigured, runKvCommand } from "./store.js";
 
 const CSRF_COOKIE_NAME = "atelier_csrf_token";
 const RATE_LIMIT_STORE_KEY = "__ATELIER_RATE_LIMIT_STORE__";
 const SECURITY_METRICS_STORE_KEY = "__ATELIER_SECURITY_METRICS_STORE__";
+const SECURITY_METRICS_INDEX_KEY = "atelier:security-metrics:endpoints";
 const PASSWORD_HASH_KEY_LENGTH = 64;
 const MAX_JSON_BODY_BYTES = Math.max(64 * 1024, Number(process.env.MAX_JSON_BODY_BYTES) || (4 * 1024 * 1024));
 const MAX_INLINE_IMAGE_BYTES = Math.max(48 * 1024, Number(process.env.MAX_INLINE_IMAGE_BYTES) || (380 * 1024));
@@ -270,6 +272,44 @@ function logSecurityEvent(endpoint = "", event = "", details = {}) {
   console.warn(`[security-monitor] ${JSON.stringify(payload)}`);
 }
 
+function getSecurityMetricRedisKey(endpoint = "") {
+  const endpointHash = crypto.createHash("sha256").update(String(endpoint || "")).digest("hex").slice(0, 24);
+  return `atelier:security-metrics:${endpointHash}`;
+}
+
+async function persistApiMetricEvent(endpoint = "", event = "request", payload = {}) {
+  if (!isKvConfigured()) return;
+  const normalizedEndpoint = normalizeLine(endpoint);
+  if (!normalizedEndpoint) return;
+  const metricKey = getSecurityMetricRedisKey(normalizedEndpoint);
+  const increments = [];
+
+  if (event === "request") {
+    const method = normalizeLine(payload.method || "").toUpperCase() || "UNKNOWN";
+    increments.push(["requests", 1], [`method:${method}`, 1]);
+  } else if (event === "response") {
+    const status = Math.max(100, Math.min(599, Number(payload.status) || 200));
+    increments.push(["responses", 1], [`status:${status}`, 1]);
+    if (status >= 400) increments.push(["errors", 1]);
+    if (Number.isFinite(Number(payload.durationMs))) {
+      increments.push(["totalDurationMs", Math.max(0, Math.round(Number(payload.durationMs)))]);
+    }
+  } else {
+    const field = {
+      "csrf-rejected": "csrfRejected",
+      "invalid-json": "invalidJson",
+      "invalid-content-type": "invalidContentType",
+      "payload-too-large": "payloadTooLarge",
+      "rate-limited": "rateLimited",
+    }[event];
+    if (field) increments.push([field, 1]);
+  }
+
+  await runKvCommand("SADD", SECURITY_METRICS_INDEX_KEY, metricKey);
+  await runKvCommand("HSET", metricKey, "endpoint", normalizedEndpoint, "lastEventAt", new Date().toISOString());
+  await Promise.all(increments.map(([field, amount]) => runKvCommand("HINCRBY", metricKey, field, String(amount))));
+}
+
 function recordApiMetric(endpoint = "", event = "request", payload = {}) {
   const metrics = getEndpointMetrics(endpoint);
   if (!metrics) return;
@@ -313,6 +353,14 @@ function recordApiMetric(endpoint = "", event = "request", payload = {}) {
     default:
       break;
   }
+
+  if (isKvConfigured()) {
+    void persistApiMetricEvent(endpoint, event, payload).catch((error) => {
+      logSecurityEvent(endpoint, "metrics-persistence-failed", {
+        message: normalizeLine(error?.message || "unknown-error").slice(0, 160),
+      });
+    });
+  }
 }
 
 function monitorApiRequest(req, res, endpoint = "") {
@@ -344,7 +392,43 @@ function monitorApiRequest(req, res, endpoint = "") {
   return finalize;
 }
 
-function getSecurityMetricsSnapshot() {
+function parseRedisHash(rawValue) {
+  if (rawValue && typeof rawValue === "object" && !Array.isArray(rawValue)) return rawValue;
+  if (!Array.isArray(rawValue)) return {};
+  const parsed = {};
+  for (let index = 0; index < rawValue.length; index += 2) {
+    parsed[String(rawValue[index] || "")] = rawValue[index + 1];
+  }
+  return parsed;
+}
+
+function buildEndpointMetricsFromRedis(rawValue) {
+  const raw = parseRedisHash(rawValue);
+  const metrics = createEmptyEndpointMetrics();
+  Object.keys(metrics).forEach((field) => {
+    if (["methods", "statusCodes", "lastEventAt"].includes(field)) return;
+    metrics[field] = Math.max(0, Number(raw[field]) || 0);
+  });
+  metrics.lastEventAt = normalizeLine(raw.lastEventAt || "");
+  Object.entries(raw).forEach(([field, value]) => {
+    if (field.startsWith("method:")) metrics.methods[field.slice(7)] = Math.max(0, Number(value) || 0);
+    if (field.startsWith("status:")) metrics.statusCodes[field.slice(7)] = Math.max(0, Number(value) || 0);
+  });
+  return { endpoint: normalizeLine(raw.endpoint || ""), metrics };
+}
+
+async function getSecurityMetricsSnapshot() {
+  if (isKvConfigured()) {
+    const metricKeys = await runKvCommand("SMEMBERS", SECURITY_METRICS_INDEX_KEY);
+    const keys = Array.isArray(metricKeys) ? metricKeys : [];
+    const records = await Promise.all(keys.map((key) => runKvCommand("HGETALL", key)));
+    const endpoints = {};
+    records.map(buildEndpointMetricsFromRedis).forEach((record) => {
+      if (record.endpoint) endpoints[record.endpoint] = record.metrics;
+    });
+    return { generatedAt: new Date().toISOString(), endpoints };
+  }
+
   const store = getSecurityMetricsStore();
   const endpoints = {};
   store.forEach((metrics, endpoint) => {
@@ -356,9 +440,14 @@ function getSecurityMetricsSnapshot() {
   };
 }
 
-function resetSecurityMetrics() {
+async function resetSecurityMetrics() {
   const store = getSecurityMetricsStore();
   store.clear();
+  if (!isKvConfigured()) return;
+  const metricKeys = await runKvCommand("SMEMBERS", SECURITY_METRICS_INDEX_KEY);
+  const keys = Array.isArray(metricKeys) ? metricKeys : [];
+  await Promise.all(keys.map((key) => runKvCommand("DEL", key)));
+  await runKvCommand("DEL", SECURITY_METRICS_INDEX_KEY);
 }
 
 function setCommonSecurityHeaders(res) {
@@ -584,6 +673,22 @@ function verifySignedToken(token, secret) {
   return parsed;
 }
 
+function normalizeSessionVersion(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric < 1) return 1;
+  return Math.floor(numeric);
+}
+
+function resolveVersionedUserSession(users = [], session = null) {
+  if (!session?.sub) return null;
+  const user = (Array.isArray(users) ? users : []).find((entry) => String(entry?.id || "") === String(session.sub));
+  if (!user) return null;
+  if (normalizeSessionVersion(session.sessionVersion) !== normalizeSessionVersion(user.sessionVersion)) {
+    return null;
+  }
+  return user;
+}
+
 function buildSessionCookie(name, token, maxAgeSec) {
   return buildCookie(name, token, {
     maxAgeSec,
@@ -699,7 +804,7 @@ function getRateLimitStore() {
   return globalThis[RATE_LIMIT_STORE_KEY];
 }
 
-function consumeRateLimit(namespace, key, limit, windowMs, context = {}) {
+function consumeMemoryRateLimit(namespace, key, limit, windowMs, context = {}) {
   const store = getRateLimitStore();
   const now = Date.now();
   const bucketKey = `${namespace}:${key}`;
@@ -727,6 +832,42 @@ function consumeRateLimit(namespace, key, limit, windowMs, context = {}) {
     ok: true,
     retryAfterMs: 0,
   };
+}
+
+async function consumeRateLimit(namespace, key, limit, windowMs, context = {}) {
+  if (!isKvConfigured()) {
+    return consumeMemoryRateLimit(namespace, key, limit, windowMs, context);
+  }
+
+  const safeNamespace = normalizeLine(namespace).toLowerCase().replace(/[^a-z0-9:_-]/g, "-").slice(0, 80);
+  const keyHash = crypto.createHash("sha256").update(String(key || "unknown")).digest("hex").slice(0, 32);
+  const bucketKey = `atelier:rate-limit:${safeNamespace || "default"}:${keyHash}`;
+
+  try {
+    const count = Math.max(0, Number(await runKvCommand("INCR", bucketKey)) || 0);
+    if (count === 1) {
+      await runKvCommand("PEXPIRE", bucketKey, String(Math.max(1000, Math.floor(windowMs))));
+    }
+    const ttl = Number(await runKvCommand("PTTL", bucketKey));
+    const retryAfterMs = Number.isFinite(ttl) && ttl > 0 ? ttl : Math.max(1000, windowMs);
+    if (count <= limit) {
+      return { ok: true, retryAfterMs: 0 };
+    }
+
+    const endpoint = normalizeLine(context?.endpoint || "");
+    recordApiMetric(endpoint, "rate-limited");
+    logSecurityEvent(endpoint, "rate-limited", {
+      namespace: safeNamespace,
+      retryAfterMs,
+      ip: normalizeLine(context?.ip || ""),
+    });
+    return { ok: false, retryAfterMs };
+  } catch (error) {
+    if (String(process.env.NODE_ENV || "").toLowerCase() === "production") {
+      throw error;
+    }
+    return consumeMemoryRateLimit(namespace, key, limit, windowMs, context);
+  }
 }
 
 function hashLegacyPassword(secret = "", salt = "") {
@@ -787,6 +928,7 @@ export {
   recordApiMetric,
   resetSecurityMetrics,
   requireJsonBody,
+  resolveVersionedUserSession,
   requireCsrf,
   sanitizeParagraph,
   setCommonSecurityHeaders,

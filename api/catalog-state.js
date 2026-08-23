@@ -1,7 +1,11 @@
 ﻿/* global process */
 
 import { bumpRealtimeMeta, getStoreBackend, readStore, updateStore } from "./_lib/store.js";
-import { sanitizeAdminCatalogPayload } from "./_lib/storeSanitizers.js";
+import {
+  sanitizeAdminCatalogPayload,
+  sanitizeContactSettings,
+  sanitizeStoreSettings,
+} from "./_lib/storeSanitizers.js";
 import {
   ensureCsrfCookie,
   getAllowedOrigins,
@@ -31,6 +35,10 @@ function buildSanitizedCatalogPayload(store = {}) {
     productTypeRecords: sanitizeArray(store.productTypes),
     filterTagRecords: sanitizeArray(store.filterTags),
   });
+}
+
+function getCatalogVersion(store = {}) {
+  return Math.max(0, Math.floor(Number(store?.meta?.realtime?.catalogVersion) || 0));
 }
 
 function resolveAdminSession(req) {
@@ -72,6 +80,7 @@ export default async function handler(req, res) {
       storeSettings: sanitizedCatalog.storeSettings || null,
       productTypeRecords: sanitizedCatalog.productTypeRecords,
       filterTagRecords: sanitizedCatalog.filterTagRecords,
+      catalogVersion: getCatalogVersion(store),
       storageBackend: getStoreBackend(),
     };
 
@@ -84,7 +93,7 @@ export default async function handler(req, res) {
     return;
   }
 
-  if (action !== "sync") {
+  if (action !== "sync" && action !== "sync-contact") {
     res.status(400).json({ ok: false, message: "Accion no valida" });
     return;
   }
@@ -103,9 +112,57 @@ export default async function handler(req, res) {
 
   const body = requireJsonBody(req, res, { endpoint: ENDPOINT_NAME });
   if (!body) return;
+
+  if (action === "sync-contact") {
+    const nextContactSettings = sanitizeContactSettings(body?.contactSettings || {});
+    const rawStoreSettings = body?.storeSettings && typeof body.storeSettings === "object"
+      ? body.storeSettings
+      : null;
+    const nextStore = await updateStore((draft) => {
+      draft.contactSettings = nextContactSettings;
+      if (rawStoreSettings) {
+        draft.storeSettings = sanitizeStoreSettings({
+          ...(draft.storeSettings || {}),
+          ...rawStoreSettings,
+        });
+      }
+      bumpRealtimeMeta(draft, ["catalog"]);
+      return draft;
+    });
+    const sanitizedCatalog = buildSanitizedCatalogPayload(nextStore);
+    res.status(200).json({
+      ok: true,
+      data: {
+        contactSettings: sanitizedCatalog.contactSettings || null,
+        storeSettings: sanitizedCatalog.storeSettings || null,
+        catalogVersion: getCatalogVersion(nextStore),
+        storageBackend: getStoreBackend(),
+      },
+    });
+    return;
+  }
+
+  const requestedBaseVersion = Number(body?.baseCatalogVersion);
+  if (!Number.isInteger(requestedBaseVersion) || requestedBaseVersion < 0) {
+    res.status(400).json({
+      ok: false,
+      code: "INVALID_CATALOG_VERSION",
+      message: "baseCatalogVersion es requerido para guardar el catalogo.",
+    });
+    return;
+  }
   const sanitized = sanitizeAdminCatalogPayload(body?.data && typeof body.data === "object" ? body.data : {});
 
+  let conflictState = null;
   const nextStore = await updateStore((draft) => {
+    const currentVersion = getCatalogVersion(draft);
+    if (requestedBaseVersion !== currentVersion) {
+      conflictState = {
+        currentVersion,
+        currentState: buildSanitizedCatalogPayload(draft),
+      };
+      return draft;
+    }
     draft.products = sanitized.products;
     draft.coupons = sanitized.coupons;
     draft.contactSettings = sanitized.contactSettings;
@@ -115,6 +172,20 @@ export default async function handler(req, res) {
     bumpRealtimeMeta(draft, ["catalog"]);
     return draft;
   });
+
+  if (conflictState) {
+    res.status(409).json({
+      ok: false,
+      code: "CATALOG_VERSION_CONFLICT",
+      message: "El catalogo cambio en otra sesion. Recarga antes de guardar.",
+      currentVersion: conflictState.currentVersion,
+      currentState: {
+        ...conflictState.currentState,
+        catalogVersion: conflictState.currentVersion,
+      },
+    });
+    return;
+  }
   const sanitizedCatalog = buildSanitizedCatalogPayload(nextStore);
 
   res.status(200).json({
@@ -127,6 +198,7 @@ export default async function handler(req, res) {
       storeSettings: sanitizedCatalog.storeSettings || null,
       productTypeRecords: sanitizedCatalog.productTypeRecords,
       filterTagRecords: sanitizedCatalog.filterTagRecords,
+      catalogVersion: getCatalogVersion(nextStore),
       storageBackend: getStoreBackend(),
     },
   });

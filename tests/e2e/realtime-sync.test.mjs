@@ -346,6 +346,7 @@ test("realtime sync keeps user/admin state consistent across devices", async () 
     cookieJar: adminCookies,
     csrfToken: csrfAdmin,
     json: {
+      baseCatalogVersion: catalogVersionBefore,
       data: {
         products: [
           {
@@ -398,6 +399,7 @@ test("realtime sync keeps user/admin state consistent across devices", async () 
     cookieJar: deviceA,
     csrfToken: csrfA,
     json: {
+      idempotencyKey: crypto.randomUUID(),
       couponCode: "",
       cart: [
         { id: "prod-rt-1", color: "Negro", size: "M", quantity: 1 },
@@ -414,6 +416,7 @@ test("realtime sync keeps user/admin state consistent across devices", async () 
     cookieJar: deviceB,
     csrfToken: csrfB,
     json: {
+      idempotencyKey: crypto.randomUUID(),
       couponCode: "",
       cart: [
         { id: "prod-rt-1", color: "Negro", size: "L", quantity: 1 },
@@ -534,6 +537,7 @@ test("realtime sync keeps user/admin state consistent across devices", async () 
     cookieJar: adminCookies,
     csrfToken: csrfAdmin,
     json: {
+      baseCatalogVersion: Number(catalogAfterReactivation.jsonBody?.data?.catalogVersion || 0),
       data: {
         products: [
           {

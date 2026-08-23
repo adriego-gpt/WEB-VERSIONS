@@ -10,6 +10,7 @@ import {
   monitorApiRequest,
   normalizeLine,
   parseCookies,
+  resolveVersionedUserSession,
   setCommonSecurityHeaders,
   verifySignedToken,
 } from "./_lib/security.js";
@@ -63,7 +64,7 @@ export default async function handler(req, res) {
   }
 
   const clientIp = getClientIp(req);
-  const rateLimit = consumeRateLimit("realtime-sync-ip", clientIp, 240, 10 * 60 * 1000, {
+  const rateLimit = await consumeRateLimit("realtime-sync-ip", clientIp, 240, 10 * 60 * 1000, {
     endpoint: ENDPOINT_NAME,
     ip: clientIp,
   });
@@ -79,9 +80,7 @@ export default async function handler(req, res) {
     : {};
   const userSession = resolveUserSession(req);
   const adminSession = resolveAdminSession(req);
-  const userRecord = userSession?.sub
-    ? (Array.isArray(store?.users) ? store.users : []).find((entry) => String(entry.id) === String(userSession.sub))
-    : null;
+  const userRecord = resolveVersionedUserSession(store?.users, userSession);
 
   res.status(200).json({
     ok: true,

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+   <!-- Página principal -->
+   <url>
+      <loc>https://www.adriegostore.com/</loc>
+      <lastmod>2026-08-19</lastmod>
+      <changefreq>daily</changefreq>
+      <priority>1.0</priority>
+   </url>
+   <!-- 
+     Las páginas de /producto/:slug y /cuenta/restablecer 
+     serán agregadas a este sitemap cuando se implemente 
+     el renderizado del servidor o la generación estática correspondiente.
+   -->
+</urlset>

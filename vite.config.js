@@ -4,10 +4,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { Buffer } from "node:buffer";
-import { defineConfig } from "vite";
+import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
 
-const MAX_DEV_API_BODY_BYTES = Math.max(8 * 1024, Number(process.env.MAX_DEV_API_BODY_BYTES) || (256 * 1024));
+const MAX_DEV_API_BODY_BYTES = Math.max(64 * 1024, Number(process.env.MAX_DEV_API_BODY_BYTES) || (4 * 1024 * 1024));
 
 function decorateResponse(res) {
   if (typeof res.status !== "function") {
@@ -118,24 +118,33 @@ function localApiPlugin() {
   };
 }
 
-export default defineConfig({
-  plugins: [react(), localApiPlugin()],
-  build: {
-    rollupOptions: {
-      output: {
-        manualChunks(id) {
-          if (id.includes("node_modules/react") || id.includes("node_modules/react-dom")) {
-            return "react-vendor";
+export default defineConfig(({ mode }) => {
+  const localEnv = loadEnv(mode, process.cwd(), "");
+  Object.entries(localEnv).forEach(([key, value]) => {
+    if (process.env[key] === undefined) {
+      process.env[key] = value;
+    }
+  });
+
+  return {
+    plugins: [react(), localApiPlugin()],
+    build: {
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            if (id.includes("node_modules/react") || id.includes("node_modules/react-dom")) {
+              return "react-vendor";
+            }
+            if (id.includes("framer-motion")) {
+              return "motion";
+            }
+            if (id.includes("lucide-react")) {
+              return "icons";
+            }
+            return undefined;
           }
-          if (id.includes("framer-motion")) {
-            return "motion";
-          }
-          if (id.includes("lucide-react")) {
-            return "icons";
-          }
-          return undefined;
         },
       },
     },
-  },
+  };
 });

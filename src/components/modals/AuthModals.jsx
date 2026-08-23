@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useMemo, useRef } from "react";
+import React, { useEffect, useMemo, useRef } from "react";
 import { X, Eye, EyeOff, KeyRound, UserRound, MapPin } from "lucide-react";
 import { motion as Motion, AnimatePresence } from "framer-motion";
 
@@ -27,10 +27,10 @@ export function UserAuthModal({
   const passwordChecks = validation?.passwordChecks || { minLength: false, hasLetter: false, hasNumber: false };
   const passwordStrengthPercent = Number(validation?.passwordStrengthPercent) || 0;
   const passwordStrengthLabel = useMemo(() => {
-    if (passwordStrengthPercent >= 100) return "Contrasena fuerte";
-    if (passwordStrengthPercent >= 67) return "Contrasena segura";
-    if (passwordStrengthPercent >= 34) return "Contrasena en progreso";
-    return "Empieza a crear una contrasena segura";
+    if (passwordStrengthPercent >= 100) return "Contraseña fuerte";
+    if (passwordStrengthPercent >= 67) return "Contraseña segura";
+    if (passwordStrengthPercent >= 34) return "Contraseña en progreso";
+    return "Empieza a crear una contraseña segura";
   }, [passwordStrengthPercent]);
 
   const showNameError = Boolean(isRegister && fieldErrors.name && String(form.name || "").trim());
@@ -44,8 +44,8 @@ export function UserAuthModal({
     : isForgot
       ? "Recuperar acceso"
       : isReset
-        ? "Nueva contrasena"
-        : "Iniciar sesion";
+        ? "Nueva contraseña"
+        : "Iniciar sesión";
   const authModalSubtitle = isRegister
     ? "Abre tu cuenta en menos de un minuto."
     : isForgot
@@ -55,7 +55,7 @@ export function UserAuthModal({
         : "Accede a tu perfil para comprar y gestionar tus pedidos.";
 
   const authPanelTitle = isRegister
-    ? "Crea tu cuenta y compra mas rapido"
+    ? "Crea tu cuenta y compra más rápido"
     : isForgot
       ? "Recupera el acceso en minutos"
       : isReset
@@ -68,16 +68,34 @@ export function UserAuthModal({
       ? "Te enviaremos un enlace seguro al correo registrado para restablecer tu acceso."
       : isReset
         ? "Define una clave fuerte para entrar con total seguridad."
-        : "Inicia sesion y retomamos tu compra exactamente donde la dejaste.";
+        : "Inicia sesión y retomamos tu compra exactamente donde la dejaste.";
 
   useEffect(() => {
     if (!open) return undefined;
     const timeoutId = window.setTimeout(() => {
-      firstInputRef.current?.focus();
+      firstInputRef.current?.focus({ preventScroll: true });
       firstInputRef.current?.select?.();
     }, 40);
-    return () => window.clearTimeout(timeoutId);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
   }, [open, mode]);
+
+  useEffect(() => {
+    if (!open) return undefined;
+
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape" && !busy) {
+        onClose?.();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [open, busy, onClose]);
 
   const submitDisabled = busy || !canSubmit;
   const showPasswordFields = isLogin || isRegister || isReset;
@@ -103,7 +121,7 @@ export function UserAuthModal({
             className="login-card"
             role="dialog"
             aria-modal="true"
-            aria-label={isRegister ? "Crear cuenta" : isForgot ? "Recuperar cuenta" : isReset ? "Restablecer contrasena" : "Iniciar sesion"}
+            aria-label={isRegister ? "Crear cuenta" : isForgot ? "Recuperar cuenta" : isReset ? "Restablecer contraseña" : "Iniciar sesión"}
             onClick={(event) => event.stopPropagation()}
             onSubmit={onSubmit}
           >
@@ -115,7 +133,7 @@ export function UserAuthModal({
                 <h3 className="auth-title" style={{ margin: "4px 0 0" }}>{authModalTitle}</h3>
                 <p className="muted auth-subtitle">{authModalSubtitle}</p>
               </div>
-              <button type="button" onClick={onClose} className="icon-btn auth-close-btn" disabled={busy}><X size={18} /></button>
+              <button type="button" onClick={onClose} className="icon-btn auth-close-btn" aria-label="Cerrar acceso a la cuenta" disabled={busy}><X size={18} /></button>
             </div>
 
             <div className="auth-mode-switch" role="tablist" aria-label="Tipo de acceso">
@@ -183,7 +201,7 @@ export function UserAuthModal({
                 <div className="auth-field">
                   <input
                     className={`input${showPhoneError ? " input-invalid" : ""}`}
-                    placeholder="Telefono 10 digitos (opcional)"
+                    placeholder="Teléfono: 10 dígitos (opcional)"
                     value={form.phone}
                     inputMode="tel"
                     autoComplete="tel-national"
@@ -201,7 +219,7 @@ export function UserAuthModal({
                 <div className="auth-field">
                   <input
                     className={`input${showResetTokenError ? " input-invalid" : ""}`}
-                    placeholder="Token de recuperacion"
+                    placeholder="Código de recuperación"
                     value={form.resetToken || ""}
                     autoCapitalize="none"
                     autoCorrect="off"
@@ -222,7 +240,7 @@ export function UserAuthModal({
                     <input
                       className={`input password-input${showPasswordError ? " input-invalid" : ""}`}
                       type={passwordVisible ? "text" : "password"}
-                      placeholder={isReset ? "Nueva contrasena" : "Contrasena"}
+                      placeholder={isReset ? "Nueva contraseña" : "Contraseña"}
                       autoComplete={isRegister || isReset ? "new-password" : "current-password"}
                       value={form.password}
                       minLength={8}
@@ -236,7 +254,7 @@ export function UserAuthModal({
                       type="button"
                       className="password-toggle"
                       onClick={onTogglePasswordVisibility}
-                      aria-label={passwordVisible ? "Ocultar contrasena" : "Mostrar contrasena"}
+                      aria-label={passwordVisible ? "Ocultar contraseña" : "Mostrar contraseña"}
                       aria-pressed={passwordVisible}
                       disabled={busy}
                     >
@@ -252,14 +270,14 @@ export function UserAuthModal({
                   <div className="auth-password-meter-track" aria-hidden="true">
                     <span
                       className={`auth-password-meter-fill${passwordStrengthPercent >= 100 ? " is-strong" : ""}`}
-                      style={{ width: `${passwordStrengthPercent}%` }}
+                      style={{ transform: `scaleX(${passwordStrengthPercent / 100})` }}
                     />
                   </div>
                   <p className="auth-password-meter-label">{passwordStrengthLabel}</p>
                   <div className="auth-password-checklist">
                     <span className={`auth-password-check${passwordChecks.minLength ? " auth-password-check-ok" : ""}`}>8+ caracteres</span>
                     <span className={`auth-password-check${passwordChecks.hasLetter ? " auth-password-check-ok" : ""}`}>Incluye letras</span>
-                    <span className={`auth-password-check${passwordChecks.hasNumber ? " auth-password-check-ok" : ""}`}>Incluye numeros</span>
+                    <span className={`auth-password-check${passwordChecks.hasNumber ? " auth-password-check-ok" : ""}`}>Incluye números</span>
                   </div>
                 </div>
               )}
@@ -270,7 +288,7 @@ export function UserAuthModal({
                     <input
                       className={`input password-input${showConfirmPasswordError ? " input-invalid" : ""}`}
                       type={passwordVisible ? "text" : "password"}
-                      placeholder={isReset ? "Confirmar nueva contrasena" : "Confirmar contrasena"}
+                      placeholder={isReset ? "Confirmar nueva contraseña" : "Confirmar contraseña"}
                       autoComplete="new-password"
                       value={form.confirmPassword || ""}
                       minLength={8}
@@ -284,7 +302,7 @@ export function UserAuthModal({
                       type="button"
                       className="password-toggle"
                       onClick={onTogglePasswordVisibility}
-                      aria-label={passwordVisible ? "Ocultar contrasena" : "Mostrar contrasena"}
+                      aria-label={passwordVisible ? "Ocultar contraseña" : "Mostrar contraseña"}
                       aria-pressed={passwordVisible}
                       disabled={busy}
                     >
@@ -299,7 +317,7 @@ export function UserAuthModal({
             {isLogin && (
               <div className="auth-foot-links">
                 <button type="button" className="link-btn auth-inline-link" onClick={() => onModeChange("forgot")} disabled={busy}>
-                  Olvide mi contrasena
+                  Olvidé mi contraseña
                 </button>
               </div>
             )}
@@ -307,10 +325,10 @@ export function UserAuthModal({
             {isForgot && (
               <div className="auth-foot-links">
                 <p className="helper-text" style={{ marginTop: 0 }}>
-                  Enviaremos un enlace temporal al correo para que restablezcas tu contrasena de forma segura.
+                  Enviaremos un enlace temporal al correo para que restablezcas tu contraseña de forma segura.
                 </p>
                 <p className="helper-text" style={{ marginTop: 0 }}>
-                  Importante: solo aplica para correos ya registrados como clientes en la tienda.
+                  Usa el correo con el que creaste tu cuenta.
                 </p>
               </div>
             )}
@@ -321,7 +339,7 @@ export function UserAuthModal({
               <button className="btn btn-primary auth-submit-btn" type="submit" disabled={submitDisabled} aria-busy={busy} aria-disabled={submitDisabled}>
                 {busy
                   ? (isRegister ? "Creando cuenta..." : isForgot ? "Enviando enlace..." : isReset ? "Actualizando..." : "Entrando...")
-                  : (isRegister ? "Crear mi cuenta" : isForgot ? "Enviar enlace" : isReset ? "Guardar nueva contrasena" : "Entrar a mi cuenta")}
+                  : (isRegister ? "Crear mi cuenta" : isForgot ? "Enviar enlace" : isReset ? "Guardar nueva contraseña" : "Entrar a mi cuenta")}
               </button>
             </div>
 
@@ -332,7 +350,7 @@ export function UserAuthModal({
                 onClick={() => onModeChange(isRegister ? "login" : isForgot || isReset ? "login" : "register")}
                 disabled={busy}
               >
-                {isRegister ? "Ya tengo cuenta. Quiero ingresar" : isForgot || isReset ? "Volver a iniciar sesion" : "No tengo cuenta. Quiero crearla"}
+                {isRegister ? "Ya tengo cuenta. Quiero ingresar" : isForgot || isReset ? "Volver a iniciar sesión" : "No tengo cuenta. Quiero crearla"}
               </button>
             </div>
           </Motion.form>
@@ -364,10 +382,21 @@ export function ProfileModal({
 }) {
   const safeSection = activeSection === "password" || activeSection === "direccion" ? activeSection : "datos";
   const sectionMeta = safeSection === "password"
-    ? { title: "Cambio de contrasena", subtitle: "Actualiza tu clave de acceso" }
+    ? { title: "Cambio de contraseña", subtitle: "Actualiza tu clave de acceso" }
     : safeSection === "direccion"
-      ? { title: "Libreta de direcciones", subtitle: "Gestiona tus direcciones de envio en un solo lugar" }
-      : { title: "Datos personales", subtitle: "Edita tu informacion de cuenta" };
+      ? { title: "Libreta de direcciones", subtitle: "Guarda tus direcciones de envío en un solo lugar" }
+      : { title: "Datos personales", subtitle: "Edita la información de tu cuenta" };
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") {
+        onClose?.();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [open, onClose]);
 
   return (
     <AnimatePresence initial={false}>
@@ -397,7 +426,7 @@ export function ProfileModal({
                 <h3 className="profile-sheet-title" style={{ margin: "8px 0 0" }}>{sectionMeta.title}</h3>
                 <p className="muted profile-sheet-subtitle" style={{ margin: "6px 0 0" }}>{sectionMeta.subtitle}</p>
               </div>
-              <button onClick={onClose} className="icon-btn"><X size={18} /></button>
+              <button type="button" onClick={onClose} className="icon-btn" aria-label="Cerrar perfil"><X size={18} /></button>
             </div>
             <div className="sheet-body">
               {safeSection === "datos" && (
@@ -409,7 +438,7 @@ export function ProfileModal({
                   <div className="settings-grid" style={{ marginTop: 14 }}>
                     <input className="input" placeholder="Nombre" value={profileDraft.name} onChange={(event) => onFieldChange("name", event.target.value)} />
                     <input className="input" placeholder="Apellido" value={profileDraft.lastName} onChange={(event) => onFieldChange("lastName", event.target.value)} />
-                    <input className="input" placeholder="Telefono" inputMode="tel" maxLength={10} value={profileDraft.phone} onChange={(event) => onFieldChange("phone", event.target.value)} />
+                    <input className="input" placeholder="Teléfono" inputMode="tel" maxLength={10} value={profileDraft.phone} onChange={(event) => onFieldChange("phone", event.target.value)} />
                     <input className="input" placeholder="Correo" type="email" value={profileDraft.email} onChange={(event) => onFieldChange("email", event.target.value)} />
                   </div>
                   {profileFeedback?.message && (
@@ -430,13 +459,13 @@ export function ProfileModal({
                     <MapPin size={20} />
                   </div>
                   <div className="profile-address-book">
-                    <p className="muted profile-address-book-title">Selecciona, agrega o edita direcciones guardadas</p>
+                    <p className="muted profile-address-book-title">Selecciona, agrega o edita tus direcciones</p>
                     {Array.isArray(profileDraft.addressBook) && profileDraft.addressBook.length > 0 ? (
                       <div className="profile-address-book-list">
                         {profileDraft.addressBook.map((entry) => (
                           <div key={entry.id} className={`profile-address-item ${entry.isDefault ? "is-default" : ""}`}>
                             <div className="profile-address-item-head">
-                              <strong>{entry.label || "Direccion guardada"}</strong>
+                              <strong>{entry.label || "Dirección guardada"}</strong>
                               {entry.isDefault && <span className="badge badge-dark">Principal</span>}
                             </div>
                             <p className="muted profile-address-item-text">{entry.address}</p>
@@ -456,7 +485,7 @@ export function ProfileModal({
                         ))}
                       </div>
                     ) : (
-                      <p className="helper-text" style={{ margin: 0 }}>No tienes direcciones guardadas aun.</p>
+                      <p className="helper-text" style={{ margin: 0 }}>Aún no tienes direcciones guardadas.</p>
                     )}
                   </div>
                   <div className="profile-address-editor">
@@ -498,10 +527,10 @@ export function ProfileModal({
                         checked={Boolean(addressBookDraft.isDefault)}
                         onChange={(event) => onAddressBookDraftChange("isDefault", event.target.checked)}
                       />
-                      Guardar como direccion principal
+                      Guardar como dirección principal
                     </label>
                     <button className="btn btn-outline" type="button" onClick={onSaveAddressBookEntry}>
-                      {addressBookEditingId ? "Actualizar direccion guardada" : "Guardar en libreta"}
+                      {addressBookEditingId ? "Actualizar dirección" : "Guardar dirección"}
                     </button>
                   </div>
                   {profileFeedback?.message && (
@@ -515,13 +544,13 @@ export function ProfileModal({
               {safeSection === "password" && (
                 <div className="surface profile-card">
                   <div className="profile-card-head">
-                    <h4 className="profile-section-title" style={{ margin: 0 }}>Cambio de contrasena</h4>
+                    <h4 className="profile-section-title" style={{ margin: 0 }}>Cambio de contraseña</h4>
                     <KeyRound size={20} />
                   </div>
                   <div className="grid" style={{ gap: 12, marginTop: 14 }}>
                     <input className="input" type="password" autoComplete="current-password" placeholder="Contrasena actual" value={passwordDraft.currentPassword} onChange={(event) => onPasswordFieldChange("currentPassword", event.target.value)} />
-                    <input className="input" type="password" autoComplete="new-password" placeholder="Nueva contrasena" value={passwordDraft.newPassword} onChange={(event) => onPasswordFieldChange("newPassword", event.target.value)} />
-                    <input className="input" type="password" autoComplete="new-password" placeholder="Confirmar nueva contrasena" value={passwordDraft.confirmPassword} onChange={(event) => onPasswordFieldChange("confirmPassword", event.target.value)} />
+                    <input className="input" type="password" autoComplete="new-password" placeholder="Nueva contraseña" value={passwordDraft.newPassword} onChange={(event) => onPasswordFieldChange("newPassword", event.target.value)} />
+                    <input className="input" type="password" autoComplete="new-password" placeholder="Confirmar nueva contraseña" value={passwordDraft.confirmPassword} onChange={(event) => onPasswordFieldChange("confirmPassword", event.target.value)} />
                   </div>
                   {passwordFeedback?.message && (
                     <div className={`status-message ${passwordFeedback.tone === "error" ? "status-error" : "status-success"}`} style={{ marginTop: 14 }}>
@@ -529,7 +558,7 @@ export function ProfileModal({
                     </div>
                   )}
                   <button className="btn btn-outline" style={{ marginTop: 14 }} onClick={onChangePassword}>
-                    Actualizar contrasena
+                    Actualizar contraseña
                   </button>
                 </div>
               )}

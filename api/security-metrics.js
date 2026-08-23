@@ -58,7 +58,7 @@ export default async function handler(req, res) {
     }
     res.status(200).json({
       ok: true,
-      metrics: getSecurityMetricsSnapshot(),
+      metrics: await getSecurityMetricsSnapshot(),
     });
     return;
   }
@@ -69,7 +69,7 @@ export default async function handler(req, res) {
       return;
     }
     if (!requireCsrf(req, res, { endpoint: ENDPOINT_NAME })) return;
-    resetSecurityMetrics();
+    await resetSecurityMetrics();
     res.status(200).json({ ok: true, message: "Metricas reiniciadas." });
     return;
   }

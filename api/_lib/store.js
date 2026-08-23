@@ -54,8 +54,21 @@ function isKvConfigured() {
   );
 }
 
+function requiresPersistentStore() {
+  return String(process.env.NODE_ENV || "").trim().toLowerCase() === "production"
+    || String(process.env.VERCEL_ENV || "").trim().toLowerCase() === "production";
+}
+
+function assertStoreConfigured() {
+  if (!requiresPersistentStore() || isKvConfigured()) return;
+  const error = new Error("persistent-store-required");
+  error.code = "PERSISTENT_STORE_REQUIRED";
+  throw error;
+}
+
 function getStoreBackend() {
-  return isKvConfigured() ? "kv-rest" : "local-file";
+  if (isKvConfigured()) return "kv-rest";
+  return requiresPersistentStore() ? "unconfigured" : "local-file";
 }
 
 async function wait(ms = 0) {
@@ -227,6 +240,7 @@ async function writeFileStore(store) {
 }
 
 async function readStore() {
+  assertStoreConfigured();
   if (isKvConfigured()) {
     return readKvStore();
   }
@@ -239,6 +253,7 @@ async function readStore() {
 }
 
 async function persistStore(nextStore) {
+  assertStoreConfigured();
   const normalized = normalizeStore(nextStore);
   if (isKvConfigured()) {
     await writeKvStore(normalized);
@@ -254,6 +269,7 @@ async function persistStore(nextStore) {
 }
 
 async function updateStore(mutator) {
+  assertStoreConfigured();
   if (isKvConfigured()) {
     const lockToken = await acquireKvLock();
     try {
@@ -283,6 +299,9 @@ async function updateStore(mutator) {
 export {
   bumpRealtimeMeta,
   getStoreBackend,
+  isKvConfigured,
+  requiresPersistentStore,
   readStore,
+  runKvCommand,
   updateStore,
 };

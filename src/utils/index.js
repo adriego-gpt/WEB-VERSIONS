@@ -51,7 +51,7 @@ export {
   fileToDataUrl,
 } from "./fileUpload";
 
-export { createUid } from "./uid";
+export { createUid, createUuid } from "./uid";
 
 export { formatMinutesRemaining, formatAdminTimestamp } from "./formatting";
 

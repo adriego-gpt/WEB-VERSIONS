@@ -17,6 +17,7 @@ const USER_PASSWORD_RESET = "User98765";
 const USER_PASSWORD_RESET_BY_ADMIN = "User65432";
 const MAPS_TEST_URL = "https://maps.app.goo.gl/gc5qGjhA4xoQyzr68";
 const HUGE_INLINE_IMAGE = `data:image/jpeg;base64,${"A".repeat(800000)}`;
+const BANK_QR_IMAGE = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 
 const sandboxCwd = await fs.mkdtemp(path.join(os.tmpdir(), "atelier-e2e-"));
 const originalCwd = process.cwd();
@@ -352,7 +353,9 @@ test("critical user/admin flows and security monitoring", async () => {
     cookieJar: userCookies,
     csrfToken: userCsrf,
     json: {
+      idempotencyKey: crypto.randomUUID(),
       couponCode: "",
+      paymentProof: BANK_QR_IMAGE,
       cart: [
         {
           id: "prod-1",
@@ -366,13 +369,33 @@ test("critical user/admin flows and security monitoring", async () => {
   assert.equal(checkoutResponse.statusCode, 200);
   assert.equal(checkoutResponse.jsonBody?.ok, true);
   assert.ok(checkoutResponse.jsonBody?.order?.id, "Checkout should return the created order");
+  assert.equal(checkoutResponse.jsonBody?.order?.paymentMethod, "card_link");
+  assert.equal(checkoutResponse.jsonBody?.order?.paymentFeePercent, 6);
+  assert.equal(checkoutResponse.jsonBody?.order?.paymentFeeAmount, 3.6);
+  assert.equal(checkoutResponse.jsonBody?.order?.total, 63.59);
+  assert.equal(checkoutResponse.jsonBody?.order?.paymentProof, "", "Card orders should ignore transfer proof data");
+  assert.match(String(checkoutResponse.jsonBody?.order?.items?.[0]?.image || ""), /^https:\/\//);
   const pickupOrderId = String(checkoutResponse.jsonBody?.order?.id || "");
+
+  const unavailableTransferResponse = await callApi(checkoutOrderHandler, {
+    method: "POST",
+    cookieJar: userCookies,
+    csrfToken: userCsrf,
+    json: {
+      idempotencyKey: crypto.randomUUID(),
+      paymentMethod: "transfer",
+      cart: [{ id: "prod-1", color: "Negro", size: "M", quantity: 1 }],
+    },
+  });
+  assert.equal(unavailableTransferResponse.statusCode, 409);
+  assert.match(String(unavailableTransferResponse.jsonBody?.message || ""), /transferencia bancaria.*no est[aá] configurada/i);
 
   const invalidDeliveryCheckoutResponse = await callApi(checkoutOrderHandler, {
     method: "POST",
     cookieJar: userCookies,
     csrfToken: userCsrf,
     json: {
+      idempotencyKey: crypto.randomUUID(),
       couponCode: "",
       cart: [
         {
@@ -462,6 +485,7 @@ test("critical user/admin flows and security monitoring", async () => {
     cookieJar: userCookies,
     csrfToken: userCsrf,
     json: {
+      idempotencyKey: crypto.randomUUID(),
       couponCode: "",
       cart: duplicatedVariantCart,
     },
@@ -529,6 +553,7 @@ test("critical user/admin flows and security monitoring", async () => {
     cookieJar: userCookies,
     csrfToken: userCsrf,
     json: {
+      idempotencyKey: crypto.randomUUID(),
       couponCode: "",
       cart: [
         {
@@ -749,12 +774,20 @@ test("critical user/admin flows and security monitoring", async () => {
   const pickupReadyForUser = (userOrdersAfterPickupReady.jsonBody?.orderHistory || []).find((order) => String(order.id) === pickupOrderId);
   assert.equal(pickupReadyForUser?.status, "Listo para retiro");
 
+  const catalogBeforeAdminSync = await callApi(catalogStateHandler, {
+    method: "GET",
+    query: { action: "get" },
+    cookieJar: adminCookies,
+  });
+  assert.equal(catalogBeforeAdminSync.statusCode, 200);
+
   const adminSyncResponse = await callApi(catalogStateHandler, {
     method: "POST",
     query: { action: "sync" },
     cookieJar: adminCookies,
     csrfToken: adminCsrf,
     json: {
+      baseCatalogVersion: Number(catalogBeforeAdminSync.jsonBody?.data?.catalogVersion || 0),
       data: {
         products: [
           {
@@ -798,6 +831,95 @@ test("critical user/admin flows and security monitoring", async () => {
   assert.ok(syncedImage.startsWith("https://"), "Sanitized image should fallback to a safe URL");
   assert.equal(adminSyncResponse.jsonBody?.data?.products?.[0]?.isPublic, false, "Catalog sync should persist isPublic visibility");
 
+  const contactPaymentSyncResponse = await callApi(catalogStateHandler, {
+    method: "POST",
+    query: { action: "sync-contact" },
+    cookieJar: adminCookies,
+    csrfToken: adminCsrf,
+    json: {
+      contactSettings: {
+        address: "Centro Comercial Local 2",
+        whatsappNumber: "593999999999",
+        email: "ventas@atelier.test",
+        mapsLink: MAPS_TEST_URL,
+        paymentSettings: {
+          bankAccounts: [
+            {
+              id: "bank-prueba-1",
+              bankName: "Banco Prueba",
+              accountType: "Ahorros",
+              accountNumber: "1234567890",
+              accountHolder: "Adriego Store",
+              accountId: "0999999999001",
+              bankLogoImage: BANK_QR_IMAGE,
+              bankQrImage: BANK_QR_IMAGE,
+            },
+            {
+              id: "bank-prueba-2",
+              bankName: "Banco Alterno",
+              accountType: "Corriente",
+              accountNumber: "9876543210",
+              accountHolder: "Adriego Store",
+              accountId: "0999999999001",
+              bankLogoImage: BANK_QR_IMAGE,
+              bankQrImage: BANK_QR_IMAGE,
+            },
+          ],
+        },
+      },
+      storeSettings: adminSyncResponse.jsonBody?.data?.storeSettings || {},
+    },
+  });
+  assert.equal(contactPaymentSyncResponse.statusCode, 200);
+  assert.equal(contactPaymentSyncResponse.jsonBody?.ok, true);
+  assert.equal(contactPaymentSyncResponse.jsonBody?.data?.contactSettings?.paymentSettings?.accountNumber, "1234567890");
+  assert.equal(contactPaymentSyncResponse.jsonBody?.data?.contactSettings?.paymentSettings?.bankQrImage, BANK_QR_IMAGE);
+  assert.equal(contactPaymentSyncResponse.jsonBody?.data?.contactSettings?.paymentSettings?.bankLogoImage, BANK_QR_IMAGE);
+  assert.equal(contactPaymentSyncResponse.jsonBody?.data?.contactSettings?.paymentSettings?.bankAccounts?.length, 2);
+
+  await updateStore((draft) => {
+    draft.products = (Array.isArray(draft.products) ? draft.products : []).map((product) => (
+      String(product.id) === "prod-1" ? { ...product, isPublic: true } : product
+    ));
+    return draft;
+  });
+
+  const transferCheckoutResponse = await callApi(checkoutOrderHandler, {
+    method: "POST",
+    cookieJar: userCookies,
+    csrfToken: userCsrf,
+    json: {
+      idempotencyKey: crypto.randomUUID(),
+      paymentMethod: "transfer",
+      bankAccountId: "bank-prueba-2",
+      paymentProof: BANK_QR_IMAGE,
+      cart: [{ id: "prod-1", color: "Negro", size: "M", quantity: 1 }],
+      delivery: { type: "pickup" },
+    },
+  });
+  assert.equal(transferCheckoutResponse.statusCode, 200);
+  assert.equal(transferCheckoutResponse.jsonBody?.order?.paymentMethod, "transfer");
+  assert.equal(transferCheckoutResponse.jsonBody?.order?.paymentProof, BANK_QR_IMAGE);
+  assert.equal(transferCheckoutResponse.jsonBody?.order?.paymentBankAccount?.bankName, "Banco Alterno");
+
+  const userOrdersWithProofResponse = await callApi(ordersHandler, {
+    method: "GET",
+    query: { action: "list" },
+    cookieJar: userCookies,
+  });
+  const transferOrderId = String(transferCheckoutResponse.jsonBody?.order?.id || "");
+  const transferOrderRecord = (userOrdersWithProofResponse.jsonBody?.orderHistory || [])
+    .find((order) => String(order.id || "") === transferOrderId);
+  assert.equal(transferOrderRecord?.paymentProof, BANK_QR_IMAGE, "The proof should remain visible in order history");
+  assert.equal(transferOrderRecord?.paymentBankAccount?.id, "bank-prueba-2");
+
+  await updateStore((draft) => {
+    draft.products = (Array.isArray(draft.products) ? draft.products : []).map((product) => (
+      String(product.id) === "prod-1" ? { ...product, isPublic: false } : product
+    ));
+    return draft;
+  });
+
   const adminGetResponse = await callApi(catalogStateHandler, {
     method: "GET",
     query: { action: "get" },
@@ -807,6 +929,9 @@ test("critical user/admin flows and security monitoring", async () => {
   assert.ok(Array.isArray(adminGetResponse.jsonBody?.data?.orderHistory));
   assert.ok(Array.isArray(adminGetResponse.jsonBody?.data?.coupons));
   assert.equal(adminGetResponse.jsonBody?.data?.contactSettings?.mapsLink, MAPS_TEST_URL);
+  assert.equal(adminGetResponse.jsonBody?.data?.contactSettings?.paymentSettings?.bankName, "Banco Prueba");
+  assert.equal(adminGetResponse.jsonBody?.data?.contactSettings?.paymentSettings?.accountNumber, "1234567890");
+  assert.equal(adminGetResponse.jsonBody?.data?.contactSettings?.paymentSettings?.bankQrImage, BANK_QR_IMAGE);
   assert.equal(adminGetResponse.jsonBody?.data?.products?.[0]?.isPublic, false);
 
   const adminUsersListResponse = await callApi(adminUsersHandler, {

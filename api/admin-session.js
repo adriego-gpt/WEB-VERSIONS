@@ -207,12 +207,12 @@ export default async function handler(req, res) {
   const identifier = normalizeLine(body.identifier || "").toLowerCase();
   const password = String(body.password || "");
 
-  const ipLimit = consumeRateLimit("admin-login-ip", ip, 20, 10 * 60 * 1000, {
+  const ipLimit = await consumeRateLimit("admin-login-ip", ip, 20, 10 * 60 * 1000, {
     endpoint: ENDPOINT_NAME,
     ip,
   });
   const identifierLimit = identifier
-    ? consumeRateLimit("admin-login-identifier", identifier, 12, 10 * 60 * 1000, {
+    ? await consumeRateLimit("admin-login-identifier", identifier, 12, 10 * 60 * 1000, {
         endpoint: ENDPOINT_NAME,
         ip,
       })

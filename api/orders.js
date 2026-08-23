@@ -14,6 +14,7 @@ import {
   parseCookies,
   requireJsonBody,
   requireCsrf,
+  resolveVersionedUserSession,
   setCommonSecurityHeaders,
   verifySignedToken,
 } from "./_lib/security.js";
@@ -213,14 +214,7 @@ export default async function handler(req, res) {
 
   const { adminSession, userSession } = getSessions(req);
   const isAdmin = Boolean(adminSession);
-  const userId = userSession?.sub ? String(userSession.sub) : "";
-  const userEmail = userSession?.email ? normalizeEmail(userSession.email) : "";
   const clientIp = getClientIp(req);
-
-  if (!isAdmin && !userId) {
-    res.status(401).json({ ok: false, message: "No autorizado" });
-    return;
-  }
 
   const action = normalizeLine(req.query?.action || "list").toLowerCase();
 
@@ -229,7 +223,7 @@ export default async function handler(req, res) {
       res.status(405).json({ ok: false, message: "Method not allowed" });
       return;
     }
-    const listRateLimit = consumeRateLimit(
+    const listRateLimit = await consumeRateLimit(
       isAdmin ? "orders-list-admin-ip" : "orders-list-user-ip",
       clientIp,
       isAdmin ? 120 : 80,
@@ -245,6 +239,13 @@ export default async function handler(req, res) {
       return;
     }
     const store = await readStore();
+    const sessionUser = resolveVersionedUserSession(store.users, userSession);
+    if (!isAdmin && !sessionUser) {
+      res.status(401).json({ ok: false, message: "No autorizado" });
+      return;
+    }
+    const userId = sessionUser ? String(sessionUser.id) : "";
+    const userEmail = sessionUser ? normalizeEmail(sessionUser.email) : "";
     const orders = Array.isArray(store.orders) ? store.orders : [];
     const visibleOrders = isAdmin
       ? orders
@@ -274,7 +275,7 @@ export default async function handler(req, res) {
   }
 
   if (!requireCsrf(req, res, { endpoint: ENDPOINT_NAME })) return;
-  const mutateRateLimit = consumeRateLimit("orders-mutate-admin-ip", clientIp, 50, 10 * 60 * 1000, {
+  const mutateRateLimit = await consumeRateLimit("orders-mutate-admin-ip", clientIp, 50, 10 * 60 * 1000, {
     endpoint: ENDPOINT_NAME,
     ip: clientIp,
   });

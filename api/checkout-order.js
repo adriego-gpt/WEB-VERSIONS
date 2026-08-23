@@ -17,6 +17,7 @@ import {
   isOriginAllowed,
   monitorApiRequest,
   normalizeEmail,
+  normalizeImageSource,
   normalizeLine,
   normalizePhone,
   parseCookies,
@@ -25,12 +26,33 @@ import {
   setCommonSecurityHeaders,
   verifySignedToken,
 } from "./_lib/security.js";
+import {
+  PAYMENT_METHODS,
+  calculatePayableTotal,
+  calculatePaymentFee,
+  getPaymentMethodLabel,
+  normalizeCardFeePercent,
+  normalizePaymentMethod,
+} from "../src/domain/orders/payment.js";
+import { getReadyBankAccounts } from "../src/domain/contact/paymentSettings.js";
 
 const USER_COOKIE_NAME = "atelier_user_session";
 const CART_ITEM_LIMIT = 25;
 const LINE_ITEM_LIMIT = 10;
 const ENDPOINT_NAME = "checkout-order";
 const DEFAULT_WHATSAPP_COUNTRY_CODE = "593";
+const IDEMPOTENCY_TTL_MS = Math.max(
+  60 * 60 * 1000,
+  (Number(process.env.CHECKOUT_IDEMPOTENCY_TTL_HOURS) || 72) * 60 * 60 * 1000,
+);
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const LEGACY_PICKUP_ADDRESS = "av. principal 123, quito, ecuador";
+
+function normalizeSessionVersion(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric < 1) return 1;
+  return Math.floor(numeric);
+}
 
 function currency(value) {
   return new Intl.NumberFormat("es-EC", { style: "currency", currency: "USD" }).format(Number(value) || 0);
@@ -142,6 +164,8 @@ function sanitizeDeliveryPayload(rawDelivery = {}, user = {}, contactSettings = 
   const baseName = normalizeLine(rawDelivery?.fullName || user?.name || "Cliente").slice(0, 120);
   const basePhone = normalizePhone(rawDelivery?.phone || user?.phone || "");
 
+  const configuredPickupAddress = normalizeLine(contactSettings?.address || "");
+  const hasRealPickupAddress = configuredPickupAddress.toLowerCase() !== LEGACY_PICKUP_ADDRESS;
   const safePayload = {
     deliveryType,
     deliveryLabel: deliveryType === "delivery" ? "Envio a domicilio" : "Retiro en local",
@@ -151,8 +175,8 @@ function sanitizeDeliveryPayload(rawDelivery = {}, user = {}, contactSettings = 
     deliveryAddress: normalizeLine(rawDelivery?.address || "").slice(0, 260),
     deliveryReference: normalizeLine(rawDelivery?.reference || "").slice(0, 260),
     deliveryPhone: basePhone.slice(0, 20),
-    pickupAddress: deliveryType === "pickup" ? normalizeLine(contactSettings?.address || "").slice(0, 280) : "",
-    pickupNote: deliveryType === "pickup" ? normalizeLine(contactSettings?.locationNote || "").slice(0, 320) : "",
+    pickupAddress: deliveryType === "pickup" && hasRealPickupAddress ? configuredPickupAddress.slice(0, 280) : "",
+    pickupNote: deliveryType === "pickup" && hasRealPickupAddress ? normalizeLine(contactSettings?.locationNote || "").slice(0, 320) : "",
   };
 
   if (deliveryType === "delivery") {
@@ -196,9 +220,14 @@ function buildOrderText(order) {
     `Subtotal: ${currency(order.subtotal)}`,
     order.discountAmount > 0 ? `Descuento: -${currency(order.discountAmount)}` : "",
     order.couponCode ? `Cupon aplicado: ${order.couponCode}` : "",
+    `Forma de pago: ${order.paymentMethodLabel || getPaymentMethodLabel(order.paymentMethod)}`,
+    order.paymentBankAccount?.bankName ? `Banco elegido: ${order.paymentBankAccount.bankName}` : "",
+    order.paymentFeeAmount > 0 ? `Comision tarjeta (${order.paymentFeePercent}%): ${currency(order.paymentFeeAmount)}` : "",
     `Total final: ${currency(order.total || order.subtotal)}`,
     "",
-    "Por favor indiquenme disponibilidad y forma de pago.",
+    order.paymentMethod === PAYMENT_METHODS.cardLink
+      ? "Por favor envienme el enlace seguro para pagar con tarjeta."
+      : "Realizare el pago mediante transferencia bancaria.",
   ].filter(Boolean).join("\n");
 }
 
@@ -232,7 +261,7 @@ export default async function handler(req, res) {
   }
 
   const requestIp = getClientIp(req);
-  const rateLimit = consumeRateLimit("checkout-ip", requestIp, 10, 10 * 60 * 1000, {
+  const rateLimit = await consumeRateLimit("checkout-ip", requestIp, 10, 10 * 60 * 1000, {
     endpoint: ENDPOINT_NAME,
     ip: requestIp,
   });
@@ -251,6 +280,15 @@ export default async function handler(req, res) {
 
   const body = requireJsonBody(req, res, { endpoint: ENDPOINT_NAME });
   if (!body) return;
+  const idempotencyKey = normalizeLine(body?.idempotencyKey || "").toLowerCase();
+  if (!UUID_PATTERN.test(idempotencyKey)) {
+    res.status(400).json({
+      ok: false,
+      code: "INVALID_IDEMPOTENCY_KEY",
+      message: "idempotencyKey debe ser un UUID valido.",
+    });
+    return;
+  }
   const couponCode = normalizeCode(body?.couponCode || "");
   const rawCart = Array.isArray(body?.cart) ? body.cart : [];
   if (!rawCart.length) {
@@ -265,6 +303,37 @@ export default async function handler(req, res) {
     const user = users.find((entry) => String(entry.id) === String(session.sub));
     if (!user) {
       responsePayload = { ok: false, status: 401, message: "No pudimos validar tu sesión." };
+      return draft;
+    }
+    if (normalizeSessionVersion(session.sessionVersion) !== normalizeSessionVersion(user.sessionVersion)) {
+      responsePayload = { ok: false, status: 401, message: "Tu sesión expiró. Inicia sesión nuevamente." };
+      return draft;
+    }
+
+    const previousOrders = Array.isArray(draft.orders) ? draft.orders : [];
+    const idempotencyCutoff = Date.now() - IDEMPOTENCY_TTL_MS;
+    const existingOrder = previousOrders.find((order) => (
+      String(order.customerId || "") === String(user.id)
+      && String(order.idempotencyKey || "").toLowerCase() === idempotencyKey
+      && Date.parse(order.createdAt || "") >= idempotencyCutoff
+    ));
+    if (existingOrder) {
+      const visibleOrderHistory = previousOrders.filter((order) => (
+        String(order.customerId || "") === String(user.id)
+        || (
+          !String(order.customerId || "")
+          && normalizeEmail(order.customerEmail || "") === normalizeEmail(user.email || "")
+        )
+      ));
+      const whatsappNumber = normalizePhone(draft.contactSettings?.whatsappNumber || "");
+      responsePayload = {
+        ok: true,
+        idempotentReplay: true,
+        order: existingOrder,
+        products: Array.isArray(draft.products) ? draft.products : [],
+        orderHistory: visibleOrderHistory,
+        whatsappUrl: buildWhatsAppLink(whatsappNumber, buildOrderText(existingOrder)),
+      };
       return draft;
     }
 
@@ -306,18 +375,61 @@ export default async function handler(req, res) {
 
     const subtotal = safeCart.reduce((total, item) => total + item.price * item.quantity, 0);
     const discountAmount = couponEvaluation.ok ? Number(couponEvaluation.discountAmount) || 0 : 0;
-    const total = couponEvaluation.ok ? Number(couponEvaluation.total) || subtotal : subtotal;
+    const paymentBaseTotal = couponEvaluation.ok ? Number(couponEvaluation.total) || subtotal : subtotal;
+    const paymentSettings = draft.contactSettings?.paymentSettings || {};
+    const readyBankAccounts = getReadyBankAccounts(paymentSettings);
+    const transferReady = readyBankAccounts.length > 0;
+    const paymentMethod = body?.paymentMethod
+      ? normalizePaymentMethod(body.paymentMethod)
+      : (transferReady ? PAYMENT_METHODS.transfer : PAYMENT_METHODS.cardLink);
+    if (paymentMethod === PAYMENT_METHODS.transfer && !transferReady) {
+      responsePayload = {
+        ok: false,
+        status: 409,
+        message: "La transferencia bancaria todavía no está configurada. Elige tarjeta o contacta a la tienda.",
+      };
+      return draft;
+    }
+    const requestedBankAccountId = normalizeLine(body?.bankAccountId || "");
+    const selectedBankAccount = paymentMethod === PAYMENT_METHODS.transfer
+      ? (readyBankAccounts.find((account) => account.id === requestedBankAccountId) || (!requestedBankAccountId ? readyBankAccounts[0] : null))
+      : null;
+    if (paymentMethod === PAYMENT_METHODS.transfer && !selectedBankAccount) {
+      responsePayload = {
+        ok: false,
+        status: 400,
+        message: "La cuenta bancaria seleccionada ya no está disponible. Elige otra cuenta e inténtalo de nuevo.",
+      };
+      return draft;
+    }
+    const paymentFeePercent = normalizeCardFeePercent(paymentSettings.cardFeePercent);
+    const paymentFeeAmount = calculatePaymentFee(paymentBaseTotal, paymentMethod, paymentFeePercent);
+    const total = calculatePayableTotal(paymentBaseTotal, paymentMethod, paymentFeePercent);
 
-    const previousOrders = Array.isArray(draft.orders) ? draft.orders : [];
     const code = createFriendlyOrderCode(previousOrders);
     const nowIso = new Date().toISOString();
     const nextOrder = {
       id: crypto.randomUUID(),
+      idempotencyKey,
       code,
       createdAt: nowIso,
       subtotal,
       discountAmount,
       total,
+      paymentMethod,
+      paymentMethodLabel: getPaymentMethodLabel(paymentMethod),
+      paymentBaseTotal,
+      paymentFeePercent: paymentMethod === PAYMENT_METHODS.cardLink ? paymentFeePercent : 0,
+      paymentFeeAmount,
+      paymentBankAccountId: selectedBankAccount?.id || "",
+      paymentBankAccount: selectedBankAccount ? {
+        id: selectedBankAccount.id,
+        bankName: normalizeLine(selectedBankAccount.bankName || "").slice(0, 80),
+        accountType: normalizeLine(selectedBankAccount.accountType || "").slice(0, 40),
+        accountNumber: normalizeLine(selectedBankAccount.accountNumber || "").slice(0, 80),
+        accountHolder: normalizeLine(selectedBankAccount.accountHolder || "").slice(0, 120),
+        accountId: normalizeLine(selectedBankAccount.accountId || "").slice(0, 40),
+      } : null,
       couponCode: couponEvaluation.ok ? couponEvaluation.code : "",
       couponDiscountType: couponEvaluation.ok ? couponEvaluation?.coupon?.discountType || "" : "",
       couponDiscountValue: couponEvaluation.ok ? Number(couponEvaluation?.coupon?.discountValue) || 0 : 0,
@@ -326,7 +438,9 @@ export default async function handler(req, res) {
       itemCount: safeCart.reduce((acc, item) => acc + item.quantity, 0),
       status: normalizeOrderStatus("Pendiente"),
       guideNumber: "",
-      paymentProof: "",
+      paymentProof: paymentMethod === PAYMENT_METHODS.transfer
+        ? normalizeImageSource(body?.paymentProof || "")
+        : "",
       customerId: String(user.id),
       customerName: normalizeLine(deliveryState.delivery.deliveryFullName || user.name || "Cliente"),
       customerEmail: normalizeEmail(user.email || ""),

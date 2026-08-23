@@ -157,6 +157,12 @@ function normalizeUserStateVersion(value) {
   return Math.max(USER_STATE_VERSION_MIN, Math.floor(numeric));
 }
 
+function normalizeSessionVersion(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric < 1) return 1;
+  return Math.floor(numeric);
+}
+
 function resolveUserForLogin(users = [], identifier = "", password = "") {
   const normalizedIdentifier = normalizeLine(identifier).toLowerCase().slice(0, IDENTIFIER_MAX_LENGTH);
   if (!normalizedIdentifier) return null;
@@ -181,6 +187,7 @@ function buildSession(user, secret) {
   const payload = {
     sub: String(user.id),
     email: normalizeEmail(user.email),
+    sessionVersion: normalizeSessionVersion(user.sessionVersion),
     iat: now,
     exp: now + SESSION_TTL_MS,
   };
@@ -213,15 +220,20 @@ async function resolveSessionUser(req, sessionSecret) {
   const session = verifySignedToken(cookies[COOKIE_NAME] || "", sessionSecret);
   if (!session) return null;
   const store = await readStore();
-  return (store.users || []).find((entry) => String(entry.id) === String(session.sub)) || null;
+  const user = (store.users || []).find((entry) => String(entry.id) === String(session.sub)) || null;
+  if (!user) return null;
+  if (normalizeSessionVersion(session.sessionVersion) !== normalizeSessionVersion(user.sessionVersion)) {
+    return null;
+  }
+  return user;
 }
 
 function rejectUnauthorized(res) {
   res.status(401).json({ ok: false, message: "No autorizado" });
 }
 
-function applyRateLimit(res, namespace, key, limit, windowMs, endpoint = "") {
-  const result = consumeRateLimit(namespace, key, limit, windowMs, {
+async function applyRateLimit(res, namespace, key, limit, windowMs, endpoint = "") {
+  const result = await consumeRateLimit(namespace, key, limit, windowMs, {
     endpoint,
   });
   if (result.ok) return true;
@@ -267,7 +279,7 @@ function buildPasswordResetLink(req, email = "", token = "") {
     email: normalizeEmail(email),
     resetToken: token,
   });
-  return `${baseUrl}/?${search.toString()}`;
+  return `${baseUrl}/cuenta/restablecer?${search.toString()}`;
 }
 
 function maskEmailForLog(email = "") {
@@ -591,8 +603,8 @@ export default async function handler(req, res) {
     const confirmPassword = String(body.confirmPassword || "").trim();
     const phone = normalizeUserPhone(body.phone || "");
 
-    if (!applyRateLimit(res, "user-register-ip", clientIp, 8, 20 * 60 * 1000, ENDPOINT_NAME)) return;
-    if (email && !applyRateLimit(res, "user-register-email", email, 4, 20 * 60 * 1000, ENDPOINT_NAME)) return;
+    if (!await applyRateLimit(res, "user-register-ip", clientIp, 8, 20 * 60 * 1000, ENDPOINT_NAME)) return;
+    if (email && !await applyRateLimit(res, "user-register-email", email, 4, 20 * 60 * 1000, ENDPOINT_NAME)) return;
 
     if (
       !name
@@ -634,6 +646,7 @@ export default async function handler(req, res) {
         favorites: [],
         stateUpdatedAt: nowIso,
         stateVersion: 1,
+        sessionVersion: 1,
         passwordResetTokenHash: "",
         passwordResetExpiresAt: 0,
         passwordResetRequestedAt: "",
@@ -661,8 +674,8 @@ export default async function handler(req, res) {
     const identifier = normalizeLine(body.identifier || "").slice(0, IDENTIFIER_MAX_LENGTH).toLowerCase();
     const password = String(body.password || "").trim();
 
-    if (!applyRateLimit(res, "user-login-ip", clientIp, 16, 10 * 60 * 1000, ENDPOINT_NAME)) return;
-    if (identifier && !applyRateLimit(res, "user-login-identifier", identifier, 10, 10 * 60 * 1000, ENDPOINT_NAME)) return;
+    if (!await applyRateLimit(res, "user-login-ip", clientIp, 16, 10 * 60 * 1000, ENDPOINT_NAME)) return;
+    if (identifier && !await applyRateLimit(res, "user-login-identifier", identifier, 10, 10 * 60 * 1000, ENDPOINT_NAME)) return;
 
     if (!identifier || !password) {
       res.status(400).json({ ok: false, message: "Credenciales incompletas" });
@@ -705,8 +718,8 @@ export default async function handler(req, res) {
   if (action === "request-password-reset") {
     const email = normalizeEmail(body.email || "");
 
-    if (!applyRateLimit(res, "user-reset-request-ip", clientIp, 8, 20 * 60 * 1000, ENDPOINT_NAME)) return;
-    if (email && !applyRateLimit(res, "user-reset-request-email", email, 4, 20 * 60 * 1000, ENDPOINT_NAME)) return;
+    if (!await applyRateLimit(res, "user-reset-request-ip", clientIp, 8, 20 * 60 * 1000, ENDPOINT_NAME)) return;
+    if (email && !await applyRateLimit(res, "user-reset-request-email", email, 4, 20 * 60 * 1000, ENDPOINT_NAME)) return;
 
     let issuedToken = "";
     let resetLink = "";
@@ -773,8 +786,8 @@ export default async function handler(req, res) {
     const newPassword = String(body.newPassword || body.password || "").trim();
     const confirmPassword = String(body.confirmPassword || "").trim();
 
-    if (!applyRateLimit(res, "user-reset-confirm-ip", clientIp, 10, 20 * 60 * 1000, ENDPOINT_NAME)) return;
-    if (email && !applyRateLimit(res, "user-reset-confirm-email", email, 6, 20 * 60 * 1000, ENDPOINT_NAME)) return;
+    if (!await applyRateLimit(res, "user-reset-confirm-ip", clientIp, 10, 20 * 60 * 1000, ENDPOINT_NAME)) return;
+    if (email && !await applyRateLimit(res, "user-reset-confirm-email", email, 6, 20 * 60 * 1000, ENDPOINT_NAME)) return;
 
     if (!isValidEmail(email) || !token || !newPassword || !confirmPassword) {
       res.status(400).json({ ok: false, message: "Datos invalidos" });
@@ -806,22 +819,26 @@ export default async function handler(req, res) {
     }
 
     const passwordRecord = createPasswordRecord(newPassword);
+    let updatedUser = null;
     await updateStore((draft) => {
-      draft.users = (draft.users || []).map((entry) => (
-        String(entry.id) === String(user.id)
-          ? {
+      draft.users = (draft.users || []).map((entry) => {
+        if (String(entry.id) !== String(user.id)) return entry;
+        updatedUser = {
               ...entry,
               ...passwordRecord,
+              sessionVersion: normalizeSessionVersion(entry.sessionVersion) + 1,
               passwordResetTokenHash: "",
               passwordResetExpiresAt: 0,
               passwordResetRequestedAt: "",
               updatedAt: new Date().toISOString(),
-            }
-          : entry
-      ));
+            };
+        return updatedUser;
+      });
+      bumpRealtimeMeta(draft, ["users"]);
       return draft;
     });
 
+    res.setHeader("Set-Cookie", buildClearSessionCookie(COOKIE_NAME));
     res.status(200).json({ ok: true, message: "Contrasena actualizada" });
     return;
   }
@@ -832,8 +849,8 @@ export default async function handler(req, res) {
       rejectUnauthorized(res);
       return;
     }
-    if (!applyRateLimit(res, "user-profile-ip", clientIp, 24, 10 * 60 * 1000, ENDPOINT_NAME)) return;
-    if (!applyRateLimit(res, "user-profile-user", String(sessionUser.id), 20, 10 * 60 * 1000, ENDPOINT_NAME)) return;
+    if (!await applyRateLimit(res, "user-profile-ip", clientIp, 24, 10 * 60 * 1000, ENDPOINT_NAME)) return;
+    if (!await applyRateLimit(res, "user-profile-user", String(sessionUser.id), 20, 10 * 60 * 1000, ENDPOINT_NAME)) return;
 
     const name = normalizeLine(body.name || "");
     const lastName = normalizeLine(body.lastName || "");
@@ -898,8 +915,8 @@ export default async function handler(req, res) {
       rejectUnauthorized(res);
       return;
     }
-    if (!applyRateLimit(res, "user-state-ip", clientIp, 80, 10 * 60 * 1000, ENDPOINT_NAME)) return;
-    if (!applyRateLimit(res, "user-state-user", String(sessionUser.id), 120, 10 * 60 * 1000, ENDPOINT_NAME)) return;
+    if (!await applyRateLimit(res, "user-state-ip", clientIp, 80, 10 * 60 * 1000, ENDPOINT_NAME)) return;
+    if (!await applyRateLimit(res, "user-state-user", String(sessionUser.id), 120, 10 * 60 * 1000, ENDPOINT_NAME)) return;
 
     const hasCartPayload = Array.isArray(body.cart);
     const hasFavoritesPayload = Array.isArray(body.favorites);
@@ -983,8 +1000,8 @@ export default async function handler(req, res) {
       rejectUnauthorized(res);
       return;
     }
-    if (!applyRateLimit(res, "user-password-ip", clientIp, 12, 10 * 60 * 1000, ENDPOINT_NAME)) return;
-    if (!applyRateLimit(res, "user-password-user", String(sessionUser.id), 8, 10 * 60 * 1000, ENDPOINT_NAME)) return;
+    if (!await applyRateLimit(res, "user-password-ip", clientIp, 12, 10 * 60 * 1000, ENDPOINT_NAME)) return;
+    if (!await applyRateLimit(res, "user-password-user", String(sessionUser.id), 8, 10 * 60 * 1000, ENDPOINT_NAME)) return;
 
     const currentPassword = String(body.currentPassword || "").trim();
     const newPassword = String(body.newPassword || "").trim();
@@ -1008,23 +1025,32 @@ export default async function handler(req, res) {
     }
 
     const passwordRecord = createPasswordRecord(newPassword);
+    let updatedUser = null;
     await updateStore((draft) => {
-      draft.users = (draft.users || []).map((entry) => (
-        String(entry.id) === String(sessionUser.id)
-          ? {
+      draft.users = (draft.users || []).map((entry) => {
+        if (String(entry.id) !== String(sessionUser.id)) return entry;
+        updatedUser = {
               ...entry,
               ...passwordRecord,
+              sessionVersion: normalizeSessionVersion(entry.sessionVersion) + 1,
               passwordResetTokenHash: "",
               passwordResetExpiresAt: 0,
               passwordResetRequestedAt: "",
               updatedAt: new Date().toISOString(),
-            }
-          : entry
-      ));
+            };
+        return updatedUser;
+      });
       bumpRealtimeMeta(draft, ["users"]);
       return draft;
     });
 
+    if (!updatedUser) {
+      rejectUnauthorized(res);
+      return;
+    }
+
+    const nextSession = buildSession(updatedUser, sessionSecret);
+    res.setHeader("Set-Cookie", buildSessionCookie(COOKIE_NAME, nextSession.token, SESSION_TTL_MS / 1000));
     res.status(200).json({ ok: true });
     return;
   }

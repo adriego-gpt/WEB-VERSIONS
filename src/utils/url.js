@@ -1,309 +1,234 @@
 /**
- * URL normalization, WhatsApp link building, and external URL launching.
+ * URL and deep-link formatting utilities.
  */
-import { normalizeWhatsAppInternationalNumber } from "./phone";
-import { sanitizeParagraph, normalizeOptionLabel } from "./sanitizers";
-import { normalizeEmail } from "./sanitizers";
+import { normalizeWhatsAppInternationalNumber } from "./phone.js";
+import { sanitizeParagraph, normalizeEmail } from "./sanitizers.js";
 
 export function normalizeSafeUrl(value = "") {
   const raw = String(value || "").trim();
   if (!raw) return "";
+  if (raw.startsWith("/") || raw.startsWith("#")) return raw;
   const hasScheme = /^[a-zA-Z][a-zA-Z\d+\-.]*:/.test(raw);
   if (!hasScheme && !raw.includes(".")) return "";
   const candidate = hasScheme ? raw : `https://${raw}`;
   try {
-    const url = new URL(candidate);
-    if (!["https:", "http:"].includes(url.protocol)) return "";
-    return url.toString();
+    const parsed = new URL(candidate);
+    if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+      return parsed.toString();
+    }
   } catch {
-    return "";
+    // invalid URL format, ignore
   }
+  return "";
 }
 
 export function isValidEmail(value = "") {
-  const email = normalizeEmail(value);
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || "").trim());
 }
 
-export function normalizeContactEmail(value = "", fallback = "") {
-  const normalized = normalizeEmail(value || fallback);
-  return isValidEmail(normalized) ? normalized : "";
+export function normalizeContactEmail(value = "", fallback = "soporte@adriegostore.com") {
+  const clean = normalizeEmail(value);
+  return isValidEmail(clean) ? clean : fallback;
 }
 
-export function buildMailtoLink(email = "") {
-  const normalized = normalizeContactEmail(email);
-  return normalized ? `mailto:${normalized}` : "";
+export function buildMailtoLink(options = {}) {
+  const { to = "", subject = "", body = "" } = typeof options === "string"
+    ? { to: options }
+    : (options || {});
+  const email = normalizeContactEmail(to);
+  const params = new URLSearchParams();
+  if (subject) params.set("subject", sanitizeParagraph(subject));
+  if (body) params.set("body", String(body || "").trim());
+  const query = params.toString();
+  return query ? `mailto:${email}?${query}` : `mailto:${email}`;
 }
 
-export function buildWhatsAppLink(number, text = "") {
-  const digits = normalizeWhatsAppInternationalNumber(number);
-  if (!digits) return "";
-  return `https://wa.me/${digits}${text ? `?text=${encodeURIComponent(text)}` : ""}`;
+function normalizeWhatsAppArguments(phoneOrOptions = "", positionalText = "") {
+  if (phoneOrOptions && typeof phoneOrOptions === "object") {
+    return {
+      phone: phoneOrOptions.phone || "",
+      text: phoneOrOptions.text ?? positionalText,
+    };
+  }
+  return { phone: phoneOrOptions || "", text: positionalText };
 }
 
-export function buildWhatsAppApiSendLink(number, text = "") {
-  const digits = normalizeWhatsAppInternationalNumber(number);
-  if (!digits) return "";
-  const params = new URLSearchParams({ phone: digits });
-  if (text) params.set("text", text);
+export function buildWhatsAppLink(phoneOrOptions = "", positionalText = "") {
+  const { phone, text } = normalizeWhatsAppArguments(phoneOrOptions, positionalText);
+  const cleanPhone = normalizeWhatsAppInternationalNumber(phone);
+  if (!cleanPhone) return "";
+  const encodedText = encodeURIComponent(String(text || "").trim());
+  return encodedText ? `https://wa.me/${cleanPhone}?text=${encodedText}` : `https://wa.me/${cleanPhone}`;
+}
+
+export function buildWhatsAppApiSendLink(phoneOrOptions = "", positionalText = "") {
+  const { phone, text } = normalizeWhatsAppArguments(phoneOrOptions, positionalText);
+  const cleanPhone = normalizeWhatsAppInternationalNumber(phone);
+  if (!cleanPhone) return "";
+  const params = new URLSearchParams({ phone: cleanPhone });
+  if (text) params.set("text", String(text || "").trim());
   return `https://api.whatsapp.com/send?${params.toString()}`;
 }
 
-export function buildWhatsAppWebSendLink(number, text = "") {
-  const digits = normalizeWhatsAppInternationalNumber(number);
-  if (!digits) return "";
-  const params = new URLSearchParams({ phone: digits });
-  if (text) params.set("text", text);
+export function buildWhatsAppWebSendLink(phoneOrOptions = "", positionalText = "") {
+  const { phone, text } = normalizeWhatsAppArguments(phoneOrOptions, positionalText);
+  const cleanPhone = normalizeWhatsAppInternationalNumber(phone);
+  if (!cleanPhone) return "";
+  const params = new URLSearchParams({ phone: cleanPhone });
+  if (text) params.set("text", String(text || "").trim());
   return `https://web.whatsapp.com/send?${params.toString()}`;
 }
 
 export function parseWhatsAppTargetFromUrl(url = "") {
-  const safeUrl = normalizeSafeUrl(url);
-  if (!safeUrl) {
-    return {
-      safeUrl: "",
-      isWhatsApp: false,
-      phone: "",
-      text: "",
-    };
-  }
+  const clean = String(url || "").trim();
+  if (!clean) return { phone: "", text: "" };
   try {
-    const parsed = new URL(safeUrl);
-    const hostname = parsed.hostname.toLowerCase();
-    const isWaMe = hostname === "wa.me" || hostname.endsWith(".wa.me");
-    const isWhatsAppDomain = hostname.endsWith("whatsapp.com");
-    if (!isWaMe && !isWhatsAppDomain) {
-      return {
-        safeUrl,
-        isWhatsApp: false,
-        phone: "",
-        text: "",
-      };
+    const parsed = new URL(clean);
+    if (parsed.hostname.includes("wa.me")) {
+      const phone = parsed.pathname.replace(/^\/+/, "").split("/")[0] || "";
+      const text = parsed.searchParams.get("text") || "";
+      return { phone: normalizeWhatsAppInternationalNumber(phone), text };
     }
-
-    let phone = "";
-    if (isWaMe) {
-      phone = normalizeWhatsAppInternationalNumber(parsed.pathname.replace(/\//g, ""));
-      if (!phone) phone = normalizeWhatsAppInternationalNumber(parsed.searchParams.get("phone") || "");
-    } else {
-      phone = normalizeWhatsAppInternationalNumber(parsed.searchParams.get("phone") || "");
-      if (!phone && parsed.pathname.toLowerCase().startsWith("/send/")) {
-        phone = normalizeWhatsAppInternationalNumber(parsed.pathname.slice("/send/".length));
-      }
+    if (parsed.hostname.includes("whatsapp.com")) {
+      const phone = parsed.searchParams.get("phone") || "";
+      const text = parsed.searchParams.get("text") || "";
+      return { phone: normalizeWhatsAppInternationalNumber(phone), text };
     }
-
-    const text = sanitizeParagraph(parsed.searchParams.get("text") || "");
-    return {
-      safeUrl,
-      isWhatsApp: true,
-      phone,
-      text,
-    };
   } catch {
-    return {
-      safeUrl,
-      isWhatsApp: false,
-      phone: "",
-      text: "",
-    };
+    // ignore
   }
+  return { phone: "", text: "" };
 }
 
-export function buildWhatsAppLinkFromBase(link, text = "") {
-  const safeLink = normalizeSafeUrl(link);
-  if (!safeLink) return "";
-  try {
-    const parsed = new URL(safeLink);
-    const hostname = parsed.hostname.toLowerCase();
-    const isWaMe = hostname === "wa.me" || hostname.endsWith(".wa.me");
-    const isWhatsAppDomain = hostname.endsWith("whatsapp.com");
-    if (!isWaMe && !isWhatsAppDomain) return "";
-
-    const phoneFromPath = normalizeWhatsAppInternationalNumber(parsed.pathname.replace(/\//g, ""));
-    const phoneFromQuery = normalizeWhatsAppInternationalNumber(parsed.searchParams.get("phone") || "");
-    const resolvedPhone = phoneFromPath || phoneFromQuery;
-
-    if (isWaMe) {
-      if (resolvedPhone) parsed.pathname = `/${resolvedPhone}`;
-      parsed.searchParams.delete("phone");
-    } else if (!parsed.pathname || parsed.pathname === "/") {
-      parsed.pathname = "/send";
-    }
-    if (!isWaMe && resolvedPhone) parsed.searchParams.set("phone", resolvedPhone);
-    parsed.searchParams.delete("type");
-    parsed.searchParams.delete("app_absent");
-
-    const resolvedText = sanitizeParagraph(text || parsed.searchParams.get("text") || "");
-    const canAttachText = isWaMe || parsed.pathname.toLowerCase().startsWith("/send");
-    if (canAttachText) {
-      if (resolvedText) parsed.searchParams.set("text", resolvedText);
-      else parsed.searchParams.delete("text");
-    }
-
-    return parsed.toString();
-  } catch {
-    return "";
-  }
+export function buildWhatsAppLinkFromBase(baseUrl = "", options = {}) {
+  const isPositionalText = typeof options === "string";
+  const { phone = "", text = "" } = isPositionalText ? { text: options } : (options || {});
+  const fromBase = parseWhatsAppTargetFromUrl(baseUrl);
+  const targetPhone = phone || fromBase.phone;
+  const hasExplicitText = isPositionalText || Object.prototype.hasOwnProperty.call(options || {}, "text");
+  const targetText = hasExplicitText ? text : fromBase.text;
+  return buildWhatsAppLink({ phone: targetPhone, text: targetText });
 }
 
-export function resolveWhatsAppLaunchUrls(url = "") {
-  const safeUrl = normalizeSafeUrl(url);
-  if (!safeUrl) return { deepLink: "", webFallback: "", desktopWeb: "" };
+export function resolveWhatsAppLaunchUrls({ phone = "", text = "", preferredUrl = "" } = {}) {
+  const target = preferredUrl ? parseWhatsAppTargetFromUrl(preferredUrl) : { phone, text };
+  const finalPhone = target.phone || phone;
+  const finalText = target.text !== undefined ? target.text : text;
 
-  const target = parseWhatsAppTargetFromUrl(safeUrl);
-  if (!target.isWhatsApp) {
-    return { deepLink: "", webFallback: safeUrl, desktopWeb: safeUrl };
-  }
-
-  const deepParams = new URLSearchParams();
-  if (target.phone) deepParams.set("phone", target.phone);
-  if (target.text) deepParams.set("text", target.text);
-  const deepLink = `whatsapp://send${deepParams.toString() ? `?${deepParams.toString()}` : ""}`;
-
-  const mobileFallback = target.phone
-    ? (buildWhatsAppLink(target.phone, target.text) || buildWhatsAppApiSendLink(target.phone, target.text))
-    : (buildWhatsAppLinkFromBase(safeUrl, target.text) || safeUrl);
-
-  const desktopWeb = target.phone
-    ? (
-      buildWhatsAppApiSendLink(target.phone, target.text)
-      || buildWhatsAppLink(target.phone, target.text)
-      || buildWhatsAppWebSendLink(target.phone, target.text)
-    )
-    : (buildWhatsAppLinkFromBase(safeUrl, target.text) || safeUrl);
+  const shortLink = buildWhatsAppLink({ phone: finalPhone, text: finalText });
+  const apiLink = buildWhatsAppApiSendLink({ phone: finalPhone, text: finalText });
+  const webLink = buildWhatsAppWebSendLink({ phone: finalPhone, text: finalText });
 
   return {
-    deepLink,
-    webFallback: normalizeSafeUrl(mobileFallback) || safeUrl,
-    desktopWeb: normalizeSafeUrl(desktopWeb) || safeUrl,
+    primary: shortLink || apiLink || webLink || "",
+    fallback: apiLink || shortLink || "",
+    web: webLink || "",
   };
 }
 
-export function launchExternalUrl(url, options = {}) {
-  if (!url || typeof window === "undefined") return false;
+export function preOpenExternalWindow() {
+  if (typeof window === "undefined" || typeof window.open !== "function") return null;
+  try {
+    const popup = window.open("", "_blank");
+    if (popup) {
+      popup.opener = null;
+    }
+    return popup;
+  } catch {
+    return null;
+  }
+}
+
+export function closeExternalWindow(popupWindow = null) {
+  if (!popupWindow) return;
+  try {
+    if (typeof popupWindow.close === "function" && !popupWindow.closed) {
+      popupWindow.close();
+    }
+  } catch {
+    // ignore
+  }
+}
+
+export function launchExternalUrl(url = "", { target = "_blank", popupWindow = null } = {}) {
   const safeUrl = normalizeSafeUrl(url);
-  if (!safeUrl) return false;
-  const preferredWindow = options?.preferredWindow || null;
+  if (!safeUrl || typeof window === "undefined") {
+    closeExternalWindow(popupWindow);
+    return false;
+  }
+
+  if (popupWindow && !popupWindow.closed) {
+    try {
+      popupWindow.location.href = safeUrl;
+      return true;
+    } catch {
+      // fallback to normal window.open
+    }
+  }
+
+  try {
+    const opened = window.open(safeUrl, target, "noopener,noreferrer");
+    if (opened) {
+      opened.opener = null;
+      return true;
+    }
+  } catch {
+    // ignore
+  }
+
+  try {
+    window.location.assign(safeUrl);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function launchWhatsAppUrl(urlOrOptions = {}, launchOptions = {}) {
+  const directUrl = typeof urlOrOptions === "string" ? normalizeSafeUrl(urlOrOptions) : "";
+  const resolvedUrls = directUrl ? null : resolveWhatsAppLaunchUrls(urlOrOptions);
+  const targetUrl = directUrl || resolvedUrls?.primary || resolvedUrls?.fallback || "";
+  const safeUrl = normalizeSafeUrl(targetUrl);
+  const preferredWindow = launchOptions?.preferredWindow || launchOptions?.popupWindow || null;
+  const isMobile = Boolean(launchOptions?.isMobile);
+
+  if (!safeUrl || typeof window === "undefined") {
+    closeExternalWindow(preferredWindow);
+    return { launched: false, mode: "none", url: "" };
+  }
 
   if (preferredWindow && !preferredWindow.closed) {
     try {
       preferredWindow.location.href = safeUrl;
-      preferredWindow.opener = null;
-      return true;
+      return { launched: true, mode: "deep-link-window", url: safeUrl };
     } catch {
-      // Continue with default fallbacks below.
+      closeExternalWindow(preferredWindow);
     }
   }
 
-  const popup = window.open(safeUrl, "_blank", "noopener,noreferrer");
-  if (popup) return true;
-
-  try {
-    const anchor = document.createElement("a");
-    anchor.href = safeUrl;
-    anchor.target = "_blank";
-    anchor.rel = "noopener noreferrer";
-    anchor.click();
-    return true;
-  } catch {
+  if (isMobile) {
     try {
-      window.location.href = safeUrl;
-      return true;
+      window.location.assign(safeUrl);
+      return { launched: true, mode: "deep-link", url: safeUrl };
     } catch {
-      return false;
+      return { launched: false, mode: "none", url: safeUrl };
     }
   }
-}
 
-export function launchWhatsAppUrl(url, options = {}) {
-  if (!url || typeof window === "undefined") return { launched: false, mode: "invalid" };
-
-  const safeUrl = normalizeSafeUrl(url);
-  if (!safeUrl) return { launched: false, mode: "invalid" };
-
-  const isMobile = Boolean(options?.isMobile);
-  const preferredWindow = options?.preferredWindow || null;
-  const { deepLink, webFallback, desktopWeb } = resolveWhatsAppLaunchUrls(safeUrl);
-  const fallbackUrl = webFallback || safeUrl;
-  const desktopUrl = desktopWeb || fallbackUrl || safeUrl;
-
-  if (!isMobile) {
-    const launched = launchExternalUrl(desktopUrl, { preferredWindow });
-    return { launched, mode: launched ? "web" : "failed" };
-  }
-
-  if (!deepLink) {
-    const launched = launchExternalUrl(fallbackUrl, { preferredWindow });
-    return { launched, mode: launched ? "web-fallback" : "failed" };
-  }
-
-  let deepLinkTriggered = false;
   try {
-    if (preferredWindow && !preferredWindow.closed) {
-      preferredWindow.location.href = deepLink;
-      preferredWindow.opener = null;
-      deepLinkTriggered = true;
+    const opened = window.open(safeUrl, "_blank", "noopener,noreferrer");
+    if (opened) {
+      opened.opener = null;
+      return { launched: true, mode: "web-window", url: safeUrl };
     }
   } catch {
-    deepLinkTriggered = false;
+    // Continue with same-window fallback.
   }
 
-  if (!deepLinkTriggered) {
-    try {
-      window.location.href = deepLink;
-      deepLinkTriggered = true;
-    } catch {
-      const launched = launchExternalUrl(fallbackUrl, { preferredWindow });
-      return { launched, mode: launched ? "web-fallback" : "failed" };
-    }
-  }
-
-  const fallbackDelayMs = Math.max(700, Number(options?.fallbackDelayMs) || 1200);
-  let timeoutId = null;
-  const cleanup = () => {
-    if (timeoutId) window.clearTimeout(timeoutId);
-    timeoutId = null;
-    if (typeof document !== "undefined") {
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
-    }
-    window.removeEventListener("pagehide", handlePageHide);
-  };
-  const handleVisibilityChange = () => {
-    if (typeof document !== "undefined" && document.hidden) {
-      cleanup();
-    }
-  };
-  const handlePageHide = () => {
-    cleanup();
-  };
-
-  if (typeof document !== "undefined") {
-    document.addEventListener("visibilitychange", handleVisibilityChange, { passive: true });
-  }
-  window.addEventListener("pagehide", handlePageHide, { passive: true });
-  timeoutId = window.setTimeout(() => {
-    if (typeof document !== "undefined" && document.hidden) {
-      cleanup();
-      return;
-    }
-    launchExternalUrl(fallbackUrl, { preferredWindow });
-    cleanup();
-  }, fallbackDelayMs);
-
-  return { launched: true, mode: preferredWindow && !preferredWindow.closed ? "deep-link-window" : "deep-link" };
-}
-
-/** No-op stub. Kept for API compatibility; original window.open pre-open was removed to prevent popup blockers. */
-export function preOpenExternalWindow() {
-  return null;
-}
-
-/** Close a pre-opened external window, if any. Safe to call with null. */
-export function closeExternalWindow(targetWindow) {
-  if (!targetWindow || typeof targetWindow.close !== "function") return;
   try {
-    if (!targetWindow.closed) targetWindow.close();
+    window.location.assign(safeUrl);
+    return { launched: true, mode: "same-window", url: safeUrl };
   } catch {
-    // No-op if browser blocks close.
+    return { launched: false, mode: "none", url: safeUrl };
   }
 }
