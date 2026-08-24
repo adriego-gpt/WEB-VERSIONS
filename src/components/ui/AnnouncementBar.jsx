@@ -6,17 +6,17 @@ const ANNOUNCEMENTS = [
   {
     id: "shipping",
     icon: Truck,
-    text: "Envíos a todo el país · Pagos seguros con transferencia y tarjeta",
+    text: "Envíos nacionales · Pagos 100% seguros",
   },
   {
     id: "guarantee",
     icon: ShieldCheck,
-    text: "Garantía de cambio en 7 días · Compra con total confianza",
+    text: "Garantía de cambio en 7 días",
   },
   {
     id: "collection",
     icon: Sparkles,
-    text: "Nueva Colección Adriego 2026 · Edición Limitada disponible",
+    text: "Colección 2026 · Ya disponible",
   },
 ];
 
