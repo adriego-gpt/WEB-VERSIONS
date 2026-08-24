@@ -1,7 +1,7 @@
-import { normalizeEntityId, sanitizeLine, sanitizeParagraph } from "../../utils/sanitizers";
-import { normalizeUserPhoneNumber } from "../../utils/phone";
-import { createUid } from "../../utils/uid";
-import { MAX_ADDRESS_BOOK_ENTRIES } from "../../constants/ui";
+import { normalizeEntityId, sanitizeLine, sanitizeParagraph } from "../../utils/sanitizers.js";
+import { normalizeUserPhoneNumber } from "../../utils/phone.js";
+import { createUid } from "../../utils/uid.js";
+import { MAX_ADDRESS_BOOK_ENTRIES } from "../../constants/ui.js";
 
 export function normalizeAddressBookEntry(rawEntry = {}, fallbackId = "") {
   const address = sanitizeParagraph(rawEntry?.address || "").slice(0, 320);

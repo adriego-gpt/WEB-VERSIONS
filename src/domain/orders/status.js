@@ -1,5 +1,5 @@
 import { Clock3, BadgeCheck, Package, Truck, Store, CheckCircle2, CircleX } from "lucide-react";
-import { normalizeOptionLabel } from "../../utils/sanitizers";
+import { normalizeOptionLabel } from "../../utils/sanitizers.js";
 
 export function normalizeOrderStatus(value = "Pendiente") {
   const normalized = normalizeOptionLabel(value).toLowerCase();

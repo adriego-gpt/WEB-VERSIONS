@@ -1,4 +1,4 @@
-import { FALLBACK_IMAGE } from "../../constants/product";
+import { FALLBACK_IMAGE } from "../../constants/product.js";
 
 export function getImagesForColor(product, color) {
   const requestedColor = color && product?.imagesByColor?.[color]?.length ? color : null;
