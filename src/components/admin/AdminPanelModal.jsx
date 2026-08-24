@@ -1704,3 +1704,4 @@ const MemoCatalogProductCard = React.memo(
   ),
 );
 
+export default AdminPanelModal;
