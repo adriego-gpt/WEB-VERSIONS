@@ -121,7 +121,7 @@ export default async function handler(req, res) {
     return;
   }
 
-  const syncRateLimit = await consumeRateLimit("catalog-sync-admin-ip", clientIp, 60, 10 * 60 * 1000, {
+  const syncRateLimit = await consumeRateLimit("catalog-sync-admin-ip", clientIp, 300, 10 * 60 * 1000, {
     endpoint: ENDPOINT_NAME,
     ip: clientIp,
   });

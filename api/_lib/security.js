@@ -871,15 +871,17 @@ async function consumeRateLimit(namespace, key, limit, windowMs, context = {}) {
 
   const safeNamespace = normalizeLine(namespace).toLowerCase().replace(/[^a-z0-9:_-]/g, "-").slice(0, 80);
   const keyHash = crypto.createHash("sha256").update(String(key || "unknown")).digest("hex").slice(0, 32);
-  const bucketKey = `adriego:rate-limit:${safeNamespace || "default"}:${keyHash}`;
+  const bucketKey = `adriego:rl-v2:${safeNamespace || "default"}:${keyHash}`;
+  const safeWindowMs = Math.max(1000, Math.floor(windowMs));
 
   try {
     const count = Math.max(0, Number(await runKvCommand("INCR", bucketKey)) || 0);
-    if (count === 1) {
-      await runKvCommand("PEXPIRE", bucketKey, String(Math.max(1000, Math.floor(windowMs))));
+    let ttl = Number(await runKvCommand("PTTL", bucketKey));
+    if (!Number.isFinite(ttl) || ttl <= 0) {
+      await runKvCommand("PEXPIRE", bucketKey, String(safeWindowMs));
+      ttl = safeWindowMs;
     }
-    const ttl = Number(await runKvCommand("PTTL", bucketKey));
-    const retryAfterMs = Number.isFinite(ttl) && ttl > 0 ? ttl : Math.max(1000, windowMs);
+    const retryAfterMs = Number.isFinite(ttl) && ttl > 0 ? ttl : safeWindowMs;
     if (count <= limit) {
       return { ok: true, retryAfterMs: 0 };
     }
