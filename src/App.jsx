@@ -7582,7 +7582,9 @@ export default function App() {
             />
           </Suspense>
         </ErrorBoundary>
-{legalModalState.open && (
+      )}
+
+      {legalModalState.open && (
         <ErrorBoundary onReset={() => setLegalModalState((prev) => ({ ...prev, open: false }))}>
           <Suspense fallback={null}>
             <LegalModal
