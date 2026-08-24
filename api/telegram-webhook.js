@@ -18,7 +18,7 @@ function currency(value) {
 
 async function answerCallbackQuery(token, callbackQueryId, text = "") {
   try {
-    await fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
+    await fetch("https://api.telegram.org/bot" + token + "/answerCallbackQuery", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -41,7 +41,7 @@ async function sendTelegramMessage(token, chatId, text, options = {}) {
       disable_web_page_preview: true,
       ...options,
     };
-    await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+    await fetch("https://api.telegram.org/bot" + token + "/sendMessage", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -55,7 +55,7 @@ export default async function handler(req, res) {
   setCommonSecurityHeaders(res);
   const clientIp = getClientIp(req);
 
-  const rateCheck = consumeRateLimit(`telegram-webhook:${clientIp}`, {
+  const rateCheck = consumeRateLimit("telegram-webhook:" + clientIp, {
     limit: 60,
     windowMs: 60 * 1000,
   });
@@ -105,31 +105,37 @@ export default async function handler(req, res) {
       const newStatus = statusMap[targetAction] || "En preparación";
       let updatedOrder = null;
 
-      await updateStore((draft) => {
-        const orders = Array.isArray(draft.orders) ? draft.orders : [];
-        const targetIndex = orders.findIndex((order) => String(order.code).toUpperCase() === String(orderCode).toUpperCase());
-        if (targetIndex >= 0) {
-          orders[targetIndex] = {
-            ...orders[targetIndex],
-            status: newStatus,
-            updatedAt: new Date().toISOString(),
-          };
-          updatedOrder = orders[targetIndex];
-          draft.orders = [...orders];
-          bumpRealtimeMeta(draft, ["orders"]);
-        }
-        return draft;
-      });
+      // Answer Telegram UI immediately so button stops spinning
+      await answerCallbackQuery(token, cb.id, "Actualizando pedido " + orderCode + "...");
+
+      try {
+        await updateStore((draft) => {
+          const orders = Array.isArray(draft.orders) ? draft.orders : [];
+          const targetIndex = orders.findIndex((order) => String(order.code).toUpperCase() === String(orderCode).toUpperCase());
+          if (targetIndex >= 0) {
+            orders[targetIndex] = {
+              ...orders[targetIndex],
+              status: newStatus,
+              updatedAt: new Date().toISOString(),
+            };
+            updatedOrder = orders[targetIndex];
+            draft.orders = [...orders];
+            bumpRealtimeMeta(draft, ["orders"]);
+          }
+          return draft;
+        });
+      } catch (storeError) {
+        console.error("[store-update-error]", storeError?.message || storeError);
+      }
 
       if (updatedOrder) {
-        await answerCallbackQuery(token, cb.id, `✅ ${orderCode} marcado como ${newStatus}`);
         await sendTelegramMessage(
           token,
           senderChatId,
-          `✅ *Estado Actualizado con Éxito*\n━━━━━━━━━━━━━━━━━━━━\n📦 *Pedido:* \`${orderCode}\`\n🏷️ *Nuevo Estado:* *${newStatus}*\n⏰ *Hora:* ${new Date().toLocaleTimeString("es-EC")}\n👤 *Cliente:* ${escapeTelegramMarkdown(updatedOrder.customerName || "Cliente")}`,
+          "✅ *Estado Actualizado con Éxito*\n━━━━━━━━━━━━━━━━━━━━\n📦 *Pedido:* `" + orderCode + "`\n🏷️ *Nuevo Estado:* *" + newStatus + "*\n⏰ *Hora:* " + new Date().toLocaleTimeString("es-EC") + "\n👤 *Cliente:* " + escapeTelegramMarkdown(updatedOrder.customerName || "Cliente"),
         );
       } else {
-        await answerCallbackQuery(token, cb.id, `⚠️ Pedido ${orderCode} no encontrado.`);
+        await sendTelegramMessage(token, senderChatId, "⚠️ Pedido `" + orderCode + "` no encontrado en la base de datos.");
       }
     }
 
@@ -171,7 +177,7 @@ export default async function handler(req, res) {
 
   // Command Handlers for Admin
   if (lowerText === "/start" || lowerText === "hola" || lowerText === "/menu") {
-    const welcome = `👑 *Panel Administrativo · Adriego Store*\n\n¡Hola ${senderName}! Tu sesión está autenticada y protegida con máxima seguridad.\n\n⚡ *Comandos disponibles:*\n• `/ventas` - Ver resumen de ventas y pedidos de hoy\n• `/pendientes` - Ver pedidos por preparar o despachar\n• `/stock_bajo` - Ver prendas con poco inventario\n• `/buscar <código>` - Consultar un pedido específico\n\n🔗 [Abrir Panel Web](https://adriego.vercel.app/admin)`;
+    const welcome = "👑 *Panel Administrativo · Adriego Store*\n\n¡Hola " + senderName + "! Tu sesión está autenticada y protegida con máxima seguridad.\n\n⚡ *Comandos disponibles:*\n• `/ventas` - Ver resumen de ventas y pedidos de hoy\n• `/pendientes` - Ver pedidos por preparar o despachar\n• `/stock_bajo` - Ver prendas con poco inventario\n• `/buscar <código>` - Consultar un pedido específico\n\n🔗 [Abrir Panel Web](https://adriego.vercel.app/admin)";
     await sendTelegramMessage(token, senderChatId, welcome);
   } else if (lowerText === "/ventas" || lowerText === "ventas") {
     const store = await readStore();
@@ -181,7 +187,7 @@ export default async function handler(req, res) {
     const todayTotal = todayOrders.reduce((sum, o) => sum + (Number(o.total || o.subtotal) || 0), 0);
     const allTotal = orders.reduce((sum, o) => sum + (Number(o.total || o.subtotal) || 0), 0);
 
-    const report = `📊 *Resumen de Ventas · Adriego Store*\n━━━━━━━━━━━━━━━━━━━━\n📅 *Ventas de Hoy (${todayIso}):*\n• *Pedidos:* ${todayOrders.length}\n• *Total Facturado:* *${currency(todayTotal)}*\n\n📈 *Ventas Totales Registradas:*\n• *Total Pedidos:* ${orders.length}\n• *Monto Acumulado:* *${currency(allTotal)}*\n━━━━━━━━━━━━━━━━━━━━\n⚡ [Ver Historial en Panel Admin](https://adriego.vercel.app/admin)`;
+    const report = "📊 *Resumen de Ventas · Adriego Store*\n━━━━━━━━━━━━━━━━━━━━\n📅 *Ventas de Hoy (" + todayIso + "):*\n• *Pedidos:* " + todayOrders.length + "\n• *Total Facturado:* *" + currency(todayTotal) + "*\n\n📈 *Ventas Totales Registradas:*\n• *Total Pedidos:* " + orders.length + "\n• *Monto Acumulado:* *" + currency(allTotal) + "*\n━━━━━━━━━━━━━━━━━━━━\n⚡ [Ver Historial en Panel Admin](https://adriego.vercel.app/admin)";
     await sendTelegramMessage(token, senderChatId, report);
   } else if (lowerText === "/pendientes" || lowerText === "pendientes") {
     const store = await readStore();
@@ -196,9 +202,9 @@ export default async function handler(req, res) {
     } else {
       const list = pendingOrders
         .slice(0, 8)
-        .map((o, idx) => `${idx + 1}. \`${o.code}\` · ${escapeTelegramMarkdown(o.customerName || "Cliente")} · *${currency(o.total || o.subtotal)}* (${o.status})`)
+        .map((o, idx) => (idx + 1) + ". `" + o.code + "` · " + escapeTelegramMarkdown(o.customerName || "Cliente") + " · *" + currency(o.total || o.subtotal) + "* (" + o.status + ")")
         .join("\n");
-      const msg = `📦 *Pedidos Pendientes (${pendingOrders.length}):*\n━━━━━━━━━━━━━━━━━━━━\n${list}\n━━━━━━━━━━━━━━━━━━━━\n⚡ [Gestionar en Panel Admin](https://adriego.vercel.app/admin)`;
+      const msg = "📦 *Pedidos Pendientes (" + pendingOrders.length + "):*\n━━━━━━━━━━━━━━━━━━━━\n" + list + "\n━━━━━━━━━━━━━━━━━━━━\n⚡ [Gestionar en Panel Admin](https://adriego.vercel.app/admin)";
       await sendTelegramMessage(token, senderChatId, msg);
     }
   } else if (lowerText === "/stock_bajo" || lowerText === "stock" || lowerText === "/stock") {
@@ -226,21 +232,21 @@ export default async function handler(req, res) {
     } else {
       const list = lowList
         .slice(0, 12)
-        .map((item) => `• *${escapeTelegramMarkdown(item.name)}* (${item.color} | ${item.size}) ➔ *${item.stock === 0 ? "🛑 AGOTADO" : `⚠️ ${item.stock} unid.`}*`)
+        .map((item) => "• *" + escapeTelegramMarkdown(item.name) + "* (" + item.color + " | " + item.size + ") ➔ *" + (item.stock === 0 ? "🛑 AGOTADO" : "⚠️ " + item.stock + " unid.") + "*")
         .join("\n");
-      const msg = `⚠️ *Prendas con Stock Bajo / Agotadas (${lowList.length}):*\n━━━━━━━━━━━━━━━━━━━━\n${list}\n━━━━━━━━━━━━━━━━━━━━\n⚡ [Reponer en Panel Admin](https://adriego.vercel.app/admin)`;
+      const msg = "⚠️ *Prendas con Stock Bajo / Agotadas (" + lowList.length + "):*\n━━━━━━━━━━━━━━━━━━━━\n" + list + "\n━━━━━━━━━━━━━━━━━━━━\n⚡ [Reponer en Panel Admin](https://adriego.vercel.app/admin)";
       await sendTelegramMessage(token, senderChatId, msg);
     }
   } else if (lowerText.startsWith("/buscar") || lowerText.startsWith("buscar")) {
-    const query = text.replace(/^/?buscars*/i, "").trim().toUpperCase();
+    const query = text.replace(/^[/]?buscar\s*/i, "").trim().toUpperCase();
     const store = await readStore();
     const orders = Array.isArray(store?.orders) ? store.orders : [];
     const found = orders.find((o) => String(o.code).toUpperCase().includes(query) || String(o.customerName || "").toUpperCase().includes(query));
 
     if (!found) {
-      await sendTelegramMessage(token, senderChatId, `🔍 No se encontró ningún pedido que coincida con "\${query}".`);
+      await sendTelegramMessage(token, senderChatId, "🔍 No se encontró ningún pedido que coincida con \"" + query + "\".");
     } else {
-      const msg = `🔍 *Detalle del Pedido*\n━━━━━━━━━━━━━━━━━━━━\n📦 *Código:* \`${found.code}\`\n👤 *Cliente:* ${escapeTelegramMarkdown(found.customerName || "Cliente")}\n📞 *Teléfono:* \`${found.customerPhone || "N/A"}\`\n🏷️ *Estado:* *${found.status}*\n💰 *Total:* *${currency(found.total || found.subtotal)}*\n📍 *Entrega:* ${found.deliveryType === "delivery" ? "Envío a Domicilio" : "Retiro en Local"}\n━━━━━━━━━━━━━━━━━━━━\n⚡ [Ver en Panel Admin](https://adriego.vercel.app/admin)`;
+      const msg = "🔍 *Detalle del Pedido*\n━━━━━━━━━━━━━━━━━━━━\n📦 *Código:* `" + found.code + "`\n👤 *Cliente:* " + escapeTelegramMarkdown(found.customerName || "Cliente") + "\n📞 *Teléfono:* `" + (found.customerPhone || "N/A") + "`\n🏷️ *Estado:* *" + found.status + "*\n💰 *Total:* *" + currency(found.total || found.subtotal) + "*\n📍 *Entrega:* " + (found.deliveryType === "delivery" ? "Envío a Domicilio" : "Retiro en Local") + "\n━━━━━━━━━━━━━━━━━━━━\n⚡ [Ver en Panel Admin](https://adriego.vercel.app/admin)";
       await sendTelegramMessage(token, senderChatId, msg);
     }
   } else {
