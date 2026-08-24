@@ -4864,21 +4864,50 @@ export default function App() {
     });
   };
 
-  const updateQuantity = (key, delta) => {
+  const updateQuantity = async (key, delta) => {
+    const item = cart.find((entry) => entry.key === key);
+    if (!item) return;
+
+    if (item.quantity + delta <= 0) {
+      const confirmed = await requestDestructiveConfirmation({
+        title: "¿Eliminar prenda?",
+        description: `¿Estás seguro de que deseas quitar "${item.name}" (${item.color} - ${item.size}) de tu carrito?`,
+        confirmLabel: "Eliminar",
+        cancelLabel: "Conservar",
+        confirmTone: "danger",
+      });
+      if (!confirmed) return;
+      setCart((previous) => previous.filter((entry) => entry.key !== key));
+      showToastMessage("Prenda eliminada del carrito.", "info");
+      return;
+    }
+
     setCart((previous) => previous
-      .map((item) => {
-        if (item.key !== key) return item;
-        const product = productsById.get(normalizeEntityId(item.id));
-        const availableStock = getStockForVariant(product, item.color, item.size);
-        const nextQuantity = item.quantity + delta;
-        if (nextQuantity > availableStock) return item;
-        return nextQuantity <= 0 ? null : { ...item, quantity: nextQuantity };
-      })
-      .filter(Boolean));
+      .map((entry) => {
+        if (entry.key !== key) return entry;
+        const product = productsById.get(normalizeEntityId(entry.id));
+        const availableStock = getStockForVariant(product, entry.color, entry.size);
+        const nextQuantity = entry.quantity + delta;
+        if (nextQuantity > availableStock) return entry;
+        return { ...entry, quantity: nextQuantity };
+      }));
   };
 
-  const removeItem = (key) => {
-    setCart((previous) => previous.filter((item) => item.key !== key));
+  const removeItem = async (key) => {
+    const item = cart.find((entry) => entry.key === key);
+    if (!item) return;
+
+    const confirmed = await requestDestructiveConfirmation({
+      title: "¿Eliminar prenda?",
+      description: `¿Estás seguro de que deseas quitar "${item.name}" (${item.color} - ${item.size}) de tu carrito?`,
+      confirmLabel: "Eliminar",
+      cancelLabel: "Conservar",
+      confirmTone: "danger",
+    });
+    if (!confirmed) return;
+
+    setCart((previous) => previous.filter((entry) => entry.key !== key));
+    showToastMessage("Prenda eliminada del carrito.", "info");
   };
 
   const handleAuthFieldChange = (field, value) => {
