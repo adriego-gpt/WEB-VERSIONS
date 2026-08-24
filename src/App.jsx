@@ -104,6 +104,7 @@ import { AnimatedCurrencyValue } from "./components/ui/AnimatedCurrencyValue";
 import { EmotionalEmptyState } from "./components/ui/EmotionalEmptyState";
 import { ConfirmModal } from "./components/ui/ConfirmModal";
 import { CustomDropdown } from "./components/ui/CustomDropdown";
+import { AnnouncementBar } from "./components/ui/AnnouncementBar";
 import { normalizeOrderStatusForOrder } from "./domain/orders/status";
 import {
   PAYMENT_METHODS,
@@ -7720,6 +7721,8 @@ export default function App() {
       </AnimatePresence>
 
       <a className="skip-link" href="#main-content">Saltar al catálogo</a>
+
+      <AnnouncementBar />
 
       <header className="topbar">
         <div className="container nav">
