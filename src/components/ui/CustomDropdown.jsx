@@ -19,12 +19,6 @@ export function CustomDropdown({
   const selectedIndex = options.findIndex((opt) => opt.value === value);
 
   useEffect(() => {
-    if (isOpen) {
-      setHighlightedIndex(selectedIndex >= 0 ? selectedIndex : 0);
-    }
-  }, [isOpen, selectedIndex]);
-
-  useEffect(() => {
     if (!isOpen) return undefined;
     const handleClickOutside = (event) => {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
@@ -75,7 +69,13 @@ export function CustomDropdown({
         ref={triggerRef}
         type="button"
         className={`custom-dropdown-trigger ${isOpen ? "open" : ""}`}
-        onClick={() => setIsOpen((prev) => !prev)}
+        onClick={() => {
+          setIsOpen((prev) => {
+            const next = !prev;
+            if (next) setHighlightedIndex(selectedIndex >= 0 ? selectedIndex : 0);
+            return next;
+          });
+        }}
         aria-haspopup="listbox"
         aria-expanded={isOpen}
         aria-label={ariaLabel || placeholder}

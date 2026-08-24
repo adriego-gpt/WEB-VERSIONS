@@ -167,24 +167,24 @@ async function deliverPasswordResetEmail({ to = "", resetLink = "" }) {
   const safeSupportEmail = escapeHtml(supportEmail || "");
   const currentYear = new Date().getFullYear();
 
-  const subject = `${brandName} | Solicitud segura para restablecer tu contrasena`;
+  const subject = `${brandName} | Solicitud para restablecer tu contraseña`;
   const text = [
     `Hola,`,
     "",
-    `Recibimos una solicitud para restablecer la contrasena de tu cuenta en ${brandName}.`,
+    `Recibimos una solicitud para restablecer la contraseña de tu cuenta en ${brandName}.`,
     "",
-    "Para continuar, usa este enlace seguro:",
+    "Para continuar de forma segura, usa este enlace:",
     `${resetLink}`,
     "",
-    `Por tu seguridad, el enlace estara disponible por aproximadamente ${expiresMinutes} minutos.`,
+    `Por motivos de seguridad, este enlace es temporal y caducará en ${expiresMinutes} minutos.`,
     "",
     "Recomendaciones de seguridad:",
-    "- Crea una contrasena unica que no uses en otros sitios.",
-    "- No compartas este enlace con nadie.",
-    "- Si no solicitaste este cambio, ignora este correo.",
+    "- Crea una contraseña única que no utilices en otras plataformas.",
+    "- No compartas este enlace con terceros.",
+    "- Si no solicitaste este cambio, puedes desestimar este mensaje de inmediato.",
     "",
-    "Tu cuenta no se modificara si no usas el enlace.",
-    safeSupportEmail ? `Si necesitas ayuda, escribe a: ${supportEmail}` : "",
+    "Tu cuenta no se modificará si no utilizas el enlace.",
+    safeSupportEmail ? `Soporte oficial: ${supportEmail}` : "",
     "",
     `Atentamente,`,
     `Equipo de ${brandName}`,
@@ -198,81 +198,128 @@ async function deliverPasswordResetEmail({ to = "", resetLink = "" }) {
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>${safeBrandName} - Seguridad de cuenta</title>
     <style>
-      @media only screen and (max-width: 620px) {
-        .email-shell { padding: 20px 12px !important; }
-        .email-card { border-radius: 16px !important; }
-        .email-body { padding: 24px 20px !important; }
-        .email-title { font-size: 24px !important; line-height: 1.2 !important; }
-        .email-btn { display: block !important; width: 100% !important; box-sizing: border-box !important; }
+      @media only screen and (max-width: 600px) {
+        .email-shell { padding: 16px 8px !important; }
+        .email-card { border-radius: 12px !important; }
+        .email-header { padding: 18px 20px !important; }
+        .email-body { padding: 26px 20px 20px !important; }
+        .email-title { font-size: 22px !important; line-height: 1.25 !important; }
+        .email-btn { display: block !important; width: 100% !important; text-align: center !important; box-sizing: border-box !important; padding: 15px 16px !important; }
+        .email-footer { padding: 18px 20px 22px !important; }
       }
     </style>
   </head>
-  <body style="margin:0;padding:0;background:#f1f5f9;color:#0f172a;">
-    <div style="display:none;max-height:0;overflow:hidden;opacity:0;">
-      Solicitud segura para restablecer tu contrasena en ${safeBrandName}.
+  <body style="margin:0;padding:0;background-color:#f4f4f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;color:#18181b;">
+    <div style="display:none;font-size:1px;color:#f4f4f5;line-height:1px;max-height:0px;max-width:0px;opacity:0;overflow:hidden;">
+      Enlace seguro para restablecer la contraseña de tu cuenta en ${safeBrandName}. Válido por ${expiresMinutes} minutos.
     </div>
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f1f5f9;">
+
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f4f4f5;width:100%;margin:0;padding:0;">
       <tr>
-        <td align="center" class="email-shell" style="padding:28px 16px;">
-          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;background:#ffffff;border:1px solid #e2e8f0;border-radius:20px;overflow:hidden;" class="email-card">
+        <td align="center" class="email-shell" style="padding:36px 16px;">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:560px;width:100%;background-color:#ffffff;border:1px solid #e4e4e7;border-radius:16px;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,0.04);" class="email-card">
+            
+            <!-- Brand Header -->
             <tr>
-              <td style="padding:18px 24px;background:linear-gradient(135deg,#020617 0%,#0f172a 55%,#1e293b 100%);">
-                <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+              <td class="email-header" style="padding:22px 32px;background-color:#000000;">
+                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
                   <tr>
-                    <td align="left" style="font-family:'Segoe UI',Arial,sans-serif;color:#ffffff;font-size:18px;font-weight:700;letter-spacing:.03em;">
-                      ${safeBrandName}
+                    <td align="left" style="vertical-align:middle;">
+                      <span style="color:#ffffff;font-size:16px;font-weight:800;letter-spacing:0.2em;text-transform:uppercase;display:inline-block;">
+                        ${safeBrandName}
+                      </span>
                     </td>
-                    <td align="right">
-                      <span style="display:inline-block;padding:6px 10px;border-radius:999px;background:#0f172a;color:#bfdbfe;border:1px solid #334155;font-family:'Segoe UI',Arial,sans-serif;font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;">Cuenta protegida</span>
+                    <td align="right" style="vertical-align:middle;">
+                      <span style="display:inline-block;padding:4px 10px;border-radius:999px;background:rgba(255,255,255,0.12);border:1px solid rgba(255,255,255,0.22);color:#ffffff;font-size:10px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;">
+                        Seguridad de cuenta
+                      </span>
                     </td>
                   </tr>
                 </table>
               </td>
             </tr>
+
+            <!-- Body Content -->
             <tr>
-              <td class="email-body" style="padding:30px 28px 24px;">
-                <p style="margin:0 0 12px;font-family:'Segoe UI',Arial,sans-serif;font-size:14px;color:#64748b;">Hola,</p>
-                <h1 class="email-title" style="margin:0 0 14px;font-family:'Segoe UI',Arial,sans-serif;font-size:28px;line-height:1.24;color:#020617;">Restablece tu contrasena</h1>
-                <p style="margin:0 0 14px;font-family:'Segoe UI',Arial,sans-serif;font-size:15px;line-height:1.65;color:#334155;">
-                  Recibimos una solicitud para cambiar la contrasena de tu cuenta en <strong>${safeBrandName}</strong>.
-                </p>
-                <p style="margin:0 0 22px;font-family:'Segoe UI',Arial,sans-serif;font-size:15px;line-height:1.65;color:#334155;">
-                  Para continuar de forma segura, usa el boton de abajo. Este enlace estara activo por aproximadamente <strong>${expiresMinutes} minutos</strong>.
+              <td class="email-body" style="padding:36px 32px 28px;">
+                
+                <!-- Eyebrow -->
+                <p style="margin:0 0 8px;font-size:11px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;color:#71717a;">
+                  Recuperación de acceso
                 </p>
 
-                <table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 0 18px;">
+                <!-- Title -->
+                <h1 class="email-title" style="margin:0 0 16px;font-size:25px;font-weight:700;line-height:1.25;color:#09090b;letter-spacing:-0.02em;">
+                  Restablece tu contraseña
+                </h1>
+
+                <!-- Message -->
+                <p style="margin:0 0 14px;font-size:14px;line-height:1.65;color:#3f3f46;">
+                  Hola,
+                </p>
+                <p style="margin:0 0 16px;font-size:14px;line-height:1.65;color:#3f3f46;">
+                  Recibimos una solicitud para cambiar la contraseña de tu cuenta en <strong>${safeBrandName}</strong>.
+                </p>
+                <p style="margin:0 0 26px;font-size:14px;line-height:1.65;color:#3f3f46;">
+                  Para definir una nueva contraseña y recuperar tu acceso de forma inmediata, haz clic en el botón de abajo. Por tu seguridad, este enlace es temporal y caducará en <strong>${expiresMinutes} minutos</strong>.
+                </p>
+
+                <!-- Action Button -->
+                <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 28px;width:100%;">
                   <tr>
-                    <td>
-                      <a href="${safeResetLink}" class="email-btn" style="display:inline-block;padding:14px 24px;border-radius:12px;background:#0f172a;color:#ffffff;font-family:'Segoe UI',Arial,sans-serif;font-size:15px;font-weight:700;text-decoration:none;letter-spacing:.01em;">
-                        Restablecer contrasena
+                    <td align="left">
+                      <a href="${safeResetLink}" class="email-btn" style="display:inline-block;padding:14px 28px;background-color:#000000;color:#ffffff;font-size:13px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;text-decoration:none;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,0.12);">
+                        Restablecer mi contraseña &rarr;
                       </a>
                     </td>
                   </tr>
                 </table>
 
-                <p style="margin:0 0 10px;font-family:'Segoe UI',Arial,sans-serif;font-size:13px;line-height:1.6;color:#64748b;">
-                  Si el boton no abre, copia y pega este enlace en tu navegador:
+                <!-- Divider -->
+                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 22px;">
+                  <tr>
+                    <td style="border-top:1px solid #f4f4f5;height:1px;line-height:1px;font-size:1px;">&nbsp;</td>
+                  </tr>
+                </table>
+
+                <!-- Fallback URL Section -->
+                <p style="margin:0 0 8px;font-size:11px;font-weight:600;letter-spacing:0.04em;text-transform:uppercase;color:#71717a;">
+                  ¿El botón no responde? Copia este enlace en tu navegador:
                 </p>
-                <div style="margin:0 0 18px;padding:10px 12px;border:1px solid #e2e8f0;border-radius:10px;background:#f8fafc;word-break:break-all;font-family:Consolas,'Courier New',monospace;font-size:12px;line-height:1.6;color:#1e293b;">
+                <div style="margin:0 0 22px;padding:12px 14px;background-color:#fafafa;border:1px solid #e4e4e7;border-radius:8px;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:11px;line-height:1.5;color:#18181b;word-break:break-all;">
                   ${safeResetLink}
                 </div>
 
-                <div style="margin:0 0 18px;padding:12px 14px;border-left:4px solid #0f172a;background:#f8fafc;border-radius:8px;">
-                  <p style="margin:0;font-family:'Segoe UI',Arial,sans-serif;font-size:13px;line-height:1.65;color:#475569;">
-                    Si no solicitaste este cambio, puedes ignorar este correo con tranquilidad. Tu acceso seguira intacto.
+                <!-- Security Advisory Banner -->
+                <div style="margin:0;padding:12px 16px;background-color:#fafafa;border-left:3px solid #000000;border-radius:0 8px 8px 0;">
+                  <p style="margin:0;font-size:12px;line-height:1.6;color:#52525b;">
+                    <strong>Nota de seguridad:</strong> Si tú no solicitaste este cambio, puedes desestimar este mensaje de inmediato. Tu contraseña y datos personales continúan totalmente seguros.
                   </p>
                 </div>
 
-                ${safeSupportEmail ? `<p style="margin:0;font-family:'Segoe UI',Arial,sans-serif;font-size:13px;line-height:1.6;color:#64748b;">Soporte: <a href="mailto:${safeSupportEmail}" style="color:#0f172a;text-decoration:none;font-weight:600;">${safeSupportEmail}</a></p>` : ""}
               </td>
             </tr>
+
+            <!-- Footer -->
             <tr>
-              <td style="padding:14px 24px 20px;border-top:1px solid #e2e8f0;background:#ffffff;">
-                <p style="margin:0;font-family:'Segoe UI',Arial,sans-serif;font-size:12px;line-height:1.6;color:#94a3b8;">
-                  © ${currentYear} ${safeBrandName}. Correo enviado por seguridad de tu cuenta.
-                </p>
+              <td class="email-footer" style="padding:22px 32px 26px;background-color:#fafafa;border-top:1px solid #f4f4f5;">
+                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                  <tr>
+                    <td>
+                      <p style="margin:0 0 6px;font-size:11px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:#71717a;">
+                        ${safeBrandName} · TIENDA OFICIAL
+                      </p>
+                      ${safeSupportEmail ? `<p style="margin:0 0 10px;font-size:12px;line-height:1.5;color:#71717a;">Soporte oficial: <a href="mailto:${safeSupportEmail}" style="color:#000000;text-decoration:none;font-weight:600;">${safeSupportEmail}</a></p>` : ""}
+                      <p style="margin:0;font-size:11px;line-height:1.5;color:#a1a1aa;">
+                        &copy; ${currentYear} ${safeBrandName}. Todos los derechos reservados.<br />
+                        Este es un correo transaccional generado automáticamente por seguridad.
+                      </p>
+                    </td>
+                  </tr>
+                </table>
               </td>
             </tr>
+
           </table>
         </td>
       </tr>
