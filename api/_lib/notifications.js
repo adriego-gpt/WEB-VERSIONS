@@ -44,6 +44,11 @@ export function buildTelegramOrderKeyboard(order = {}) {
   actionRow.push({ text: "⚡ Panel Web", url: "https://adriego.vercel.app/admin" });
   rows.push(actionRow);
 
+  // For delivery orders, add a button to quickly view the full delivery address
+  if (order.deliveryType === "delivery") {
+    rows.push([{ text: "📍 Ver Dirección de Envío", callback_data: `address:${code}` }]);
+  }
+
   const statusRow = [];
   if (order.deliveryType === "pickup") {
     statusRow.push({ text: "🏬 Listo para Retiro", callback_data: `status:ready:${code}` });

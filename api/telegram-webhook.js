@@ -94,7 +94,7 @@ export default async function handler(req, res) {
     if (data.startsWith("status:")) {
       const parts = data.split(":");
       const targetAction = parts[1];
-      const orderCode = parts[2];
+      const orderCode = parts.slice(2).join(":");
 
       const statusMap = {
         ready: "Listo para retiro",
@@ -129,13 +129,49 @@ export default async function handler(req, res) {
       }
 
       if (updatedOrder) {
+        const deliveryInfo = updatedOrder.deliveryType === "delivery"
+          ? "\n📍 *Envío a:* " + escapeTelegramMarkdown(updatedOrder.deliveryCity || "") + " — " + escapeTelegramMarkdown(updatedOrder.deliveryAddress || "")
+          : "\n🏬 *Retiro en local*";
         await sendTelegramMessage(
           token,
           senderChatId,
-          "✅ *Estado Actualizado con Éxito*\n━━━━━━━━━━━━━━━━━━━━\n📦 *Pedido:* `" + orderCode + "`\n🏷️ *Nuevo Estado:* *" + newStatus + "*\n⏰ *Hora:* " + new Date().toLocaleTimeString("es-EC") + "\n👤 *Cliente:* " + escapeTelegramMarkdown(updatedOrder.customerName || "Cliente"),
+          "✅ *Estado Actualizado con Éxito*\n━━━━━━━━━━━━━━━━━━━━\n📦 *Pedido:* `" + orderCode + "`\n🏷️ *Nuevo Estado:* *" + newStatus + "*" + deliveryInfo + "\n⏰ *Hora:* " + new Date().toLocaleTimeString("es-EC") + "\n👤 *Cliente:* " + escapeTelegramMarkdown(updatedOrder.customerName || "Cliente"),
         );
       } else {
         await sendTelegramMessage(token, senderChatId, "⚠️ Pedido `" + orderCode + "` no encontrado en la base de datos.");
+      }
+    } else if (data.startsWith("address:")) {
+      // Handle "Ver Dirección de Envío" button
+      const orderCode = data.slice("address:".length);
+
+      await answerCallbackQuery(token, cb.id, "Consultando dirección...");
+
+      try {
+        const store = await readStore();
+        const orders = Array.isArray(store?.orders) ? store.orders : [];
+        const found = orders.find((o) => String(o.code).toUpperCase() === String(orderCode).toUpperCase());
+
+        if (found) {
+          const addressLines = [
+            "📍 *Dirección de Envío*",
+            "━━━━━━━━━━━━━━━━━━━━",
+            "📦 *Pedido:* `" + found.code + "`",
+            "👤 *Destinatario:* " + escapeTelegramMarkdown(found.deliveryFullName || found.customerName || "Cliente"),
+          ];
+          if (found.deliveryIdNumber) addressLines.push("🪪 *Cédula/RUC:* `" + escapeTelegramMarkdown(found.deliveryIdNumber) + "`");
+          if (found.deliveryPhone || found.customerPhone) addressLines.push("📞 *Teléfono:* `" + escapeTelegramMarkdown(found.deliveryPhone || found.customerPhone) + "`");
+          if (found.deliveryCity) addressLines.push("🏙️ *Ciudad:* " + escapeTelegramMarkdown(found.deliveryCity));
+          if (found.deliveryAddress) addressLines.push("🏠 *Dirección:* " + escapeTelegramMarkdown(found.deliveryAddress));
+          if (found.deliveryReference) addressLines.push("🧭 *Referencia:* " + escapeTelegramMarkdown(found.deliveryReference));
+          addressLines.push("━━━━━━━━━━━━━━━━━━━━");
+
+          await sendTelegramMessage(token, senderChatId, addressLines.join("\n"));
+        } else {
+          await sendTelegramMessage(token, senderChatId, "⚠️ Pedido `" + orderCode + "` no encontrado.");
+        }
+      } catch (err) {
+        console.error("[address-lookup-error]", err?.message || err);
+        await sendTelegramMessage(token, senderChatId, "⚠️ Error al consultar la dirección.");
       }
     }
 
@@ -194,7 +230,7 @@ export default async function handler(req, res) {
     const orders = Array.isArray(store?.orders) ? store.orders : [];
     const pendingOrders = orders.filter((o) => {
       const s = String(o.status || "").toLowerCase();
-      return s === "pendiente" || s === "en preparación" || s === "listo para retiro";
+      return s === "pendiente" || s === "en preparación" || s === "listo para retiro" || s === "enviado";
     });
 
     if (pendingOrders.length === 0) {
@@ -202,7 +238,10 @@ export default async function handler(req, res) {
     } else {
       const list = pendingOrders
         .slice(0, 8)
-        .map((o, idx) => (idx + 1) + ". `" + o.code + "` · " + escapeTelegramMarkdown(o.customerName || "Cliente") + " · *" + currency(o.total || o.subtotal) + "* (" + o.status + ")")
+        .map((o, idx) => {
+          const typeIcon = o.deliveryType === "delivery" ? "🚚" : "🏬";
+          return (idx + 1) + ". `" + o.code + "` " + typeIcon + " · " + escapeTelegramMarkdown(o.customerName || "Cliente") + " · *" + currency(o.total || o.subtotal) + "* (" + o.status + ")";
+        })
         .join("\n");
       const msg = "📦 *Pedidos Pendientes (" + pendingOrders.length + "):*\n━━━━━━━━━━━━━━━━━━━━\n" + list + "\n━━━━━━━━━━━━━━━━━━━━\n⚡ [Gestionar en Panel Admin](https://adriego.vercel.app/admin)";
       await sendTelegramMessage(token, senderChatId, msg);
@@ -246,7 +285,10 @@ export default async function handler(req, res) {
     if (!found) {
       await sendTelegramMessage(token, senderChatId, "🔍 No se encontró ningún pedido que coincida con \"" + query + "\".");
     } else {
-      const msg = "🔍 *Detalle del Pedido*\n━━━━━━━━━━━━━━━━━━━━\n📦 *Código:* `" + found.code + "`\n👤 *Cliente:* " + escapeTelegramMarkdown(found.customerName || "Cliente") + "\n📞 *Teléfono:* `" + (found.customerPhone || "N/A") + "`\n🏷️ *Estado:* *" + found.status + "*\n💰 *Total:* *" + currency(found.total || found.subtotal) + "*\n📍 *Entrega:* " + (found.deliveryType === "delivery" ? "Envío a Domicilio" : "Retiro en Local") + "\n━━━━━━━━━━━━━━━━━━━━\n⚡ [Ver en Panel Admin](https://adriego.vercel.app/admin)";
+      const deliveryDetail = found.deliveryType === "delivery"
+        ? "🚚 Envío a Domicilio\n🏙️ *Ciudad:* " + escapeTelegramMarkdown(found.deliveryCity || "N/A") + "\n🏠 *Dirección:* " + escapeTelegramMarkdown(found.deliveryAddress || "N/A") + (found.deliveryReference ? "\n🧭 *Referencia:* " + escapeTelegramMarkdown(found.deliveryReference) : "")
+        : "🏬 Retiro en Local";
+      const msg = "🔍 *Detalle del Pedido*\n━━━━━━━━━━━━━━━━━━━━\n📦 *Código:* `" + found.code + "`\n👤 *Cliente:* " + escapeTelegramMarkdown(found.customerName || "Cliente") + "\n📞 *Teléfono:* `" + (found.customerPhone || "N/A") + "`\n🏷️ *Estado:* *" + found.status + "*\n💰 *Total:* *" + currency(found.total || found.subtotal) + "*\n📍 *Entrega:* " + deliveryDetail + "\n━━━━━━━━━━━━━━━━━━━━\n⚡ [Ver en Panel Admin](https://adriego.vercel.app/admin)";
       await sendTelegramMessage(token, senderChatId, msg);
     }
   } else {
