@@ -108,7 +108,11 @@ async function readKvStore() {
   if (typeof serialized !== "string") {
     return normalizeStore(serialized);
   }
-  return normalizeStore(JSON.parse(serialized));
+  try {
+    return normalizeStore(JSON.parse(serialized));
+  } catch {
+    return clone(DEFAULT_STORE);
+  }
 }
 
 async function writeKvStore(store) {

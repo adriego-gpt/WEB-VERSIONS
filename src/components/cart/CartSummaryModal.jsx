@@ -52,28 +52,28 @@ import { ImageLightbox } from "../ui/ImageLightbox";
 export function CartSummaryModal({
   open,
   onClose,
-  cart,
-  subtotal,
-  discountAmount,
-  finalTotal,
-  totalItems,
+  cart = [],
+  subtotal = 0,
+  discountAmount = 0,
+  finalTotal = 0,
+  totalItems = 0,
   onUpdateQuantity,
   onRemoveItem,
   onOpenItem,
   onEditItem,
-  products,
+  products = [],
   onCheckout,
   onSaveCheckoutAddress,
-  checkoutDisabled,
-  requiresLogin,
-  couponDraftCode,
+  checkoutDisabled = false,
+  requiresLogin = false,
+  couponDraftCode = "",
   onCouponDraftChange,
   onApplyCoupon,
   onRemoveCoupon,
   couponState,
-  hasActiveCoupon,
-  couponBusy,
-  checkoutBusy,
+  hasActiveCoupon = false,
+  couponBusy = false,
+  checkoutBusy = false,
   onBrowseCatalog,
   currentUser,
   savedAddresses = [],
@@ -393,8 +393,8 @@ export function CartSummaryModal({
                   onAction={onBrowseCatalog}
                 />
               ) : (
-                cart.map((item) => {
-                  const productRecord = products.find((product) => product.id === item.id);
+                (cart || []).map((item) => {
+                  const productRecord = (products || []).find((product) => product.id === item.id);
                   const stockStatus = getStockStatus(getStockForVariant(productRecord, item.color, item.size));
                   return (
                     <Motion.div key={item.key} layout className="cart-item sheet-product-card cart-line-item">

@@ -5,8 +5,8 @@ import { motion as Motion, AnimatePresence } from "framer-motion";
 export function UserAuthModal({
   open,
   mode,
-  form,
-  validation,
+  form = {},
+  validation = {},
   canSubmit = true,
   error,
   busy = false,
@@ -33,12 +33,12 @@ export function UserAuthModal({
     return "Empieza a crear una contraseña segura";
   }, [passwordStrengthPercent]);
 
-  const showNameError = Boolean(isRegister && fieldErrors.name && String(form.name || "").trim());
-  const showEmailError = Boolean(fieldErrors.email && String(form.email || "").trim());
-  const showPhoneError = Boolean(isRegister && fieldErrors.phone && String(form.phone || "").trim());
-  const showPasswordError = Boolean((isLogin || isRegister || isReset) && fieldErrors.password && String(form.password || ""));
-  const showConfirmPasswordError = Boolean((isRegister || isReset) && fieldErrors.confirmPassword && (String(form.confirmPassword || "") || String(form.password || "")));
-  const showResetTokenError = Boolean(isReset && fieldErrors.resetToken && String(form.resetToken || "").trim());
+  const showNameError = Boolean(isRegister && fieldErrors.name && String(form?.name || "").trim());
+  const showEmailError = Boolean(fieldErrors.email && String(form?.email || "").trim());
+  const showPhoneError = Boolean(isRegister && fieldErrors.phone && String(form?.phone || "").trim());
+  const showPasswordError = Boolean((isLogin || isRegister || isReset) && fieldErrors.password && String(form?.password || ""));
+  const showConfirmPasswordError = Boolean((isRegister || isReset) && fieldErrors.confirmPassword && (String(form?.confirmPassword || "") || String(form?.password || "")));
+  const showResetTokenError = Boolean(isReset && fieldErrors.resetToken && String(form?.resetToken || "").trim());
   const authModalTitle = isRegister
     ? "Crear cuenta"
     : isForgot
@@ -364,10 +364,10 @@ export function ProfileModal({
   open,
   onClose,
   activeSection = "datos",
-  profileDraft,
+  profileDraft = {},
   onFieldChange,
   onSaveProfile,
-  addressBookDraft,
+  addressBookDraft = {},
   addressBookEditingId,
   onAddressBookDraftChange,
   onSaveAddressBookEntry,
@@ -375,7 +375,7 @@ export function ProfileModal({
   onDeleteAddressBookEntry,
   onSelectAddressBookEntry,
   profileFeedback,
-  passwordDraft,
+  passwordDraft = {},
   onPasswordFieldChange,
   onChangePassword,
   passwordFeedback,
@@ -436,10 +436,10 @@ export function ProfileModal({
                     <UserRound size={20} />
                   </div>
                   <div className="settings-grid" style={{ marginTop: 14 }}>
-                    <input className="input" placeholder="Nombre" value={profileDraft.name} onChange={(event) => onFieldChange("name", event.target.value)} />
-                    <input className="input" placeholder="Apellido" value={profileDraft.lastName} onChange={(event) => onFieldChange("lastName", event.target.value)} />
-                    <input className="input" placeholder="Teléfono" inputMode="tel" maxLength={10} value={profileDraft.phone} onChange={(event) => onFieldChange("phone", event.target.value)} />
-                    <input className="input" placeholder="Correo" type="email" value={profileDraft.email} onChange={(event) => onFieldChange("email", event.target.value)} />
+                    <input className="input" placeholder="Nombre" value={profileDraft?.name || ""} onChange={(event) => onFieldChange("name", event.target.value)} />
+                    <input className="input" placeholder="Apellido" value={profileDraft?.lastName || ""} onChange={(event) => onFieldChange("lastName", event.target.value)} />
+                    <input className="input" placeholder="Teléfono" inputMode="tel" maxLength={10} value={profileDraft?.phone || ""} onChange={(event) => onFieldChange("phone", event.target.value)} />
+                    <input className="input" placeholder="Correo" type="email" value={profileDraft?.email || ""} onChange={(event) => onFieldChange("email", event.target.value)} />
                   </div>
                   {profileFeedback?.message && (
                     <div className={`status-message ${profileFeedback.tone === "error" ? "status-error" : "status-success"}`} style={{ marginTop: 14 }}>
@@ -548,9 +548,9 @@ export function ProfileModal({
                     <KeyRound size={20} />
                   </div>
                   <div className="grid" style={{ gap: 12, marginTop: 14 }}>
-                    <input className="input" type="password" autoComplete="current-password" placeholder="Contrasena actual" value={passwordDraft.currentPassword} onChange={(event) => onPasswordFieldChange("currentPassword", event.target.value)} />
-                    <input className="input" type="password" autoComplete="new-password" placeholder="Nueva contraseña" value={passwordDraft.newPassword} onChange={(event) => onPasswordFieldChange("newPassword", event.target.value)} />
-                    <input className="input" type="password" autoComplete="new-password" placeholder="Confirmar nueva contraseña" value={passwordDraft.confirmPassword} onChange={(event) => onPasswordFieldChange("confirmPassword", event.target.value)} />
+                    <input className="input" type="password" autoComplete="current-password" placeholder="Contrasena actual" value={passwordDraft?.currentPassword || ""} onChange={(event) => onPasswordFieldChange("currentPassword", event.target.value)} />
+                    <input className="input" type="password" autoComplete="new-password" placeholder="Nueva contraseña" value={passwordDraft?.newPassword || ""} onChange={(event) => onPasswordFieldChange("newPassword", event.target.value)} />
+                    <input className="input" type="password" autoComplete="new-password" placeholder="Confirmar nueva contraseña" value={passwordDraft?.confirmPassword || ""} onChange={(event) => onPasswordFieldChange("confirmPassword", event.target.value)} />
                   </div>
                   {passwordFeedback?.message && (
                     <div className={`status-message ${passwordFeedback.tone === "error" ? "status-error" : "status-success"}`} style={{ marginTop: 14 }}>

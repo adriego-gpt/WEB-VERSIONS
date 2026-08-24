@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
+import { FALLBACK_IMAGE } from "../../constants/product";
 
 export function ImageLightbox({ open, src, alt = "Imagen ampliada", title = "Vista completa", onClose }) {
   const closeButtonRef = useRef(null);
@@ -35,7 +36,15 @@ export function ImageLightbox({ open, src, alt = "Imagen ampliada", title = "Vis
           </button>
         </div>
         <div className="image-lightbox-stage">
-          <img src={src} alt={alt} />
+          <img
+            src={src}
+            alt={alt}
+            decoding="async"
+            onError={(e) => {
+              e.currentTarget.onerror = null;
+              e.currentTarget.src = FALLBACK_IMAGE;
+            }}
+          />
         </div>
       </div>
     </div>,

@@ -4,7 +4,7 @@ import { motion as Motion, AnimatePresence } from "framer-motion";
 
 export function ProfileQuickMenu({
   open,
-  position,
+  position = { top: 0, left: 0 },
   onClose,
   onOpenSection,
   onOpenOrders,
@@ -24,7 +24,7 @@ export function ProfileQuickMenu({
       >
         <Motion.div
           className="profile-quick-menu"
-          style={{ top: `${position.top}px`, left: `${position.left}px` }}
+          style={{ top: `${position?.top || 0}px`, left: `${position?.left || 0}px` }}
           initial={{ opacity: 0, y: -8, scale: 0.96 }}
           animate={{ opacity: 1, y: 0, scale: 1 }}
           exit={{ opacity: 0, y: -6, scale: 0.97 }}

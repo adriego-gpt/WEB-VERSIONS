@@ -4,12 +4,12 @@ import { splitFilterTagsText, normalizeOptionLabel, currency } from "../../utils
 import { AdminSectionHeader } from "./AdminSectionHeader";
 
 export function CouponManagerPanel({
-  coupons,
-  couponDraft,
+  coupons = [],
+  couponDraft = {},
   couponEditorMessage,
   couponEditorError,
-  products,
-  productTypeOptions,
+  products = [],
+  productTypeOptions = [],
   onCouponDraftFieldChange,
   onToggleCouponDraftProduct,
   onToggleCouponDraftProductType,
@@ -19,10 +19,10 @@ export function CouponManagerPanel({
   onToggleCouponActive,
   onDeleteCoupon,
 }) {
-  const [showEditor, setShowEditor] = useState(Boolean(couponDraft.id));
+  const [showEditor, setShowEditor] = useState(Boolean(couponDraft?.id));
   const [expandedCouponId, setExpandedCouponId] = useState("");
   const selectedExcludedTypes = new Set(
-    splitFilterTagsText(couponDraft.excludedProductTypesText || "").map((item) => item.toLowerCase()),
+    splitFilterTagsText(couponDraft?.excludedProductTypesText || "").map((item) => item.toLowerCase()),
   );
 
   const startNewCoupon = () => {

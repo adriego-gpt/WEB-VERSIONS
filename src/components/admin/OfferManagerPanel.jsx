@@ -9,14 +9,14 @@ import {
 import { AdminSectionHeader } from "./AdminSectionHeader";
 
 export function OfferManagerPanel({
-  products,
-  query,
+  products = [],
+  query = "",
   onQueryChange,
-  activeCount,
-  pendingCount,
-  hasPendingChanges,
-  saving,
-  dirtyById,
+  activeCount = 0,
+  pendingCount = 0,
+  hasPendingChanges = false,
+  saving = false,
+  dirtyById = {},
   getDraft,
   getProductImage,
   onUpdateDraft,

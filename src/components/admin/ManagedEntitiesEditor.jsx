@@ -7,10 +7,10 @@ export function ManagedEntitiesEditor(props) {
     title,
     description,
     icon,
-    records,
-    products,
+    records = [],
+    products = [],
     entityType,
-    addInput,
+    addInput = "",
     setAddInput,
     onAdd,
     onDraftChange,
@@ -23,16 +23,16 @@ export function ManagedEntitiesEditor(props) {
   const [expandedRecordId, setExpandedRecordId] = useState("");
   const isType = entityType === "productType";
 
-  const getAssociationCount = (record) => products.filter((product) => (
+  const getAssociationCount = (record) => (products || []).filter((product) => (
     isType
-      ? normalizeOptionLabel(product.productType || "").toLowerCase() === record.name.toLowerCase()
-      : (product.filterTags || []).some((tag) => normalizeOptionLabel(tag).toLowerCase() === record.name.toLowerCase())
+      ? normalizeOptionLabel(product?.productType || "").toLowerCase() === (record?.name || "").toLowerCase()
+      : (product?.filterTags || []).some((tag) => normalizeOptionLabel(tag).toLowerCase() === (record?.name || "").toLowerCase())
   )).length;
 
-  const alternativesFor = (record) => records
+  const alternativesFor = (record) => (records || [])
     .filter((other) => other.id !== record.id)
     .sort((left, right) => {
-      if (left.active === right.active) return left.name.localeCompare(right.name, "es", { sensitivity: "base" });
+      if (left.active === right.active) return (left.name || "").localeCompare(right.name || "", "es", { sensitivity: "base" });
       return left.active ? -1 : 1;
     });
 

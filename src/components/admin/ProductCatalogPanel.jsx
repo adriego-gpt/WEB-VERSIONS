@@ -15,12 +15,12 @@ import { currency } from "../../utils";
 import { AdminSectionHeader } from "./AdminSectionHeader";
 
 export function ProductCatalogPanel({
-  products,
-  query,
+  products = [],
+  query = "",
   onQueryChange,
-  selectedSet,
-  allVisibleSelected,
-  bulkBusy,
+  selectedSet = new Set(),
+  allVisibleSelected = false,
+  bulkBusy = false,
   getProductImage,
   onCreate,
   onToggleSelection,
@@ -33,7 +33,7 @@ export function ProductCatalogPanel({
   onDuplicate,
   onDelete,
 }) {
-  const selectedCount = selectedSet.size;
+  const selectedCount = selectedSet?.size || 0;
 
   return (
     <section className="admin-workspace admin-catalog-workspace" aria-labelledby="admin-catalog-title">

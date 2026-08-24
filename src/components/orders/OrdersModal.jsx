@@ -65,7 +65,7 @@ export function OrdersModal({
                 onChange={(event) => onSearchChange(event.target.value)}
               />
             </label>
-            {orders.length === 0 ? (
+            {(!orders || orders.length === 0) ? (
               <div className="empty-admin-note">Aún no tienes pedidos.</div>
             ) : orders.map((order) => {
               const normalizedStatus = normalizeOrderStatusForOrder(order.status, order.deliveryType);
@@ -73,6 +73,7 @@ export function OrdersModal({
                 && (normalizedStatus === "Listo para retiro" || normalizedStatus === "Enviado");
               const paymentMethodLabel = order.paymentMethodLabel
                 || (order.paymentMethod === "card_link" ? "Tarjeta mediante enlace de pago" : "Transferencia bancaria");
+              const orderItems = Array.isArray(order.items) ? order.items : [];
               return (
                 <div key={order.id} className="cart-item customer-order-card">
                   <div className="admin-toolbar customer-order-header">
@@ -149,8 +150,8 @@ export function OrdersModal({
                         </button>
                       ) : null}
                       <div className="grid customer-order-items">
-                        {order.items.map((item) => (
-                          <div key={item.key} className="customer-order-item-row">
+                        {orderItems.map((item, itemIndex) => (
+                          <div key={item.key || `${item.id || item.name}-${itemIndex}`} className="customer-order-item-row">
                             <span>{item.name} · {item.color} · {item.size} ×{item.quantity}</span>
                             <strong>{currency(item.price * item.quantity)}</strong>
                           </div>
