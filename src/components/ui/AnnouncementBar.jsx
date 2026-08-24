@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { ChevronLeft, ChevronRight, Truck, ShieldCheck, Sparkles } from "lucide-react";
+import { Truck, ShieldCheck, Sparkles } from "lucide-react";
 import { motion as Motion, AnimatePresence } from "framer-motion";
 
 const ANNOUNCEMENTS = [
@@ -28,22 +28,12 @@ export function AnnouncementBar() {
     if (isPaused) return undefined;
     const interval = setInterval(() => {
       setCurrentIndex((prev) => (prev + 1) % ANNOUNCEMENTS.length);
-    }, 4200);
+    }, 4000);
     return () => clearInterval(interval);
   }, [isPaused]);
 
   const currentItem = ANNOUNCEMENTS[currentIndex];
   const CurrentIcon = currentItem.icon;
-
-  const handlePrev = (e) => {
-    e.stopPropagation();
-    setCurrentIndex((prev) => (prev - 1 + ANNOUNCEMENTS.length) % ANNOUNCEMENTS.length);
-  };
-
-  const handleNext = (e) => {
-    e.stopPropagation();
-    setCurrentIndex((prev) => (prev + 1) % ANNOUNCEMENTS.length);
-  };
 
   return (
     <div
@@ -54,23 +44,14 @@ export function AnnouncementBar() {
       aria-label="Anuncios de la tienda"
     >
       <div className="container announcement-bar-container">
-        <button
-          type="button"
-          className="announcement-nav-btn prev"
-          onClick={handlePrev}
-          aria-label="Anuncio anterior"
-        >
-          <ChevronLeft size={13} />
-        </button>
-
         <div className="announcement-content">
           <AnimatePresence mode="wait">
             <Motion.div
               key={currentItem.id}
-              initial={{ opacity: 0, y: 8 }}
+              initial={{ opacity: 0, y: 6 }}
               animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -8 }}
-              transition={{ duration: 0.28, ease: "easeOut" }}
+              exit={{ opacity: 0, y: -6 }}
+              transition={{ duration: 0.25, ease: "easeOut" }}
               className="announcement-message"
             >
               <CurrentIcon size={13} className="announcement-icon" />
@@ -78,15 +59,6 @@ export function AnnouncementBar() {
             </Motion.div>
           </AnimatePresence>
         </div>
-
-        <button
-          type="button"
-          className="announcement-nav-btn next"
-          onClick={handleNext}
-          aria-label="Anuncio siguiente"
-        >
-          <ChevronRight size={13} />
-        </button>
       </div>
     </div>
   );

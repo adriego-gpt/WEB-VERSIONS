@@ -4388,8 +4388,12 @@ export default function App() {
       { id: "contacto", tab: "inicio" },
     ];
 
+    let ticking = false;
     const syncActiveSection = () => {
-      if (showCartSummary || showFavoritesPanel) return;
+      if (showCartSummary || showFavoritesPanel) {
+        ticking = false;
+        return;
+      }
       const pivot = window.innerHeight * 0.32;
       let nextTab = "inicio";
       for (const section of sections) {
@@ -4399,15 +4403,23 @@ export default function App() {
           nextTab = section.tab;
         }
       }
-      setActiveMobileSection(nextTab);
+      setActiveMobileSection((prev) => (prev !== nextTab ? nextTab : prev));
+      ticking = false;
     };
 
-    syncActiveSection();
-    window.addEventListener("scroll", syncActiveSection, { passive: true });
-    window.addEventListener("resize", syncActiveSection);
+    const handleScrollOrResize = () => {
+      if (!ticking) {
+        ticking = true;
+        window.requestAnimationFrame(syncActiveSection);
+      }
+    };
+
+    handleScrollOrResize();
+    window.addEventListener("scroll", handleScrollOrResize, { passive: true });
+    window.addEventListener("resize", handleScrollOrResize, { passive: true });
     return () => {
-      window.removeEventListener("scroll", syncActiveSection);
-      window.removeEventListener("resize", syncActiveSection);
+      window.removeEventListener("scroll", handleScrollOrResize);
+      window.removeEventListener("resize", handleScrollOrResize);
     };
   }, [showCartSummary, showFavoritesPanel]);
 
