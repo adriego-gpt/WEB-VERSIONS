@@ -1,6 +1,7 @@
 
 import crypto from "node:crypto";
 import { bumpRealtimeMeta, updateStore } from "./_lib/store.js";
+import { dispatchOrderNotifications } from "./_lib/notifications.js";
 import {
   applyCouponUsage,
   createFriendlyOrderCode,
@@ -596,6 +597,12 @@ export default async function handler(req, res) {
       message: responsePayload.message || "No pudimos procesar el pedido.",
     });
     return;
+  }
+
+  if (responsePayload.order) {
+    dispatchOrderNotifications(responsePayload.order).catch((err) => {
+      console.error("[notifications-dispatch-error]", err?.message || err);
+    });
   }
 
   res.status(200).json(responsePayload);

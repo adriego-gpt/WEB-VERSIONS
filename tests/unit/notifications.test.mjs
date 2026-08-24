@@ -1,0 +1,86 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {
+  formatTelegramOrderMessage,
+  sendTelegramNotification,
+  sendN8nWebhook,
+  dispatchOrderNotifications,
+} from '../../api/_lib/notifications.js';
+
+test('Order Notifications Engine (Telegram & n8n)', async (t) => {
+  const sampleOrder = {
+    code: 'ORDER-10099',
+    customerName: 'Adrian Narvaez',
+    customerPhone: '0991234567',
+    customerEmail: 'adrian@test.local',
+    deliveryType: 'delivery',
+    deliveryIdNumber: '1723456789',
+    deliveryCity: 'Quito',
+    deliveryAddress: 'Av. Amazonas y Naciones Unidas',
+    deliveryReference: 'Frente al parque La Carolina',
+    paymentMethod: 'bank_transfer',
+    paymentMethodLabel: 'Transferencia bancaria',
+    paymentBankAccount: { bankName: 'Banco Pichincha' },
+    items: [
+      { name: 'Vestido Midi Satin', color: 'Rojo', size: 'S', quantity: 1, price: 79.99 },
+      { name: 'Blusa Seda', color: 'Blanco', size: 'M', quantity: 2, price: 35.00 },
+    ],
+    itemCount: 3,
+    subtotal: 149.99,
+    discountAmount: 15.00,
+    couponCode: 'ADRIEGO10',
+    paymentFeeAmount: 0,
+    total: 134.99,
+    paymentProof: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+  };
+
+  await t.test('1. formatTelegramOrderMessage generates rich formatted text with all critical order fields', () => {
+    const formatted = formatTelegramOrderMessage(sampleOrder);
+    assert.match(formatted, /ORDER-10099/);
+    assert.match(formatted, /Adrian Narvaez/);
+    assert.match(formatted, /0991234567/);
+    assert.match(formatted, /Envío a Domicilio/);
+    assert.match(formatted, /Quito/);
+    assert.match(formatted, /Av\. Amazonas/);
+    assert.match(formatted, /Banco Pichincha/);
+    assert.match(formatted, /Vestido Midi Satin/);
+    assert.match(formatted, /Blusa Seda/);
+    assert.match(formatted, /ADRIEGO10/);
+    assert.match(formatted, /\$134,99|\$134\.99/);
+  });
+
+  await t.test('2. Handles pickup delivery orders without shipping address cleanly', () => {
+    const pickupOrder = {
+      code: 'ORDER-10100',
+      customerName: 'Cliente Local',
+      deliveryType: 'pickup',
+      pickupAddress: 'Centro Comercial El Tejar',
+      items: [{ name: 'Falda Plisada', color: 'Negro', size: 'M', quantity: 1, price: 45 }],
+      subtotal: 45,
+      total: 45,
+    };
+    const formatted = formatTelegramOrderMessage(pickupOrder);
+    assert.match(formatted, /Retiro en Local/);
+    assert.match(formatted, /Centro Comercial El Tejar/);
+    assert.doesNotMatch(formatted, /Cédula\/RUC/);
+  });
+
+  await t.test('3. sendTelegramNotification executes cleanly and tolerates invalid tokens without crashing', async () => {
+    const result = await sendTelegramNotification(sampleOrder, { token: 'invalid:token', chatId: '12345' });
+    assert.equal(result.ok, false);
+  });
+
+  await t.test('4. sendN8nWebhook skips cleanly when N8N_ORDER_WEBHOOK_URL is not set', async () => {
+    const original = process.env.N8N_ORDER_WEBHOOK_URL;
+    delete process.env.N8N_ORDER_WEBHOOK_URL;
+    const result = await sendN8nWebhook(sampleOrder);
+    assert.equal(result.skipped, true);
+    if (original) process.env.N8N_ORDER_WEBHOOK_URL = original;
+  });
+
+  await t.test('5. dispatchOrderNotifications resolves safely with Promise.allSettled', async () => {
+    const result = await dispatchOrderNotifications(sampleOrder);
+    assert.ok(typeof result.telegram === 'object');
+    assert.ok(typeof result.n8n === 'object');
+  });
+});
