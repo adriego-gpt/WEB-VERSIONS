@@ -401,6 +401,17 @@ export default async function handler(req, res) {
       };
       return draft;
     }
+    const paymentProof = paymentMethod === PAYMENT_METHODS.transfer
+      ? normalizeImageSource(body?.paymentProof || "")
+      : "";
+    if (paymentMethod === PAYMENT_METHODS.transfer && !paymentProof) {
+      responsePayload = {
+        ok: false,
+        status: 400,
+        message: "Es obligatorio adjuntar el comprobante de transferencia para confirmar el pedido.",
+      };
+      return draft;
+    }
     const paymentFeePercent = normalizeCardFeePercent(paymentSettings.cardFeePercent);
     const paymentFeeAmount = calculatePaymentFee(paymentBaseTotal, paymentMethod, paymentFeePercent);
     const total = calculatePayableTotal(paymentBaseTotal, paymentMethod, paymentFeePercent);
@@ -437,9 +448,7 @@ export default async function handler(req, res) {
       itemCount: safeCart.reduce((acc, item) => acc + item.quantity, 0),
       status: normalizeOrderStatus("Pendiente"),
       guideNumber: "",
-      paymentProof: paymentMethod === PAYMENT_METHODS.transfer
-        ? normalizeImageSource(body?.paymentProof || "")
-        : "",
+      paymentProof,
       customerId: String(user.id),
       customerName: normalizeLine(deliveryState.delivery.deliveryFullName || user.name || "Cliente"),
       customerEmail: normalizeEmail(user.email || ""),

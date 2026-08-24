@@ -5970,6 +5970,12 @@ export default function App() {
       phone: normalizeUserPhoneNumber(payloadDetails.phone || currentUser?.phone || ""),
     };
 
+    if (paymentMethod === PAYMENT_METHODS.transfer && !paymentProof) {
+      closeExternalWindow(pendingExternalWindow);
+      showToastMessage("Es obligatorio adjuntar el comprobante de transferencia antes de confirmar tu pedido.", "error");
+      return;
+    }
+
     if (deliveryType === "delivery") {
       if (!deliveryDetails.fullName || !deliveryDetails.idNumber || !deliveryDetails.city || !deliveryDetails.address || !deliveryDetails.reference) {
         closeExternalWindow(pendingExternalWindow);

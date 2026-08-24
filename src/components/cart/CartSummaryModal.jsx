@@ -243,13 +243,19 @@ export function CartSummaryModal({
       return;
     }
 
-    if (selectedPaymentMethod === PAYMENT_METHODS.transfer && !transferReady) {
-      setCheckoutFormError("La transferencia no está disponible en este momento. Elige otro método de pago.");
-      return;
-    }
-    if (selectedPaymentMethod === PAYMENT_METHODS.transfer && !selectedBankAccount) {
-      setCheckoutFormError("Selecciona el banco al que realizarás la transferencia.");
-      return;
+    if (selectedPaymentMethod === PAYMENT_METHODS.transfer) {
+      if (!transferReady) {
+        setCheckoutFormError("La transferencia no está disponible en este momento. Elige otro método de pago.");
+        return;
+      }
+      if (!selectedBankAccount) {
+        setCheckoutFormError("Selecciona el banco al que realizarás la transferencia.");
+        return;
+      }
+      if (!paymentProof) {
+        setCheckoutFormError("Es obligatorio subir la foto o captura del comprobante de transferencia para confirmar tu pedido.");
+        return;
+      }
     }
 
     setCheckoutFormError("");
@@ -766,8 +772,13 @@ export function CartSummaryModal({
                             {paymentProof ? <FileCheck2 size={18} /> : <Upload size={18} />}
                           </span>
                           <div>
-                            <strong>Comprobante de transferencia</strong>
-                            <p>JPG, PNG o WEBP de hasta {FILE_SECURITY.maxImageSizeMb} MB. La ajustamos sin recortar y quedará visible en tu pedido.</p>
+                            <strong>
+                              Comprobante de transferencia{" "}
+                              <span style={{ color: "var(--brand-accent, #ef4444)", fontSize: "0.78rem", fontWeight: "700" }}>
+                                (Obligatorio)
+                              </span>
+                            </strong>
+                            <p>Sube la foto o captura de tu transferencia (JPG, PNG o WEBP de hasta {FILE_SECURITY.maxImageSizeMb} MB). La adjuntaremos a tu pedido para validarlo.</p>
                           </div>
                         </div>
                         {paymentProof ? (
