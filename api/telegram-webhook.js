@@ -51,6 +51,58 @@ async function sendTelegramMessage(token, chatId, text, options = {}) {
   }
 }
 
+async function sendTelegramPhoto(token, chatId, photoSource, caption = "") {
+  const url = String(photoSource || "").trim();
+  if (!url) return { ok: false, error: "Empty photo" };
+
+  try {
+    if (url.startsWith("http://") || url.startsWith("https://")) {
+      const response = await fetch("https://api.telegram.org/bot" + token + "/sendPhoto", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: chatId,
+          photo: url,
+          caption: caption || undefined,
+          parse_mode: "Markdown",
+        }),
+      });
+      return await response.json();
+    }
+
+    if (url.startsWith("data:image/")) {
+      const commaIdx = url.indexOf(",");
+      if (commaIdx > 0) {
+        const meta = url.slice(0, commaIdx);
+        const mimeMatch = meta.match(/data:([^;]+);base64/);
+        const mimeType = mimeMatch ? mimeMatch[1] : "image/jpeg";
+        const base64Data = url.slice(commaIdx + 1);
+        const buffer = Buffer.from(base64Data, "base64");
+        const extension = mimeType.split("/")[1] || "jpg";
+
+        const formData = new FormData();
+        formData.append("chat_id", String(chatId));
+        formData.append("photo", new Blob([buffer], { type: mimeType }), "comprobante." + extension);
+        if (caption) {
+          formData.append("caption", caption);
+          formData.append("parse_mode", "Markdown");
+        }
+
+        const response = await fetch("https://api.telegram.org/bot" + token + "/sendPhoto", {
+          method: "POST",
+          body: formData,
+        });
+        return await response.json();
+      }
+    }
+
+    return { ok: false, error: "Unsupported photo format" };
+  } catch (err) {
+    console.error("[sendTelegramPhoto-error]", err?.message || err);
+    return { ok: false, error: err?.message || "Send photo error" };
+  }
+}
+
 export default async function handler(req, res) {
   setCommonSecurityHeaders(res);
   const clientIp = getClientIp(req);
@@ -172,6 +224,42 @@ export default async function handler(req, res) {
       } catch (err) {
         console.error("[address-lookup-error]", err?.message || err);
         await sendTelegramMessage(token, senderChatId, "⚠️ Error al consultar la dirección.");
+      }
+    } else if (data.startsWith("proof:")) {
+      // Handle "Ver Comprobante" button
+      const orderCode = data.slice("proof:".length);
+
+      await answerCallbackQuery(token, cb.id, "Buscando comprobante...");
+
+      try {
+        const store = await readStore();
+        const orders = Array.isArray(store?.orders) ? store.orders : [];
+        const found = orders.find((o) => String(o.code).toUpperCase() === String(orderCode).toUpperCase());
+
+        if (!found) {
+          await sendTelegramMessage(token, senderChatId, "⚠️ Pedido `" + orderCode + "` no encontrado.");
+        } else if (!found.paymentProof) {
+          await sendTelegramMessage(
+            token,
+            senderChatId,
+            "ℹ️ El pedido `" + orderCode + "` no tiene comprobante de pago adjunto (posiblemente pagó con tarjeta o aún no ha subido el comprobante).",
+          );
+        } else {
+          const bankName = found.paymentBankAccount?.bankName || "";
+          const caption = "📸 *Comprobante de Pago*\n━━━━━━━━━━━━━━━━━━━━\n📦 *Pedido:* `" + found.code + "`\n👤 *Cliente:* " + escapeTelegramMarkdown(found.customerName || "Cliente") + "\n💰 *Monto:* *" + currency(found.total || found.subtotal) + "*" + (bankName ? "\n🏦 *Banco:* " + escapeTelegramMarkdown(bankName) : "") + "\n━━━━━━━━━━━━━━━━━━━━\n⚡ [Ver en Panel Admin](https://adriego.vercel.app/admin)";
+
+          const photoResult = await sendTelegramPhoto(token, senderChatId, found.paymentProof, caption);
+          if (!photoResult?.ok) {
+            await sendTelegramMessage(
+              token,
+              senderChatId,
+              "⚠️ No pudimos enviar la foto directamente por Telegram. Puedes revisarlo en el [Panel Admin](https://adriego.vercel.app/admin).",
+            );
+          }
+        }
+      } catch (err) {
+        console.error("[proof-lookup-error]", err?.message || err);
+        await sendTelegramMessage(token, senderChatId, "⚠️ Error al consultar el comprobante de pago.");
       }
     }
 

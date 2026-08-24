@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   formatTelegramOrderMessage,
+  buildTelegramOrderKeyboard,
   sendTelegramNotification,
   sendN8nWebhook,
   dispatchOrderNotifications,
@@ -102,5 +103,17 @@ test('Order Notifications Engine (Telegram & n8n)', async (t) => {
     const result = await dispatchOrderNotifications(sampleOrder);
     assert.ok(typeof result.telegram === 'object');
     assert.ok(typeof result.n8n === 'object');
+  });
+
+  await t.test('8. buildTelegramOrderKeyboard includes proof button and address button when applicable', () => {
+    const keyboard = buildTelegramOrderKeyboard(sampleOrder);
+    assert.ok(Array.isArray(keyboard.inline_keyboard));
+    const allButtons = keyboard.inline_keyboard.flat();
+    const proofButton = allButtons.find((b) => b.text.includes('Ver Comprobante'));
+    const addressButton = allButtons.find((b) => b.text.includes('Ver Dirección'));
+    assert.ok(proofButton, 'Must have proof button');
+    assert.equal(proofButton.callback_data, 'proof:ORDER-10099');
+    assert.ok(addressButton, 'Must have address button');
+    assert.equal(addressButton.callback_data, 'address:ORDER-10099');
   });
 });
