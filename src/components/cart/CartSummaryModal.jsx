@@ -179,9 +179,11 @@ export function CartSummaryModal({
       ...previous,
       [field]: field === "phone"
         ? normalizeUserPhoneNumber(value)
-        : field === "address" || field === "reference"
-          ? sanitizeParagraph(value)
-          : sanitizeLine(value),
+        : field === "idNumber"
+          ? String(value || "").replace(/\s+/g, "").slice(0, 20)
+          : field === "address" || field === "reference"
+            ? String(value || "").replace(/\r/g, "")
+            : String(value || "").replace(/[\r\n\t]+/g, " "),
     }));
   };
   const applySavedAddressToDeliveryDraft = (addressEntry = null) => {

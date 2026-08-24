@@ -6187,16 +6187,13 @@ export default function App() {
   };
 
   const handleProductFieldChange = (field, value) => {
-    const shouldSanitizeLine = ["name", "category", "productType"].includes(field);
     const shouldSanitizeNumeric = ["offerExtraDiscount", "offerDiscountValue"].includes(field);
-    const nextValue = shouldSanitizeLine
-      ? sanitizeLine(value)
-      : shouldSanitizeNumeric
-        ? String(value)
-          .replace(",", ".")
-          .replace(/[^\d.]/g, "")
-          .replace(/(\..*?)\..*/g, "$1")
-        : value;
+    const nextValue = shouldSanitizeNumeric
+      ? String(value)
+        .replace(",", ".")
+        .replace(/[^\d.]/g, "")
+        .replace(/(\..*?)\..*/g, "$1")
+      : value;
     setProductForm((previous) => ({ ...previous, [field]: nextValue }));
   };
 
