@@ -23,7 +23,7 @@ function currency(value) {
 const ADMIN_KEYBOARD_MARKUP = {
   keyboard: [
     [{ text: "📊 Ventas de Hoy" }, { text: "📦 Pedidos Pendientes" }],
-    [{ text: "⚠️ Stock Bajo" }, { text: "⚡ Abrir Panel Web" }],
+    [{ text: "⚠️ Stock Bajo" }, { text: "🔍 Buscar Pedido" }],
   ],
   resize_keyboard: true,
   is_persistent: true,
@@ -223,8 +223,12 @@ export default async function handler(req, res) {
         if (waUrl) {
           topRow.push({ text: "💬 Avisar Cliente por WhatsApp", url: waUrl });
         }
-        topRow.push({ text: "⚡ Panel Web", url: "https://adriego.vercel.app/admin" });
-        actionButtons.push(topRow);
+        if (updatedOrder.deliveryType === "delivery") {
+          topRow.push({ text: "📦 Asignar Guía", callback_data: "setguia:" + orderCode });
+        }
+        if (topRow.length > 0) {
+          actionButtons.push(topRow);
+        }
 
         const bottomRow = [];
         bottomRow.push({ text: "📦 Ver Pendientes", callback_data: "quick_pendientes" });
@@ -422,6 +426,34 @@ export default async function handler(req, res) {
         console.error("[quick-pendientes-error]", err?.message || err);
         await sendTelegramMessage(token, senderChatId, "⚠️ Error al consultar pendientes.");
       }
+    } else if (data.startsWith("setguia:")) {
+      const orderCode = data.slice("setguia:".length);
+      await answerCallbackQuery(token, cb.id, "Registrar guía...");
+
+      const promptMsg = "📦 *Registrar Guía de Envío*\n━━━━━━━━━━━━━━━━━━━━\nPedido: `" + orderCode + "`\n\n👇 _Elige el courier o escribe directamente el comando:_";
+      const courierButtons = [
+        [
+          { text: "🚚 Servientrega", callback_data: "quick_guia:" + orderCode + ":Servientrega" },
+          { text: "📦 LaarCourier", callback_data: "quick_guia:" + orderCode + ":LaarCourier" },
+        ],
+        [
+          { text: "🚌 Encomienda", callback_data: "quick_guia:" + orderCode + ":Encomienda" },
+        ],
+      ];
+
+      await sendTelegramMessage(token, senderChatId, promptMsg, {
+        reply_markup: {
+          inline_keyboard: courierButtons,
+        },
+      });
+    } else if (data.startsWith("quick_guia:")) {
+      const parts = data.split(":");
+      const orderCode = parts[1];
+      const courierName = parts[2];
+      await answerCallbackQuery(token, cb.id, courierName + " seleccionado");
+
+      const instructMsg = "🚚 Courier seleccionado: *" + courierName + "*\n📦 Pedido: `" + orderCode + "`\n━━━━━━━━━━━━━━━━━━━━\nEscribe el comando con el número de guía para registrarlo y marcar el pedido como Enviado:\n\n`/guia " + orderCode + " " + courierName + " <NUMERO>`\n\n_Ejemplo:_ `/guia " + orderCode + " " + courierName + " 1759283940`";
+      await sendTelegramMessage(token, senderChatId, instructMsg);
     }
 
     res.status(200).json({ ok: true, handledCallback: true });
@@ -541,9 +573,89 @@ export default async function handler(req, res) {
       const msg = "⚠️ *Prendas con Stock Bajo / Agotadas (" + lowList.length + "):*\n━━━━━━━━━━━━━━━━━━━━\n" + list + "\n━━━━━━━━━━━━━━━━━━━━\n⚡ [Reponer en Panel Admin](https://adriego.vercel.app/admin)";
       await sendTelegramMessage(token, senderChatId, msg);
     }
-  } else if (lowerText.includes("panel") || lowerText === "/panel") {
-    const panelMsg = "⚡ *Acceso al Panel Web Administrativo*\n━━━━━━━━━━━━━━━━━━━━\n🔗 [Toca aquí para abrir el Panel Admin](https://adriego.vercel.app/admin)";
-    await sendTelegramMessage(token, senderChatId, panelMsg);
+  } else if (lowerText.startsWith("/guia") || lowerText.startsWith("guia ")) {
+    const rawArgs = text.replace(/^[/]?guia\s*/i, "").trim().split(/\s+/);
+    if (rawArgs.length < 2) {
+      const usageMsg = "⚠️ *Uso correcto del comando /guia:*\n\n`/guia <CÓDIGO> <COURIER> <NÚMERO_DE_GUIA>`\n\n*Ejemplos:*\n• `/guia ORDER-10099 Servientrega 1234567890`\n• `/guia ORDER-10099 LaarCourier 98765432`\n• `/guia ORDER-10099 1234567890`";
+      await sendTelegramMessage(token, senderChatId, usageMsg);
+      res.status(200).json({ ok: true });
+      return;
+    }
+
+    const orderQuery = rawArgs[0].toUpperCase();
+    let courierName = "Servientrega";
+    let trackingNumber = "";
+
+    if (rawArgs.length === 2) {
+      trackingNumber = rawArgs[1];
+    } else {
+      courierName = rawArgs[1];
+      trackingNumber = rawArgs.slice(2).join(" ");
+    }
+
+    const fullGuideDisplay = courierName + ": " + trackingNumber;
+
+    let updatedOrder = null;
+    try {
+      await updateStore((draft) => {
+        const orders = Array.isArray(draft.orders) ? draft.orders : [];
+        const targetIndex = orders.findIndex((o) =>
+          String(o.code).toUpperCase().includes(orderQuery)
+        );
+
+        if (targetIndex >= 0) {
+          orders[targetIndex] = {
+            ...orders[targetIndex],
+            guideNumber: fullGuideDisplay,
+            courier: courierName,
+            status: "Enviado",
+            updatedAt: new Date().toISOString(),
+          };
+          updatedOrder = orders[targetIndex];
+          draft.orders = [...orders];
+          bumpRealtimeMeta(draft, ["orders"]);
+        }
+        return draft;
+      });
+    } catch (storeErr) {
+      console.error("[update-guia-error]", storeErr?.message || storeErr);
+    }
+
+    if (updatedOrder) {
+      const rawPhone = String(updatedOrder.customerPhone || "").replace(/\D/g, "");
+      let intlPhone = rawPhone;
+      if (rawPhone.startsWith("0") && rawPhone.length === 10) {
+        intlPhone = "593" + rawPhone.slice(1);
+      } else if (rawPhone.length === 9) {
+        intlPhone = "593" + rawPhone;
+      }
+
+      const customerName = updatedOrder.customerName || "Cliente";
+      const destCity = updatedOrder.deliveryCity ? " a " + updatedOrder.deliveryCity : "";
+      const waGuiaText = "¡Hola " + customerName + "! ✨ Te saludamos de Adriego Store. Tu pedido " + updatedOrder.code + " ya fue ENVIADO" + destCity + " 🚚📦 por " + courierName + ".\n\n🔢 Número de Guía: " + trackingNumber + "\n\n¡Muchas gracias por tu compra!";
+      const waUrl = intlPhone ? "https://wa.me/" + intlPhone + "?text=" + encodeURIComponent(waGuiaText) : null;
+
+      const guiaButtons = [];
+      const row1 = [];
+      if (waUrl) {
+        row1.push({ text: "💬 Enviar Guía por WhatsApp", url: waUrl });
+      }
+      guiaButtons.push(row1);
+      guiaButtons.push([{ text: "📦 Ver Siguiente Pendiente", callback_data: "quick_pendientes" }]);
+
+      const successMsg = "✅ *Guía Registrada y Pedido Marcado como Enviado*\n━━━━━━━━━━━━━━━━━━━━\n📦 *Pedido:* `" + updatedOrder.code + "`\n🚚 *Courier:* *" + courierName + "*\n🔢 *No. Guía:* `" + trackingNumber + "`\n🏷️ *Estado:* *Enviado*\n👤 *Cliente:* " + escapeTelegramMarkdown(customerName) + " (" + (updatedOrder.customerPhone || "N/A") + ")\n━━━━━━━━━━━━━━━━━━━━\n👇 _Toca abajo para enviar la guía y datos de rastreo al cliente por WhatsApp:_";
+
+      await sendTelegramMessage(token, senderChatId, successMsg, {
+        reply_markup: {
+          inline_keyboard: guiaButtons,
+        },
+      });
+    } else {
+      await sendTelegramMessage(token, senderChatId, "⚠️ No se encontró ningún pedido que coincida con `" + orderQuery + "`.");
+    }
+  } else if (lowerText.includes("buscar pedido") || lowerText === "🔍 buscar pedido") {
+    const msg = "🔍 *Buscar Pedido*\n━━━━━━━━━━━━━━━━━━━━\nEscribe el código del pedido o nombre del cliente:\n\n*Ejemplo:* `/buscar ORDER-10099` o `/buscar Maria`";
+    await sendTelegramMessage(token, senderChatId, msg);
   } else if (lowerText.startsWith("/buscar") || lowerText.startsWith("buscar")) {
     const query = text.replace(/^[/]?buscar\s*/i, "").trim().toUpperCase();
     const store = await readStore();

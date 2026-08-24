@@ -112,6 +112,9 @@ test('Order Notifications Engine (Telegram & n8n)', async (t) => {
     const proofButton = allButtons.find((b) => b.text.includes('Ver Comprobante'));
     const addressButton = allButtons.find((b) => b.text.includes('Ver Dirección'));
     const courierButton = allButtons.find((b) => b.text.includes('Formato Courier'));
+    const guiaButton = allButtons.find((b) => b.text.includes('Asignar Guía'));
+    assert.ok(guiaButton, 'Must have guia button');
+    assert.equal(guiaButton.callback_data, 'setguia:ORDER-10099');
     assert.ok(proofButton, 'Must have proof button');
     assert.equal(proofButton.callback_data, 'proof:ORDER-10099');
     assert.ok(addressButton, 'Must have address button');

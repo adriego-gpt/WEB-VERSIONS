@@ -41,8 +41,12 @@ export function buildTelegramOrderKeyboard(order = {}) {
   if (waUrl) {
     actionRow.push({ text: "💬 WhatsApp Cliente", url: waUrl });
   }
-  actionRow.push({ text: "⚡ Panel Web", url: "https://adriego.vercel.app/admin" });
-  rows.push(actionRow);
+  if (order.deliveryType === "delivery") {
+    actionRow.push({ text: "📦 Asignar Guía", callback_data: `setguia:${code}` });
+  }
+  if (actionRow.length > 0) {
+    rows.push(actionRow);
+  }
 
   // Middle detail row: View Proof, Address, Courier Format
   const detailRow = [];
@@ -139,8 +143,13 @@ export function formatTelegramOrderMessage(order = {}) {
     `💵 *TOTAL A PAGAR:* *${currency(order.total || order.subtotal)}*`,
     "━━━━━━━━━━━━━━━━━━━━",
     order.paymentProof ? "📸 *Comprobante de pago:* Adjunto en el pedido" : "⏳ *Comprobante:* Pendiente",
-    "⚡ _Usa los botones directos abajo para gestionar el pedido:_",
   );
+
+  if (order.guideNumber) {
+    lines.push(`🚚 *Guía Registrada:* \`${escapeTelegramMarkdown(order.guideNumber)}\``);
+  }
+
+  lines.push("⚡ _Usa los botones directos abajo para gestionar el pedido:_");
 
   return lines.filter((line) => line !== null && line !== undefined && line !== false).join("\n");
 }
