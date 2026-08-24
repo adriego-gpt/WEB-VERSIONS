@@ -1,16 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  stripDangerousContent,
   normalizeLine,
   sanitizeParagraph,
-  normalizeOptionLabel,
 } from "../../api/_lib/security.js";
 import {
-  stripDangerousContent as frontendStrip,
   sanitizeLine as frontendSanitizeLine,
-  sanitizeParagraph as frontendSanitizeParagraph,
-  normalizeOptionLabel as frontendNormalizeOptionLabel,
 } from "../../src/utils/sanitizers.js";
 
 test("Strict Anti-Injection: Backend & Frontend Sanitizers", async (t) => {

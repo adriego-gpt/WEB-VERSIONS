@@ -1,4 +1,3 @@
-/* global process */
 
 import { bumpRealtimeMeta, readStore, updateStore } from "./_lib/store.js";
 import { sanitizeOrderPatch } from "./_lib/storeSanitizers.js";

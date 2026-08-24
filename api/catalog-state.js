@@ -1,4 +1,3 @@
-/* global process */
 
 import { bumpRealtimeMeta, getStoreBackend, readStore, updateStore } from "./_lib/store.js";
 import {

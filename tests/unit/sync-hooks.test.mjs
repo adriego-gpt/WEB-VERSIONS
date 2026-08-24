@@ -2,23 +2,12 @@ import { test, describe, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 
 // Helper to extract the effect callback from a hook using mock React
-let lastEffectCallback = null;
-let lastEffectDeps = null;
-
-const mockReact = {
-  useEffect(callback, deps) {
-    lastEffectCallback = callback;
-    lastEffectDeps = deps;
-  }
-};
 
 describe('Catalog Bootstrap & Realtime Sync Hooks Architecture', () => {
   let originalWindow;
   let originalDocument;
 
   beforeEach(() => {
-    lastEffectCallback = null;
-    lastEffectDeps = null;
     originalWindow = globalThis.window;
     originalDocument = globalThis.document;
   });
@@ -45,7 +34,7 @@ describe('Catalog Bootstrap & Realtime Sync Hooks Architecture', () => {
 
     // Mock bootstrap logic
     let cancelled = false;
-    const mockGetCatalogState = async ({ preferCache, force }) => {
+    const mockGetCatalogState = async ({ preferCache }) => {
       if (preferCache) {
         return { ok: true, data: { products: [{ id: 'p1', name: 'Cached' }] }, cache: { hit: true } };
       }
@@ -90,9 +79,9 @@ describe('Catalog Bootstrap & Realtime Sync Hooks Architecture', () => {
 
     const runBootstrapWithError = async () => {
       try {
-        const result = await mockFailedGetCatalogState();
+        await mockFailedGetCatalogState();
         if (cancelled) return;
-        if (result?.ok) applyCatalogState(result.data);
+        // failure case does not produce data
         readyStates.push(true);
       } catch {
         if (!cancelled) {

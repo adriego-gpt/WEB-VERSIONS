@@ -1,4 +1,3 @@
-/* global process */
 
 import crypto from "node:crypto";
 import { bumpRealtimeMeta, readStore, updateStore } from "./_lib/store.js";

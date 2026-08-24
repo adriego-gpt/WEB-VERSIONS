@@ -1,4 +1,3 @@
-/* global process */
 
 import {
   buildClearSessionCookie,

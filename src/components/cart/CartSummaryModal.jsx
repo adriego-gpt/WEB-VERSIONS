@@ -146,6 +146,18 @@ export function CartSummaryModal({
     }
   }, [readyBankAccounts, selectedBankAccountId]);
 
+  useEffect(() => {
+    if (!currentUser) return;
+    setDeliveryDraft((prev) => ({
+      fullName: prev.fullName || sanitizeLine(currentUser.name || ""),
+      idNumber: prev.idNumber,
+      city: prev.city || sanitizeLine(defaultSavedAddress?.city || ""),
+      address: prev.address || sanitizeParagraph(defaultSavedAddress?.address || currentUser.shippingAddress || ""),
+      reference: prev.reference || sanitizeParagraph(defaultSavedAddress?.reference || ""),
+      phone: prev.phone || normalizeUserPhoneNumber(defaultSavedAddress?.phone || currentUser.phone || ""),
+    }));
+  }, [currentUser, defaultSavedAddress]);
+
   const pickupAddress = sanitizeLine(contactSettings?.address || "");
   const pickupNote = sanitizeParagraph(contactSettings?.locationNote || "");
   const pickupMapsLink = sanitizeLine(contactSettings?.mapsLink || "");

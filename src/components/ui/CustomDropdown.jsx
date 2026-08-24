@@ -12,7 +12,17 @@ export function CustomDropdown({
   ariaLabel,
 }) {
   const [isOpen, setIsOpen] = useState(false);
+  const [highlightedIndex, setHighlightedIndex] = useState(-1);
   const dropdownRef = useRef(null);
+  const triggerRef = useRef(null);
+
+  const selectedIndex = options.findIndex((opt) => opt.value === value);
+
+  useEffect(() => {
+    if (isOpen) {
+      setHighlightedIndex(selectedIndex >= 0 ? selectedIndex : 0);
+    }
+  }, [isOpen, selectedIndex]);
 
   useEffect(() => {
     if (!isOpen) return undefined;
@@ -24,6 +34,26 @@ export function CustomDropdown({
     const handleKeyDown = (event) => {
       if (event.key === "Escape") {
         setIsOpen(false);
+        triggerRef.current?.focus?.();
+      } else if (event.key === "ArrowDown") {
+        event.preventDefault();
+        setHighlightedIndex((prev) => (prev < options.length - 1 ? prev + 1 : 0));
+      } else if (event.key === "ArrowUp") {
+        event.preventDefault();
+        setHighlightedIndex((prev) => (prev > 0 ? prev - 1 : options.length - 1));
+      } else if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        if (highlightedIndex >= 0 && highlightedIndex < options.length) {
+          onChange(options[highlightedIndex].value);
+          setIsOpen(false);
+          triggerRef.current?.focus?.();
+        }
+      } else if (event.key === "Home") {
+        event.preventDefault();
+        setHighlightedIndex(0);
+      } else if (event.key === "End") {
+        event.preventDefault();
+        setHighlightedIndex(options.length - 1);
       }
     };
     document.addEventListener("mousedown", handleClickOutside);
@@ -34,7 +64,7 @@ export function CustomDropdown({
       document.removeEventListener("touchstart", handleClickOutside);
       document.removeEventListener("keydown", handleKeyDown);
     };
-  }, [isOpen]);
+  }, [isOpen, highlightedIndex, onChange, options]);
 
   const selectedOption = options.find((opt) => opt.value === value);
   const displayLabel = selectedOption ? selectedOption.label : placeholder;
@@ -42,6 +72,7 @@ export function CustomDropdown({
   return (
     <div className={`custom-dropdown-container ${className}`} ref={dropdownRef}>
       <button
+        ref={triggerRef}
         type="button"
         className={`custom-dropdown-trigger ${isOpen ? "open" : ""}`}
         onClick={() => setIsOpen((prev) => !prev)}
@@ -66,18 +97,21 @@ export function CustomDropdown({
             className="custom-dropdown-menu"
             role="listbox"
           >
-            {options.map((option) => {
+            {options.map((option, idx) => {
               const isSelected = option.value === value;
+              const isHighlighted = idx === highlightedIndex;
               return (
                 <button
                   type="button"
                   key={option.value}
                   role="option"
                   aria-selected={isSelected}
-                  className={`custom-dropdown-item ${isSelected ? "selected" : ""}`}
+                  className={`custom-dropdown-item ${isSelected ? "selected" : ""} ${isHighlighted ? "highlighted" : ""}`}
+                  onMouseEnter={() => setHighlightedIndex(idx)}
                   onClick={() => {
                     onChange(option.value);
                     setIsOpen(false);
+                    triggerRef.current?.focus?.();
                   }}
                 >
                   <span className="custom-dropdown-item-label">{option.label}</span>

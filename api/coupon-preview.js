@@ -1,4 +1,3 @@
-/* global process */
 
 import { evaluateCoupon, normalizeCode, normalizeCouponList } from "../src/services/couponService.js";
 import { readStore } from "./_lib/store.js";

@@ -48,6 +48,9 @@ function createMockReqRes({ method = "GET", headers = {}, query = {}, body = nul
     getHeader(name) {
       return responseHeaders[name.toLowerCase()];
     },
+    isEnded() {
+      return ended;
+    },
   };
 
   return { req, res };

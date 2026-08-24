@@ -5686,13 +5686,12 @@ export default function App() {
   };
 
   const handleGoHome = useCallback(() => {
-    setActiveMobileSection("catalogo");
-    setSearchTerm("");
-    setSelectedCategory("Todos");
-    setSelectedProductType("Todos");
-    setSelectedTag("Todos");
-    setSortOption("featured");
-    setCurrentPage(1);
+    setActiveMobileSection("inicio");
+    setSearch("");
+    setCategory("Todos");
+    setProductTypeFilter("Todos");
+    setSortBy("featured");
+    setCatalogPage(1);
     setEditingCartItemKey(null);
     setShowMobileNav(false);
 

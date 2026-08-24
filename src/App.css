@@ -6901,7 +6901,8 @@ img {
   text-align: left;
 }
 
-.custom-dropdown-item:hover {
+.custom-dropdown-item:hover,
+.custom-dropdown-item.highlighted {
   background: #f1f5f9;
   color: var(--text-strong, #000000);
 }

@@ -159,7 +159,7 @@ async function callApi(handler, {
   if (response.jsonBody === undefined && response.body) {
     try {
       response.jsonBody = JSON.parse(response.body);
-    } catch {}
+    } catch { /* ignore non-json response */ }
   }
   return response;
 }

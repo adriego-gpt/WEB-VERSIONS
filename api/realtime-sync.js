@@ -1,4 +1,3 @@
-/* global process */
 
 import { readStore } from "./_lib/store.js";
 import {

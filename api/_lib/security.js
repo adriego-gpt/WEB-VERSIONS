@@ -1,4 +1,3 @@
-/* global process */
 
 import crypto from "node:crypto";
 import { Buffer } from "node:buffer";
