@@ -8249,37 +8249,45 @@ export default function App() {
               <span>ADRIEGO</span>
               <small>STORE</small>
             </p>
+          </div>
 
-            <div className="footer-legal-bar" aria-label="Políticas y documentos legales">
+          <div className="footer-subbar" aria-label="Políticas y documentos legales">
+            <nav className="footer-legal-links">
               <button
                 type="button"
                 className="footer-legal-btn"
                 onClick={() => setLegalModalState({ open: true, tab: "exchanges" })}
               >
-                🔄 Política de Cambios (Sin Devoluciones)
+                Política de Cambios
               </button>
+              <span className="footer-legal-divider" aria-hidden="true">•</span>
               <button
                 type="button"
                 className="footer-legal-btn"
                 onClick={() => setLegalModalState({ open: true, tab: "privacy" })}
               >
-                🛡️ Privacidad de Datos
+                Privacidad de Datos
               </button>
+              <span className="footer-legal-divider" aria-hidden="true">•</span>
               <button
                 type="button"
                 className="footer-legal-btn"
                 onClick={() => setLegalModalState({ open: true, tab: "terms" })}
               >
-                📜 Términos de Compra
+                Términos de Compra
               </button>
+              <span className="footer-legal-divider" aria-hidden="true">•</span>
               <button
                 type="button"
                 className="footer-legal-btn"
                 onClick={() => setLegalModalState({ open: true, tab: "cookies" })}
               >
-                🍪 Uso de Cookies
+                Uso de Cookies
               </button>
-            </div>
+            </nav>
+            <p className="footer-copyright">
+              © {new Date().getFullYear()} {storeSettings.brandName || "Adriego Store"}. Todos los derechos reservados.
+            </p>
           </div>
         </div>
       </Motion.footer>
