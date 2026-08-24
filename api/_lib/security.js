@@ -741,9 +741,9 @@ function createCsrfToken() {
 
 function ensureCsrfCookie(req, res) {
   const cookies = parseCookies(req.headers?.cookie || "");
-  const current = cookies[CSRF_COOKIE_NAME] || "";
+  const current = cookies[CSRF_COOKIE_NAME] || cookies.atelier_csrf_token || "";
   const safeToken = /^[A-Za-z0-9_-]{24,}$/.test(current) ? current : createCsrfToken();
-  if (safeToken !== current) {
+  if (safeToken !== cookies[CSRF_COOKIE_NAME]) {
     appendSetCookie(res, buildCookie(CSRF_COOKIE_NAME, safeToken, {
       maxAgeSec: 60 * 60 * 12,
       httpOnly: false,
@@ -760,7 +760,7 @@ function requireCsrf(req, res, context = {}) {
   }
 
   const cookies = parseCookies(req.headers?.cookie || "");
-  const cookieToken = String(cookies[CSRF_COOKIE_NAME] || "");
+  const cookieToken = String(cookies[CSRF_COOKIE_NAME] || cookies.atelier_csrf_token || "");
   const headerToken = normalizeLine(req.headers?.["x-csrf-token"] || "");
   const requestHeader = normalizeLine(req.headers?.["x-requested-with"] || "");
 
