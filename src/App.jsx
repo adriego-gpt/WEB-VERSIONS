@@ -8253,45 +8253,41 @@ export default function App() {
 
           <div className="footer-subbar" aria-label="Políticas y documentos legales">
             <nav className="footer-legal-links">
-              <div className="footer-legal-row-main">
-                <button
-                  type="button"
-                  className="footer-legal-btn"
-                  onClick={() => setLegalModalState({ open: true, tab: "exchanges" })}
-                >
-                  <span className="footer-legal-label-full">Política de Cambios</span>
-                  <span className="footer-legal-label-compact">Cambios</span>
-                </button>
-                <span className="footer-legal-divider" aria-hidden="true">•</span>
-                <button
-                  type="button"
-                  className="footer-legal-btn"
-                  onClick={() => setLegalModalState({ open: true, tab: "privacy" })}
-                >
-                  <span className="footer-legal-label-full">Privacidad de Datos</span>
-                  <span className="footer-legal-label-compact">Privacidad</span>
-                </button>
-                <span className="footer-legal-divider" aria-hidden="true">•</span>
-                <button
-                  type="button"
-                  className="footer-legal-btn"
-                  onClick={() => setLegalModalState({ open: true, tab: "terms" })}
-                >
-                  <span className="footer-legal-label-full">Términos de Compra</span>
-                  <span className="footer-legal-label-compact">Términos</span>
-                </button>
-              </div>
-              <span className="footer-legal-divider footer-legal-divider-desktop" aria-hidden="true">•</span>
-              <div className="footer-legal-row-extra">
-                <button
-                  type="button"
-                  className="footer-legal-btn"
-                  onClick={() => setLegalModalState({ open: true, tab: "cookies" })}
-                >
-                  <span className="footer-legal-label-full">Uso de Cookies</span>
-                  <span className="footer-legal-label-compact">Uso de Cookies</span>
-                </button>
-              </div>
+              <button
+                type="button"
+                className="footer-legal-btn"
+                onClick={() => setLegalModalState({ open: true, tab: "exchanges" })}
+              >
+                <span className="footer-legal-label-full">Política de Cambios</span>
+                <span className="footer-legal-label-compact">Cambios</span>
+              </button>
+              <span className="footer-legal-divider" aria-hidden="true">•</span>
+              <button
+                type="button"
+                className="footer-legal-btn"
+                onClick={() => setLegalModalState({ open: true, tab: "privacy" })}
+              >
+                <span className="footer-legal-label-full">Privacidad de Datos</span>
+                <span className="footer-legal-label-compact">Privacidad</span>
+              </button>
+              <span className="footer-legal-divider" aria-hidden="true">•</span>
+              <button
+                type="button"
+                className="footer-legal-btn"
+                onClick={() => setLegalModalState({ open: true, tab: "terms" })}
+              >
+                <span className="footer-legal-label-full">Términos de Compra</span>
+                <span className="footer-legal-label-compact">Términos</span>
+              </button>
+              <span className="footer-legal-divider" aria-hidden="true">•</span>
+              <button
+                type="button"
+                className="footer-legal-btn"
+                onClick={() => setLegalModalState({ open: true, tab: "cookies" })}
+              >
+                <span className="footer-legal-label-full">Uso de Cookies</span>
+                <span className="footer-legal-label-compact">Cookies</span>
+              </button>
             </nav>
             <p className="footer-copyright">
               © {new Date().getFullYear()} {storeSettings.brandName || "Adriego Store"}. Todos los derechos reservados.
