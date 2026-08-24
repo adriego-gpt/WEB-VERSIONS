@@ -71,9 +71,9 @@ export default async function handler(req, res) {
     return;
   }
 
-  const { ok, data: update } = requireJsonBody(req);
-  if (!ok || !update) {
-    res.status(400).json({ ok: false, message: "Cuerpo inválido." });
+  const update = requireJsonBody(req, res, { endpoint: ENDPOINT_NAME });
+  if (!update) {
+    // requireJsonBody already sent the error response
     return;
   }
 
