@@ -46,16 +46,47 @@ function loadLocalEnvFile() {
 
 loadLocalEnvFile();
 
+// ── Anti-injection: strip dangerous patterns from user text ──────────
+const RE_NULL_BYTES = /\0/g;
+const RE_DANGEROUS_UNICODE = /[\u200B-\u200F\u2028\u2029\u202A-\u202E\u2066-\u2069\uFEFF]/g;
+const RE_SCRIPT_BLOCKS = /<script\b[\s\S]*?<\/script>/gi;
+const RE_STYLE_BLOCKS = /<style\b[\s\S]*?<\/style>/gi;
+const RE_HTML_TAGS = /<\/?[a-zA-Z][^>]*>/g;
+const RE_EVENT_HANDLERS = /\bon\w+\s*=\s*(?:'[^']*'|"[^"]*"|[^\s>]+)/gi;
+const RE_SCRIPT_SCHEMES = /\b(javascript|vbscript|data\s*:\s*text\/html)\s*:[^\s]*/gi;
+const RE_TEMPLATE_INJECTION = /(\{\{|\}\}|<%|%>)/g;
+const RE_COMMAND_INJECTION = /`[^`]*`|\$\([^)]*\)/g;
+
+function stripDangerousContent(value = "") {
+  return String(value || "")
+    .replace(RE_NULL_BYTES, "")
+    .replace(RE_DANGEROUS_UNICODE, "")
+    .replace(RE_SCRIPT_BLOCKS, " ")
+    .replace(RE_STYLE_BLOCKS, " ")
+    .replace(RE_HTML_TAGS, " ")
+    .replace(RE_EVENT_HANDLERS, " ")
+    .replace(RE_SCRIPT_SCHEMES, " ")
+    .replace(RE_TEMPLATE_INJECTION, "")
+    .replace(RE_COMMAND_INJECTION, " ");
+}
+
 function normalizeLine(value = "") {
-  return String(value || "").replace(/[\r\n\t]+/g, " ").replace(/\s+/g, " ").trim();
+  return stripDangerousContent(value).replace(/[\r\n\t]+/g, " ").replace(/\s+/g, " ").trim();
 }
 
 function sanitizeParagraph(value = "") {
-  return String(value || "").replace(/\r/g, "").replace(/\t/g, " ").replace(/\n{3,}/g, "\n\n").trim();
+  return stripDangerousContent(value)
+    .replace(/\r/g, "")
+    .replace(/\t/g, " ")
+    .split("\n")
+    .map((line) => line.replace(/[ \t]+/g, " ").trim())
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 function normalizeOptionLabel(value = "") {
-  return String(value || "").trim().replace(/\s+/g, " ");
+  return stripDangerousContent(value).trim().replace(/\s+/g, " ");
 }
 
 function normalizeEmail(value = "") {
@@ -933,6 +964,7 @@ export {
   sanitizeParagraph,
   setCommonSecurityHeaders,
   signPayload,
+  stripDangerousContent,
   verifyPassword,
   verifySignedToken,
 };

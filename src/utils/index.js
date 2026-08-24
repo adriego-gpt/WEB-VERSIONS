@@ -6,6 +6,7 @@ export {
   normalizeEmail,
   slugify,
   splitFilterTagsText,
+  stripDangerousContent,
 } from "./sanitizers";
 
 export {

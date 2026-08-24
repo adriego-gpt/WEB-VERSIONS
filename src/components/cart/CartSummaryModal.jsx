@@ -25,7 +25,7 @@ import {
 import { motion as Motion, AnimatePresence } from "framer-motion";
 import { currency } from "../../utils/currency";
 import { normalizeAddressBook } from "../../domain/user/addressBook";
-import { sanitizeLine, sanitizeParagraph, normalizeEntityId } from "../../utils/sanitizers";
+import { sanitizeLine, sanitizeParagraph, normalizeEntityId, stripDangerousContent } from "../../utils/sanitizers";
 import { normalizeUserPhoneNumber } from "../../utils/phone";
 import { AUTH_FIELD_LIMITS } from "../../constants/auth";
 import { FILE_SECURITY } from "../../constants/product";
@@ -182,8 +182,8 @@ export function CartSummaryModal({
         : field === "idNumber"
           ? String(value || "").replace(/\s+/g, "").slice(0, 20)
           : field === "address" || field === "reference"
-            ? String(value || "").replace(/\r/g, "")
-            : String(value || "").replace(/[\r\n\t]+/g, " "),
+            ? stripDangerousContent(value).replace(/\r/g, "")
+            : stripDangerousContent(value).replace(/[\r\n\t]+/g, " "),
     }));
   };
   const applySavedAddressToDeliveryDraft = (addressEntry = null) => {
