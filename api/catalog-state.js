@@ -1,4 +1,4 @@
-﻿/* global process */
+/* global process */
 
 import { bumpRealtimeMeta, getStoreBackend, readStore, updateStore } from "./_lib/store.js";
 import {
@@ -7,8 +7,10 @@ import {
   sanitizeStoreSettings,
 } from "./_lib/storeSanitizers.js";
 import {
+  consumeRateLimit,
   ensureCsrfCookie,
   getAllowedOrigins,
+  getClientIp,
   isOriginAllowed,
   monitorApiRequest,
   normalizeLine,
@@ -40,7 +42,6 @@ function buildSanitizedCatalogPayload(store = {}) {
 function getCatalogVersion(store = {}) {
   return Math.max(0, Math.floor(Number(store?.meta?.realtime?.catalogVersion) || 0));
 }
-
 function resolveAdminSession(req) {
   const sessionSecret = String(process.env.ADMIN_SESSION_SECRET || "").trim();
   if (!sessionSecret) return null;
@@ -70,8 +71,19 @@ export default async function handler(req, res) {
   const action = normalizeLine(req.query?.action || "get").toLowerCase();
   const adminSession = resolveAdminSession(req);
   const isAdmin = Boolean(adminSession);
+  const clientIp = getClientIp(req);
 
   if (action === "get") {
+    const rateLimit = await consumeRateLimit("catalog-get-ip", clientIp, 180, 10 * 60 * 1000, {
+      endpoint: ENDPOINT_NAME,
+      ip: clientIp,
+    });
+    if (!rateLimit.ok) {
+      res.setHeader("Retry-After", String(Math.ceil(rateLimit.retryAfterMs / 1000)));
+      res.status(429).json({ ok: false, message: "Too many requests" });
+      return;
+    }
+
     const store = await readStore();
     const sanitizedCatalog = buildSanitizedCatalogPayload(store);
     const payload = {
@@ -107,6 +119,16 @@ export default async function handler(req, res) {
 
   if (!isAdmin) {
     res.status(401).json({ ok: false, message: "No autorizado" });
+    return;
+  }
+
+  const syncRateLimit = await consumeRateLimit("catalog-sync-admin-ip", clientIp, 60, 10 * 60 * 1000, {
+    endpoint: ENDPOINT_NAME,
+    ip: clientIp,
+  });
+  if (!syncRateLimit.ok) {
+    res.setHeader("Retry-After", String(Math.ceil(syncRateLimit.retryAfterMs / 1000)));
+    res.status(429).json({ ok: false, message: "Too many requests" });
     return;
   }
 

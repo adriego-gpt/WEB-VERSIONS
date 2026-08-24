@@ -128,6 +128,16 @@ export default async function handler(req, res) {
   const sessionPayload = verifySignedToken(cookies[COOKIE_NAME] || "", sessionSecret);
 
   if (action === "status") {
+    const rateLimit = await consumeRateLimit("admin-status-ip", ip, 100, 10 * 60 * 1000, {
+      endpoint: ENDPOINT_NAME,
+      ip,
+    });
+    if (!rateLimit.ok) {
+      res.setHeader("Retry-After", String(Math.ceil(rateLimit.retryAfterMs / 1000)));
+      res.status(429).json({ ok: false, message: "Too many requests" });
+      return;
+    }
+
     if (!sessionPayload) {
       res.status(200).json({ ok: true, isAdmin: false, session: null });
       return;
@@ -150,6 +160,17 @@ export default async function handler(req, res) {
       return;
     }
     if (!requireCsrf(req, res, { endpoint: ENDPOINT_NAME })) return;
+
+    const rateLimit = await consumeRateLimit("admin-logout-ip", ip, 30, 10 * 60 * 1000, {
+      endpoint: ENDPOINT_NAME,
+      ip,
+    });
+    if (!rateLimit.ok) {
+      res.setHeader("Retry-After", String(Math.ceil(rateLimit.retryAfterMs / 1000)));
+      res.status(429).json({ ok: false, message: "Too many requests" });
+      return;
+    }
+
     res.setHeader("Set-Cookie", buildClearSessionCookie(COOKIE_NAME));
     res.status(200).json({ ok: true, isAdmin: false });
     return;
@@ -165,6 +186,17 @@ export default async function handler(req, res) {
       sendUnauthorized(res);
       return;
     }
+
+    const rateLimit = await consumeRateLimit("admin-touch-ip", ip, 60, 10 * 60 * 1000, {
+      endpoint: ENDPOINT_NAME,
+      ip,
+    });
+    if (!rateLimit.ok) {
+      res.setHeader("Retry-After", String(Math.ceil(rateLimit.retryAfterMs / 1000)));
+      res.status(429).json({ ok: false, message: "Too many requests" });
+      return;
+    }
+
     const refreshed = buildSession(sessionPayload.sub, sessionSecret);
     res.setHeader("Set-Cookie", buildSessionCookie(COOKIE_NAME, refreshed.token, SESSION_TTL_MS / 1000));
     res.status(200).json({

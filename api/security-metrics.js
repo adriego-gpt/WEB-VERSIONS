@@ -1,8 +1,10 @@
 /* global process */
 
 import {
+  consumeRateLimit,
   ensureCsrfCookie,
   getAllowedOrigins,
+  getClientIp,
   getSecurityMetricsSnapshot,
   isOriginAllowed,
   monitorApiRequest,
@@ -49,11 +51,21 @@ export default async function handler(req, res) {
     return;
   }
 
+  const clientIp = getClientIp(req);
   const action = normalizeLine(req.query?.action || "snapshot").toLowerCase();
 
   if (action === "snapshot") {
     if (req.method !== "GET") {
       res.status(405).json({ ok: false, message: "Method not allowed" });
+      return;
+    }
+    const rateLimit = await consumeRateLimit("security-metrics-snapshot-ip", clientIp, 60, 10 * 60 * 1000, {
+      endpoint: ENDPOINT_NAME,
+      ip: clientIp,
+    });
+    if (!rateLimit.ok) {
+      res.setHeader("Retry-After", String(Math.ceil(rateLimit.retryAfterMs / 1000)));
+      res.status(429).json({ ok: false, message: "Too many requests" });
       return;
     }
     res.status(200).json({
@@ -69,6 +81,15 @@ export default async function handler(req, res) {
       return;
     }
     if (!requireCsrf(req, res, { endpoint: ENDPOINT_NAME })) return;
+    const rateLimit = await consumeRateLimit("security-metrics-reset-ip", clientIp, 15, 10 * 60 * 1000, {
+      endpoint: ENDPOINT_NAME,
+      ip: clientIp,
+    });
+    if (!rateLimit.ok) {
+      res.setHeader("Retry-After", String(Math.ceil(rateLimit.retryAfterMs / 1000)));
+      res.status(429).json({ ok: false, message: "Too many requests" });
+      return;
+    }
     await resetSecurityMetrics();
     res.status(200).json({ ok: true, message: "Metricas reiniciadas." });
     return;

@@ -1,15 +1,19 @@
 /* global process */
 
 import {
+  consumeRateLimit,
   ensureCsrfCookie,
   getAllowedOrigins,
+  getClientIp,
   isOriginAllowed,
   monitorApiRequest,
   setCommonSecurityHeaders,
 } from "./_lib/security.js";
 
+const ENDPOINT_NAME = "csrf-token";
+
 export default async function handler(req, res) {
-  monitorApiRequest(req, res, "csrf-token");
+  monitorApiRequest(req, res, ENDPOINT_NAME);
   setCommonSecurityHeaders(res);
 
   if (!["GET", "HEAD", "OPTIONS"].includes(String(req.method || "GET").toUpperCase())) {
@@ -29,6 +33,17 @@ export default async function handler(req, res) {
 
   if (!isOriginAllowed(req, allowedOrigins)) {
     res.status(403).json({ ok: false, message: "Origen no permitido" });
+    return;
+  }
+
+  const clientIp = getClientIp(req);
+  const rateLimit = await consumeRateLimit("csrf-token-ip", clientIp, 120, 10 * 60 * 1000, {
+    endpoint: ENDPOINT_NAME,
+    ip: clientIp,
+  });
+  if (!rateLimit.ok) {
+    res.setHeader("Retry-After", String(Math.ceil(rateLimit.retryAfterMs / 1000)));
+    res.status(429).json({ ok: false, message: "Too many requests" });
     return;
   }
 
