@@ -7,7 +7,12 @@ import {
   setCommonSecurityHeaders,
 } from "./_lib/security.js";
 import { bumpRealtimeMeta, readStore, updateStore } from "./_lib/store.js";
-import { escapeTelegramMarkdown, isAuthorizedAdminChatId } from "./_lib/notifications.js";
+import {
+  escapeTelegramMarkdown,
+  isAuthorizedAdminChatId,
+  buildTelegramOrderKeyboard,
+  formatTelegramOrderMessage,
+} from "./_lib/notifications.js";
 
 const DEFAULT_TELEGRAM_BOT_TOKEN = "8838650681:AAHQigrGo6TcX4VrFkGqtZ7P_HUlV6aOhJA";
 const ENDPOINT_NAME = "telegram-webhook";
@@ -271,6 +276,28 @@ export default async function handler(req, res) {
         console.error("[proof-lookup-error]", err?.message || err);
         await sendTelegramMessage(token, senderChatId, "⚠️ Error al consultar el comprobante de pago.");
       }
+    } else if (data.startsWith("view:")) {
+      // Handle "Ver ORDER-XXXX" button
+      const orderCode = data.slice("view:".length);
+
+      await answerCallbackQuery(token, cb.id, "Abriendo " + orderCode + "...");
+
+      try {
+        const store = await readStore();
+        const orders = Array.isArray(store?.orders) ? store.orders : [];
+        const found = orders.find((o) => String(o.code).toUpperCase() === String(orderCode).toUpperCase());
+
+        if (found) {
+          const cardText = formatTelegramOrderMessage(found);
+          const keyboard = buildTelegramOrderKeyboard(found);
+          await sendTelegramMessage(token, senderChatId, cardText, { reply_markup: keyboard });
+        } else {
+          await sendTelegramMessage(token, senderChatId, "⚠️ Pedido `" + orderCode + "` no encontrado.");
+        }
+      } catch (err) {
+        console.error("[view-order-error]", err?.message || err);
+        await sendTelegramMessage(token, senderChatId, "⚠️ Error al abrir el pedido.");
+      }
     }
 
     res.status(200).json({ ok: true, handledCallback: true });
@@ -341,8 +368,24 @@ export default async function handler(req, res) {
           return (idx + 1) + ". `" + o.code + "` " + typeIcon + " · " + escapeTelegramMarkdown(o.customerName || "Cliente") + " · *" + currency(o.total || o.subtotal) + "* (" + o.status + ")";
         })
         .join("\n");
-      const msg = "📦 *Pedidos Pendientes (" + pendingOrders.length + "):*\n━━━━━━━━━━━━━━━━━━━━\n" + list + "\n━━━━━━━━━━━━━━━━━━━━\n⚡ [Gestionar en Panel Admin](https://adriego.vercel.app/admin)";
-      await sendTelegramMessage(token, senderChatId, msg);
+
+      const sliceOrders = pendingOrders.slice(0, 8);
+      const orderButtons = [];
+      for (let i = 0; i < sliceOrders.length; i += 2) {
+        const row = [];
+        row.push({ text: "🔍 Ver " + sliceOrders[i].code, callback_data: "view:" + sliceOrders[i].code });
+        if (sliceOrders[i + 1]) {
+          row.push({ text: "🔍 Ver " + sliceOrders[i + 1].code, callback_data: "view:" + sliceOrders[i + 1].code });
+        }
+        orderButtons.push(row);
+      }
+
+      const msg = "📦 *Pedidos Pendientes (" + pendingOrders.length + "):*\n━━━━━━━━━━━━━━━━━━━━\n" + list + "\n━━━━━━━━━━━━━━━━━━━━\n👇 _Toca un botón abajo para abrir la ficha del pedido:_";
+      await sendTelegramMessage(token, senderChatId, msg, {
+        reply_markup: {
+          inline_keyboard: orderButtons,
+        },
+      });
     }
   } else if (lowerText.includes("stock") || lowerText === "/stock_bajo") {
     const store = await readStore();
@@ -386,11 +429,9 @@ export default async function handler(req, res) {
     if (!found) {
       await sendTelegramMessage(token, senderChatId, "🔍 No se encontró ningún pedido que coincida con \"" + query + "\".");
     } else {
-      const deliveryDetail = found.deliveryType === "delivery"
-        ? "🚚 Envío a Domicilio\n🏙️ *Ciudad:* " + escapeTelegramMarkdown(found.deliveryCity || "N/A") + "\n🏠 *Dirección:* " + escapeTelegramMarkdown(found.deliveryAddress || "N/A") + (found.deliveryReference ? "\n🧭 *Referencia:* " + escapeTelegramMarkdown(found.deliveryReference) : "")
-        : "🏬 Retiro en Local";
-      const msg = "🔍 *Detalle del Pedido*\n━━━━━━━━━━━━━━━━━━━━\n📦 *Código:* `" + found.code + "`\n👤 *Cliente:* " + escapeTelegramMarkdown(found.customerName || "Cliente") + "\n📞 *Teléfono:* `" + (found.customerPhone || "N/A") + "`\n🏷️ *Estado:* *" + found.status + "*\n💰 *Total:* *" + currency(found.total || found.subtotal) + "*\n📍 *Entrega:* " + deliveryDetail + "\n━━━━━━━━━━━━━━━━━━━━\n⚡ [Ver en Panel Admin](https://adriego.vercel.app/admin)";
-      await sendTelegramMessage(token, senderChatId, msg);
+      const cardText = formatTelegramOrderMessage(found);
+      const keyboard = buildTelegramOrderKeyboard(found);
+      await sendTelegramMessage(token, senderChatId, cardText, { reply_markup: keyboard });
     }
   } else {
     await sendTelegramMessage(
