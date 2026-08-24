@@ -8011,6 +8011,44 @@ img {
 
 .checkout-payment-proof-heading strong {
   font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.checkout-badge-required {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px;
+  border-radius: var(--radius-full, 999px);
+  background: #000000;
+  color: #ffffff;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.checkout-form-notice {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: #fafafa;
+  border: 1px solid #e4e4e7;
+  border-left: 3.5px solid #000000;
+  color: #18181b;
+  font-size: 0.82rem;
+  font-weight: 550;
+  line-height: 1.45;
+  margin: 6px 0 0;
+}
+
+.checkout-form-notice svg {
+  flex-shrink: 0;
+  color: #000000;
 }
 
 .checkout-payment-proof-heading p {

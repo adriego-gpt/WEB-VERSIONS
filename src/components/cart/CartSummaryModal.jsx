@@ -21,6 +21,7 @@ import {
   Upload,
   FileCheck2,
   ZoomIn,
+  AlertCircle,
 } from "lucide-react";
 import { motion as Motion, AnimatePresence } from "framer-motion";
 import { currency } from "../../utils/currency";
@@ -253,7 +254,7 @@ export function CartSummaryModal({
         return;
       }
       if (!paymentProof) {
-        setCheckoutFormError("Es obligatorio subir la foto o captura del comprobante de transferencia para confirmar tu pedido.");
+        setCheckoutFormError("Por favor sube la foto o captura del comprobante bancario para confirmar tu pedido.");
         return;
       }
     }
@@ -773,10 +774,8 @@ export function CartSummaryModal({
                           </span>
                           <div>
                             <strong>
-                              Comprobante de transferencia{" "}
-                              <span style={{ color: "var(--brand-accent, #ef4444)", fontSize: "0.78rem", fontWeight: "700" }}>
-                                (Obligatorio)
-                              </span>
+                              Comprobante de transferencia
+                              <span className="checkout-badge-required">Requerido</span>
                             </strong>
                             <p>Sube la foto o captura de tu transferencia (JPG, PNG o WEBP de hasta {FILE_SECURITY.maxImageSizeMb} MB). La adjuntaremos a tu pedido para validarlo.</p>
                           </div>
@@ -840,7 +839,12 @@ export function CartSummaryModal({
                     </>
                   )}
 
-                  {checkoutFormError && <p className="helper-text coupon-error" style={{ margin: 0 }}>{checkoutFormError}</p>}
+                  {checkoutFormError && (
+                    <div className="checkout-form-notice" role="alert">
+                      <AlertCircle size={16} aria-hidden="true" />
+                      <span>{checkoutFormError}</span>
+                    </div>
+                  )}
                 </div>
               )}
 
