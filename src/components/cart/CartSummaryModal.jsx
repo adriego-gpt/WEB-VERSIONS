@@ -222,6 +222,7 @@ export function CartSummaryModal({
     const idNumber = sanitizeLine(deliveryDraft.idNumber || "");
     const city = sanitizeLine(deliveryDraft.city || "");
     const address = sanitizeParagraph(deliveryDraft.address || "");
+    const reference = sanitizeParagraph(deliveryDraft.reference || "");
     const phone = normalizeUserPhoneNumber(deliveryDraft.phone || "");
 
     if (!fullName) {
@@ -229,15 +230,19 @@ export function CartSummaryModal({
       return false;
     }
     if (!idNumber || idNumber.length < 10) {
-      setCheckoutFormError("Ingresa un número de cédula o RUC válido (mínimo 10 dígitos).");
+      setCheckoutFormError("La cédula de identidad o RUC es obligatoria (mínimo 10 dígitos).");
+      return false;
+    }
+    if (!phone || phone.length !== AUTH_FIELD_LIMITS.phone) {
+      setCheckoutFormError("El número de teléfono móvil es obligatorio y debe tener 10 dígitos.");
       return false;
     }
     if (!city || !address) {
       setCheckoutFormError("Completa la ciudad y la dirección exacta para la entrega.");
       return false;
     }
-    if (phone.length !== AUTH_FIELD_LIMITS.phone) {
-      setCheckoutFormError("Ingresa un número de teléfono válido de 10 dígitos para el repartidor.");
+    if (!reference) {
+      setCheckoutFormError("Por favor ingresa una referencia de entrega para el repartidor.");
       return false;
     }
     return true;
@@ -593,22 +598,31 @@ export function CartSummaryModal({
                   ) : (
                     <div className="checkout-delivery-form">
                       <div className="checkout-recipient-card">
-                        <p className="checkout-section-badge-title">Datos del destinatario</p>
+                        <p className="checkout-section-badge-title">Datos del destinatario (obligatorios)</p>
                         <div className="checkout-delivery-grid recipient-grid">
                           <input
                             className="input"
-                            placeholder="Nombre completo de quien recibe"
+                            placeholder="Nombre completo de quien recibe *"
                             aria-label="Nombre completo"
                             value={deliveryDraft.fullName}
                             onChange={(event) => handleDeliveryDraftChange("fullName", event.target.value)}
                           />
                           <input
                             className="input"
-                            placeholder="Cédula de identidad (10 dígitos)"
+                            placeholder="Cédula de identidad (10 dígitos obligatorios) *"
                             aria-label="Cédula de identidad"
                             maxLength={13}
                             value={deliveryDraft.idNumber}
                             onChange={(event) => handleDeliveryDraftChange("idNumber", event.target.value)}
+                          />
+                          <input
+                            className="input"
+                            placeholder="Teléfono móvil para entrega (10 dígitos) *"
+                            aria-label="Teléfono para entrega"
+                            inputMode="tel"
+                            maxLength={10}
+                            value={deliveryDraft.phone}
+                            onChange={(event) => handleDeliveryDraftChange("phone", event.target.value)}
                           />
                         </div>
                       </div>
@@ -687,30 +701,21 @@ export function CartSummaryModal({
                             <div className="checkout-delivery-grid">
                               <input
                                 className="input"
-                                placeholder="Ciudad / Provincia"
+                                placeholder="Ciudad / Cantón *"
                                 aria-label="Ciudad"
                                 value={deliveryDraft.city}
                                 onChange={(event) => handleDeliveryDraftChange("city", event.target.value)}
                               />
-                              <input
-                                className="input"
-                                placeholder="Teléfono de contacto (10 dígitos)"
-                                aria-label="Teléfono"
-                                inputMode="tel"
-                                maxLength={10}
-                                value={deliveryDraft.phone}
-                                onChange={(event) => handleDeliveryDraftChange("phone", event.target.value)}
-                              />
                               <textarea
                                 className="textarea checkout-delivery-full"
-                                placeholder="Dirección exacta (Calle principal, número e intersección)"
+                                placeholder="Dirección exacta (Calle principal, número e intersección) *"
                                 aria-label="Dirección exacta"
                                 value={deliveryDraft.address}
                                 onChange={(event) => handleDeliveryDraftChange("address", event.target.value)}
                               />
                               <textarea
                                 className="textarea checkout-delivery-full"
-                                placeholder="Referencia de entrega (Color de fachada, depto, indicaciones...)"
+                                placeholder="Referencia de entrega (Color de fachada, depto, indicaciones...) *"
                                 aria-label="Referencia de entrega"
                                 value={deliveryDraft.reference}
                                 onChange={(event) => handleDeliveryDraftChange("reference", event.target.value)}

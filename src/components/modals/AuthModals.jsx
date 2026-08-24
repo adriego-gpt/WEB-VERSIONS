@@ -616,10 +616,10 @@ export function ProfileModal({
                         </div>
 
                         <div className="form-field-group">
-                          <label className="profile-field-label">Dirección exacta</label>
+                          <label className="profile-field-label">Dirección exacta *</label>
                           <textarea
                             className="textarea profile-address-textarea"
-                            placeholder="Calle principal, número de casa/edificio e intersección..."
+                            placeholder="Calle principal, número de casa/edificio e intersección *"
                             value={addressBookDraft.address || ""}
                             onChange={(event) => onAddressBookDraftChange("address", event.target.value)}
                           />
@@ -627,19 +627,19 @@ export function ProfileModal({
 
                         <div className="settings-grid">
                           <div className="form-field-group">
-                            <label className="profile-field-label">Ciudad / Provincia</label>
+                            <label className="profile-field-label">Ciudad / Cantón *</label>
                             <input
                               className="input"
-                              placeholder="Ej. Quito, Guayaquil..."
+                              placeholder="Ej. Quito, Guayaquil *"
                               value={addressBookDraft.city || ""}
                               onChange={(event) => onAddressBookDraftChange("city", event.target.value)}
                             />
                           </div>
                           <div className="form-field-group">
-                            <label className="profile-field-label">Teléfono de contacto</label>
+                            <label className="profile-field-label">Teléfono de contacto (10 dígitos) *</label>
                             <input
                               className="input"
-                              placeholder="Teléfono (10 dígitos)"
+                              placeholder="Teléfono (10 dígitos) *"
                               inputMode="tel"
                               maxLength={10}
                               value={addressBookDraft.phone || ""}
@@ -649,10 +649,10 @@ export function ProfileModal({
                         </div>
 
                         <div className="form-field-group">
-                          <label className="profile-field-label">Referencia adicional (opcional)</label>
+                          <label className="profile-field-label">Referencia de entrega</label>
                           <textarea
                             className="textarea"
-                            placeholder="Piso, departamento, color de fachada, portón o puntos de referencia..."
+                            placeholder="Piso, departamento, color de fachada, portón o indicaciones de entrega..."
                             value={addressBookDraft.reference || ""}
                             onChange={(event) => onAddressBookDraftChange("reference", event.target.value)}
                           />

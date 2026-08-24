@@ -5393,7 +5393,15 @@ export default function App() {
     });
     if (!normalizedEntry || !normalizedEntry.address) {
       setProfileFeedback({ tone: "error", message: "Ingresa una dirección válida para guardarla." });
-      return;
+      return { ok: false };
+    }
+    if (!normalizedEntry.city) {
+      setProfileFeedback({ tone: "error", message: "Ingresa la ciudad para esta dirección." });
+      return { ok: false };
+    }
+    if (!normalizedEntry.phone || normalizedEntry.phone.length !== AUTH_FIELD_LIMITS.phone) {
+      setProfileFeedback({ tone: "error", message: "Ingresa un número de teléfono de 10 dígitos obligatorio." });
+      return { ok: false };
     }
 
     const currentBook = normalizeAddressBook(profileDraft.addressBook);
