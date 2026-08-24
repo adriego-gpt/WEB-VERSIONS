@@ -55,12 +55,12 @@ export default async function handler(req, res) {
   setCommonSecurityHeaders(res);
   const clientIp = getClientIp(req);
 
-  const rateCheck = consumeRateLimit("telegram-webhook:" + clientIp, {
-    limit: 1200,
-    windowMs: 60 * 1000,
+  const rateCheck = await consumeRateLimit("telegram-webhook", clientIp, 1200, 60 * 1000, {
+    endpoint: ENDPOINT_NAME,
+    ip: clientIp,
   });
 
-  if (!rateCheck.allowed) {
+  if (!rateCheck.ok) {
     res.status(429).json({ ok: false, message: "Demasiadas solicitudes." });
     return;
   }
