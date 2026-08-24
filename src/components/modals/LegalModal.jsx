@@ -1,5 +1,5 @@
 import React, { useEffect } from "react";
-import { X, ShieldCheck, RefreshCw, FileText, Cookie, AlertTriangle, CheckCircle2 } from "lucide-react";
+import { X, ShieldCheck, RefreshCw, FileText, Cookie, AlertTriangle, CheckCircle2, Ban } from "lucide-react";
 import { motion as Motion, AnimatePresence } from "framer-motion";
 
 export function LegalModal({
@@ -39,19 +39,19 @@ export function LegalModal({
         onClick={onClose}
       >
         <Motion.div
-          initial={{ opacity: 0, y: 24, scale: 0.97 }}
+          initial={{ opacity: 0, y: 20, scale: 0.98 }}
           animate={{ opacity: 1, y: 0, scale: 1 }}
-          exit={{ opacity: 0, y: 18, scale: 0.97 }}
-          transition={{ duration: 0.22 }}
+          exit={{ opacity: 0, y: 16, scale: 0.98 }}
+          transition={{ duration: 0.2 }}
           className="sheet legal-sheet"
           role="dialog"
           aria-modal="true"
           aria-label="Políticas y Condiciones de la Tienda"
           onClick={(event) => event.stopPropagation()}
         >
-          <div className="sheet-header legal-sheet-header">
+          <div className="legal-sheet-header">
             <div className="legal-header-copy">
-              <span className="legal-kicker">{brandName}</span>
+              <span className="legal-kicker">{brandName.toUpperCase()}</span>
               <h2>Políticas y Condiciones</h2>
             </div>
             <button
@@ -77,7 +77,7 @@ export function LegalModal({
                   className={`legal-tab-btn${isActive ? " active" : ""}`}
                   onClick={() => onTabChange?.(item.id)}
                 >
-                  <Icon size={16} />
+                  <Icon size={15} />
                   <span>{item.label}</span>
                 </button>
               );
@@ -88,7 +88,7 @@ export function LegalModal({
             {tab === "exchanges" && (
               <div className="legal-body-section" tabIndex={0}>
                 <div className="legal-alert-box warning">
-                  <AlertTriangle size={20} className="legal-alert-icon" />
+                  <AlertTriangle size={22} className="legal-alert-icon" />
                   <div>
                     <strong>POLÍTICA ESTRICTA: SOLO CAMBIOS</strong>
                     <p>
@@ -98,12 +98,22 @@ export function LegalModal({
                   </div>
                 </div>
 
-                <div className="legal-text-block">
+                <div className="legal-alert-box notice">
+                  <Ban size={22} className="legal-alert-icon" />
+                  <div>
+                    <strong>PRENDAS EN OFERTA / PROMOCIÓN: VENTA FINAL</strong>
+                    <p>
+                      <strong>Los productos adquiridos en oferta, descuento, promoción o liquidación NO aplican para cambios ni devoluciones.</strong> Son de venta final definitiva.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="legal-card-section">
                   <h3>1. Condiciones para solicitar un cambio</h3>
-                  <ul>
+                  <ul className="legal-list">
                     <li>
                       <CheckCircle2 size={16} className="bullet-icon" />
-                      <span><strong>Plazo máximo:</strong> Tienes hasta <strong>7 días calendario</strong> a partir de la recepción o retiro de tu pedido para solicitar el cambio de tu prenda.</span>
+                      <span><strong>Plazo máximo:</strong> Tienes hasta <strong>7 días calendario</strong> a partir de la recepción o retiro de tu pedido para solicitar el cambio de tu prenda a precio regular.</span>
                     </li>
                     <li>
                       <CheckCircle2 size={16} className="bullet-icon" />
@@ -111,7 +121,7 @@ export function LegalModal({
                     </li>
                     <li>
                       <CheckCircle2 size={16} className="bullet-icon" />
-                      <span><strong>Etiquetas y empaque:</strong> Debe conservar todas sus etiquetas originales intactas, códigos y empaque original.</span>
+                      <span><strong>Etiquetas y empaque:</strong> Debe conservar todas sus etiquetas originales intactas, códigos de barra y empaque original.</span>
                     </li>
                     <li>
                       <CheckCircle2 size={16} className="bullet-icon" />
@@ -120,27 +130,27 @@ export function LegalModal({
                   </ul>
                 </div>
 
-                <div className="legal-text-block">
+                <div className="legal-card-section">
                   <h3>2. Modalidad del cambio</h3>
-                  <p>
-                    El cambio se realiza únicamente por:
+                  <p className="legal-intro">
+                    El cambio aplica únicamente para productos a precio regular y se realiza por:
                   </p>
-                  <ul>
+                  <ul className="legal-list">
                     <li>
                       <CheckCircle2 size={16} className="bullet-icon" />
                       <span><strong>Cambio de talla:</strong> Del mismo modelo adquirido (sujeto a disponibilidad de inventario).</span>
                     </li>
                     <li>
                       <CheckCircle2 size={16} className="bullet-icon" />
-                      <span><strong>Cambio por otra prenda:</strong> De igual valor. En caso de elegir una prenda de mayor precio, el cliente deberá cancelar la diferencia correspondiente. Si la prenda es de menor valor, deberá completar el valor con otro artículo, ya que no se realizan devoluciones de excedentes ni saldo restante.</span>
+                      <span><strong>Cambio por otra prenda:</strong> De igual valor. Si eliges una prenda de mayor precio, se cancelará la diferencia. Si es de menor valor, se completará con otro artículo, ya que no se reembolsan excedentes ni saldo.</span>
                     </li>
                   </ul>
                 </div>
 
-                <div className="legal-text-block">
-                  <h3>3. Gastos de envío y flete</h3>
+                <div className="legal-card-section">
+                  <h3>3. Gastos de transporte y envío</h3>
                   <p>
-                    Los costos de envío y transporte derivados del cambio de talla o modelo son asumidos en su totalidad por el cliente comprador, a excepción de casos donde el cambio sea originado por un error atribuible a la tienda en el despacho o por un defecto de fábrica debidamente verificado.
+                    Los costos de flete y transporte derivados del cambio de talla o modelo son asumidos en su totalidad por el comprador, salvo que el cambio se deba a un error comprobado en el despacho por parte de la tienda o defecto de fábrica verificado.
                   </p>
                 </div>
               </div>
@@ -149,41 +159,41 @@ export function LegalModal({
             {tab === "privacy" && (
               <div className="legal-body-section" tabIndex={0}>
                 <div className="legal-alert-box info">
-                  <ShieldCheck size={20} className="legal-alert-icon" />
+                  <ShieldCheck size={22} className="legal-alert-icon" />
                   <div>
                     <strong>COMPROMISO DE CONFIDENCIALIDAD</strong>
                     <p>Tus datos personales son estrictamente privados. Nunca vendemos, alquilamos ni comercializamos tu información con terceros.</p>
                   </div>
                 </div>
 
-                <div className="legal-text-block">
+                <div className="legal-card-section">
                   <h3>1. Datos que recopilamos</h3>
-                  <p>
+                  <p className="legal-intro">
                     Recopilamos únicamente la información indispensable para procesar tus compras y garantizar la entrega oportuna de tus pedidos:
                   </p>
-                  <ul>
+                  <ul className="legal-list">
                     <li>
                       <CheckCircle2 size={16} className="bullet-icon" />
-                      <span><strong>Datos de contacto e identificación:</strong> Nombre completo, número de cédula/identificación, correo electrónico y número telefónico móvil.</span>
+                      <span><strong>Identificación y contacto:</strong> Nombre completo, número de cédula/identificación, correo electrónico y número de teléfono celular.</span>
                     </li>
                     <li>
                       <CheckCircle2 size={16} className="bullet-icon" />
-                      <span><strong>Datos de entrega:</strong> Dirección de envío, ciudad y referencias para el courier o repartidor.</span>
+                      <span><strong>Dirección de entrega:</strong> Ciudad, calle principal, secundaria y referencias para el repartidor o courier.</span>
                     </li>
                   </ul>
                 </div>
 
-                <div className="legal-text-block">
+                <div className="legal-card-section">
                   <h3>2. Seguridad criptográfica de contraseñas</h3>
                   <p>
-                    Tu contraseña se encuentra protegida mediante un proceso de cifrado unidireccional y robusto con algoritmo <strong>scrypt con sal (salt) aleatoria</strong>. Ni el personal de soporte ni los administradores de la tienda pueden visualizar ni conocer tu contraseña real.
+                    Tu contraseña se encuentra protegida mediante un algoritmo criptográfico unidireccional <strong>scrypt con sal (salt) aleatoria</strong>. Ningún administrador ni personal de soporte puede ver tu contraseña real.
                   </p>
                 </div>
 
-                <div className="legal-text-block">
-                  <h3>3. Protección de pagos</h3>
+                <div className="legal-card-section">
+                  <h3>3. Protección y privacidad de pagos</h3>
                   <p>
-                    {brandName} no almacena números de tarjetas de crédito o débito ni datos financieros sensibles. Los pagos por transferencia se verifican mediante comprobante y las pasarelas procesan las transacciones en pasarelas seguras y certificadas.
+                    {brandName} no almacena números de tarjetas de crédito o débito ni datos financieros sensibles. Las transferencias se validan mediante comprobante y los pagos electrónicos se gestionan en entornos seguros y certificados.
                   </p>
                 </div>
               </div>
@@ -191,31 +201,31 @@ export function LegalModal({
 
             {tab === "terms" && (
               <div className="legal-body-section" tabIndex={0}>
-                <div className="legal-text-block">
+                <div className="legal-card-section">
                   <h3>1. Aceptación de los Términos</h3>
                   <p>
-                    Al navegar en este sitio web y realizar un pedido en <strong>{brandName}</strong>, el usuario declara haber leído, comprendido y aceptado en su totalidad los presentes Términos y Condiciones de uso y compra.
+                    Al navegar en este sitio web y realizar un pedido en <strong>{brandName}</strong>, el usuario declara haber leído, comprendido y aceptado en su totalidad los presentes Términos y Condiciones de compra.
                   </p>
                 </div>
 
-                <div className="legal-text-block">
+                <div className="legal-card-section">
                   <h3>2. Precios y Disponibilidad</h3>
                   <p>
                     Todos los precios mostrados en la tienda están expresados en dólares americanos (USD) e incluyen los detalles de oferta vigentes al momento de la orden. La disponibilidad de inventario está sujeta a existencias en tiempo real.
                   </p>
                 </div>
 
-                <div className="legal-text-block">
+                <div className="legal-card-section">
                   <h3>3. Procesamiento y Despacho de Pedidos</h3>
                   <p>
-                    Los pedidos se preparan y despachan una vez confirmado el pago. Los tiempos de entrega comunicados son estimaciones sujetas a la logística de las empresas de courier nacionales.
+                    Los pedidos se preparan y despachan una vez confirmado el pago. Los tiempos de entrega comunicados son estimaciones coordinadas con empresas de courier nacionales.
                   </p>
                 </div>
 
-                <div className="legal-text-block">
+                <div className="legal-card-section">
                   <h3>4. Reserva de Stock</h3>
                   <p>
-                    Para asegurar equidad con todos los compradores, los pedidos pendientes de pago tienen un tiempo límite para su confirmación antes de que las unidades reservadas retornen al inventario público.
+                    Para asegurar disponibilidad equitativa a todos los clientes, los pedidos pendientes de confirmación de pago tienen un tiempo límite de reserva antes de retornar al catálogo público.
                   </p>
                 </div>
               </div>
@@ -224,16 +234,16 @@ export function LegalModal({
             {tab === "cookies" && (
               <div className="legal-body-section" tabIndex={0}>
                 <div className="legal-alert-box info">
-                  <Cookie size={20} className="legal-alert-icon" />
+                  <Cookie size={22} className="legal-alert-icon" />
                   <div>
                     <strong>COOKIES ESTRICTAMENTE NECESARIAS</strong>
                     <p>Utilizamos únicamente cookies técnicas indispensables para el funcionamiento y la seguridad de tu sesión de compra.</p>
                   </div>
                 </div>
 
-                <div className="legal-text-block">
+                <div className="legal-card-section">
                   <h3>1. ¿Qué cookies utilizamos?</h3>
-                  <ul>
+                  <ul className="legal-list">
                     <li>
                       <CheckCircle2 size={16} className="bullet-icon" />
                       <span><strong>Cookie de Sesión (<code>atelier_user_session</code>):</strong> Mantiene tu sesión abierta de forma cifrada y segura (HTTP-only) para que puedas navegar, guardar artículos favoritos y consultar tus pedidos.</span>
@@ -245,10 +255,10 @@ export function LegalModal({
                   </ul>
                 </div>
 
-                <div className="legal-text-block">
+                <div className="legal-card-section">
                   <h3>2. Sin Rastreadores Invasivos (Zero-PII)</h3>
                   <p>
-                    En <strong>{brandName}</strong> respetamos tu privacidad. No utilizamos cookies de rastreo publicitario invasivo de terceros ni vendemos tu historial de navegación a redes de anuncios.
+                    En <strong>{brandName}</strong> respetamos tu privacidad. No utilizamos cookies de rastreo publicitario invasivo de terceros ni comercializamos tu historial de navegación.
                   </p>
                 </div>
               </div>
