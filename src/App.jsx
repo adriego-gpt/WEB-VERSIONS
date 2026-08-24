@@ -198,6 +198,7 @@ const FavoritesModal = lazy(() => import("./components/cart/FavoritesModal"));
 const ProfileQuickMenu = lazy(() => import("./components/cart/ProfileQuickMenu"));
 const OrdersModal = lazy(() => import("./components/orders/OrdersModal"));
 const OrderReferenceModal = lazy(() => import("./components/orders/OrderReferenceModal"));
+const LegalModal = lazy(() => import("./components/modals/LegalModal").then((module) => ({ default: module.LegalModal })));
 
 const CATALOG_SORT_OPTIONS = new Set(["destacados", "nuevos", "mejor-valorados", "precio-asc", "precio-desc"]);
 
@@ -2073,6 +2074,7 @@ export default function App() {
   const [authBusy, setAuthBusy] = useState(false);
   const [authPasswordVisible, setAuthPasswordVisible] = useState(false);
   const [authResetEmailLocked, setAuthResetEmailLocked] = useState(false);
+  const [legalModalState, setLegalModalState] = useState({ open: false, tab: "exchanges" });
   const [postAuthDestination, setPostAuthDestination] = useState(null);
   const [authForm, setAuthForm] = useState(() => ({ ...AUTH_FORM_DEFAULTS }));
   const [profileDraft, setProfileDraft] = useState({ name: "", lastName: "", phone: "", email: "", shippingAddress: "", addressBook: [] });
@@ -2439,6 +2441,7 @@ export default function App() {
     || showProfileQuickMenu
     || showUserAuth
     || showProfileModal
+    || legalModalState.open
     || Boolean(selectedProduct);
   const heroAutoplayDelayMs = isMobileViewport ? 5600 : 4200;
   const showPreviousHeroSlide = useCallback(() => {
@@ -7290,6 +7293,18 @@ export default function App() {
         </Suspense>
       )}
 
+      {legalModalState.open && (
+        <Suspense fallback={null}>
+          <LegalModal
+            open={legalModalState.open}
+            tab={legalModalState.tab}
+            onTabChange={(tab) => setLegalModalState((prev) => ({ ...prev, tab }))}
+            onClose={() => setLegalModalState((prev) => ({ ...prev, open: false }))}
+            brandName={storeSettings.brandName || "Adriego Store"}
+          />
+        </Suspense>
+      )}
+
       {showAdminPanel && isAdmin && (
         <Suspense fallback={null}>
       <ExternalAdminPanelModal
@@ -8234,6 +8249,37 @@ export default function App() {
               <span>ADRIEGO</span>
               <small>STORE</small>
             </p>
+
+            <div className="footer-legal-bar" aria-label="Políticas y documentos legales">
+              <button
+                type="button"
+                className="footer-legal-btn"
+                onClick={() => setLegalModalState({ open: true, tab: "exchanges" })}
+              >
+                🔄 Política de Cambios (Sin Devoluciones)
+              </button>
+              <button
+                type="button"
+                className="footer-legal-btn"
+                onClick={() => setLegalModalState({ open: true, tab: "privacy" })}
+              >
+                🛡️ Privacidad de Datos
+              </button>
+              <button
+                type="button"
+                className="footer-legal-btn"
+                onClick={() => setLegalModalState({ open: true, tab: "terms" })}
+              >
+                📜 Términos de Compra
+              </button>
+              <button
+                type="button"
+                className="footer-legal-btn"
+                onClick={() => setLegalModalState({ open: true, tab: "cookies" })}
+              >
+                🍪 Uso de Cookies
+              </button>
+            </div>
           </div>
         </div>
       </Motion.footer>
