@@ -4564,10 +4564,8 @@ export default function App() {
 
   const buildWhatsAppOrderUrl = (order, serverWhatsAppUrl = "", options = {}) => {
     const isMobile = Boolean(options.mobile);
-    const WHATSAPP_URL_MAX_LENGTH = isMobile ? 1300 : 2600;
-    const messageVariants = isMobile
-      ? ["compact", "minimal", "full"]
-      : ["full", "compact", "minimal"];
+    const WHATSAPP_URL_MAX_LENGTH = 3500;
+    const messageVariants = ["full", "compact", "minimal"];
     const safeServerUrl = normalizeSafeUrl(serverWhatsAppUrl);
     const safeLink = normalizeSafeUrl(contactSettings.whatsappLink || "");
     const safeNumber = normalizeWhatsAppInternationalNumber(contactSettings.whatsappNumber || "");
@@ -4579,8 +4577,6 @@ export default function App() {
       if (candidates.some((entry) => entry.url === safeUrl)) return;
       candidates.push({ url: safeUrl, mode });
     };
-
-    pushCandidate(safeServerUrl, "server");
 
     if (safeNumber) {
       messageVariants.forEach((variant) => {
@@ -4596,6 +4592,7 @@ export default function App() {
         pushCandidate(buildWhatsAppLinkFromBase(safeLink, message), `link-${variant}`);
       });
     }
+    pushCandidate(safeServerUrl, "server");
 
     const fitting = candidates.find((entry) => entry.url.length <= WHATSAPP_URL_MAX_LENGTH);
     if (fitting) return fitting;
@@ -4606,18 +4603,22 @@ export default function App() {
 
   const buildWhatsAppOrderFollowupMessage = (order) => {
     const normalizedStatus = normalizeOrderStatusForOrder(order?.status, order?.deliveryType);
-    const deliveryMode = order?.deliveryType === "delivery" ? "Envio a domicilio" : "Retiro en local";
+    const deliveryMode = order?.deliveryType === "delivery" ? "Envío a domicilio" : "Retiro en local";
     const statusSummary = normalizedStatus === "Listo para retiro"
-      ? "listo para retiro"
-      : (normalizedStatus === "Enviado" ? "enviado" : normalizedStatus.toLowerCase());
+      ? "Listo para retiro"
+      : (normalizedStatus === "Enviado" ? "Enviado" : normalizedStatus);
     return [
-      `Hola Adriego Store, soy ${order?.customerName || "cliente"}.`,
-      `Mi pedido ${order?.code || ""} aparece como ${statusSummary}.`,
-      `Tipo de entrega: ${deliveryMode}.`,
+      `*CONSULTA DE PEDIDO · ADRIEGO STORE*`,
+      `*Código:* ${order?.code || ""}`,
+      `━━━━━━━━━━━━━━━━━━━━`,
+      `• *Cliente:* ${order?.customerName || "Cliente"}`,
+      `• *Estado:* ${statusSummary}`,
+      `• *Entrega:* ${deliveryMode}`,
+      `• *Total:* ${currency(order?.total || order?.subtotal || 0)}`,
+      `━━━━━━━━━━━━━━━━━━━━`,
       order?.deliveryType === "delivery"
-        ? "Quiero confirmar la entrega a domicilio."
-        : "Quiero coordinar el retiro en local.",
-      "Gracias.",
+        ? "_Hola, deseo consultar el estado de la entrega a mi domicilio._"
+        : "_Hola, deseo coordinar el retiro de mi pedido en el local._",
     ].filter(Boolean).join("\n");
   };
 
