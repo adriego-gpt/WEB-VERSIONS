@@ -56,7 +56,7 @@ export default async function handler(req, res) {
   const clientIp = getClientIp(req);
 
   const rateCheck = consumeRateLimit("telegram-webhook:" + clientIp, {
-    limit: 60,
+    limit: 1200,
     windowMs: 60 * 1000,
   });
 
