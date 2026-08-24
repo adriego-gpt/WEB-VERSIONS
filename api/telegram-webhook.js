@@ -196,13 +196,57 @@ export default async function handler(req, res) {
       }
 
       if (updatedOrder) {
+        const rawPhone = String(updatedOrder.customerPhone || "").replace(/\D/g, "");
+        let intlPhone = rawPhone;
+        if (rawPhone.startsWith("0") && rawPhone.length === 10) {
+          intlPhone = "593" + rawPhone.slice(1);
+        } else if (rawPhone.length === 9) {
+          intlPhone = "593" + rawPhone;
+        }
+
+        const customerName = updatedOrder.customerName || "Cliente";
+        let waText = "";
+        if (targetAction === "ready") {
+          waText = "¡Hola " + customerName + "! ✨ Te saludamos de Adriego Store. Tu pedido " + orderCode + " ya está LISTO PARA RETIRO en nuestro local de El Tejar. 🏬👗 ¡Te esperamos!";
+        } else if (targetAction === "shipped") {
+          const destCity = updatedOrder.deliveryCity ? " a " + updatedOrder.deliveryCity : "";
+          waText = "¡Hola " + customerName + "! ✨ Te saludamos de Adriego Store. Tu pedido " + orderCode + " ya va EN CAMINO" + destCity + " 🚚📦. ¡Muchas gracias por tu compra!";
+        } else if (targetAction === "completed") {
+          waText = "¡Hola " + customerName + "! ✨ Te saludamos de Adriego Store. Confirmamos que tu pedido " + orderCode + " fue ENTREGADO con éxito. 🥰👗 ¡Que disfrutes tus prendas!";
+        } else {
+          waText = "¡Hola " + customerName + "! ✨ Te saludamos de Adriego Store respecto a tu pedido " + orderCode + ".";
+        }
+
+        const waUrl = intlPhone ? "https://wa.me/" + intlPhone + "?text=" + encodeURIComponent(waText) : null;
+
+        const actionButtons = [];
+        const topRow = [];
+        if (waUrl) {
+          topRow.push({ text: "💬 Avisar Cliente por WhatsApp", url: waUrl });
+        }
+        topRow.push({ text: "⚡ Panel Web", url: "https://adriego.vercel.app/admin" });
+        actionButtons.push(topRow);
+
+        const bottomRow = [];
+        bottomRow.push({ text: "📦 Ver Pendientes", callback_data: "quick_pendientes" });
+        if (updatedOrder.deliveryType === "delivery") {
+          bottomRow.push({ text: "📋 Formato Courier", callback_data: "courier:" + orderCode });
+        }
+        actionButtons.push(bottomRow);
+
         const deliveryInfo = updatedOrder.deliveryType === "delivery"
           ? "\n📍 *Envío a:* " + escapeTelegramMarkdown(updatedOrder.deliveryCity || "") + " — " + escapeTelegramMarkdown(updatedOrder.deliveryAddress || "")
           : "\n🏬 *Retiro en local*";
+
         await sendTelegramMessage(
           token,
           senderChatId,
-          "✅ *Estado Actualizado con Éxito*\n━━━━━━━━━━━━━━━━━━━━\n📦 *Pedido:* `" + orderCode + "`\n🏷️ *Nuevo Estado:* *" + newStatus + "*" + deliveryInfo + "\n⏰ *Hora:* " + new Date().toLocaleTimeString("es-EC") + "\n👤 *Cliente:* " + escapeTelegramMarkdown(updatedOrder.customerName || "Cliente"),
+          "✅ *Estado Actualizado con Éxito*\n━━━━━━━━━━━━━━━━━━━━\n📦 *Pedido:* `" + orderCode + "`\n🏷️ *Nuevo Estado:* *" + newStatus + "*" + deliveryInfo + "\n⏰ *Hora:* " + new Date().toLocaleTimeString("es-EC") + "\n👤 *Cliente:* " + escapeTelegramMarkdown(updatedOrder.customerName || "Cliente") + "\n━━━━━━━━━━━━━━━━━━━━\n👇 _Toca abajo para avisar al cliente por WhatsApp con el mensaje ya redactado:_ ",
+          {
+            reply_markup: {
+              inline_keyboard: actionButtons,
+            },
+          },
         );
       } else {
         await sendTelegramMessage(token, senderChatId, "⚠️ Pedido `" + orderCode + "` no encontrado en la base de datos.");
@@ -297,6 +341,87 @@ export default async function handler(req, res) {
       } catch (err) {
         console.error("[view-order-error]", err?.message || err);
         await sendTelegramMessage(token, senderChatId, "⚠️ Error al abrir el pedido.");
+      }
+    } else if (data.startsWith("courier:")) {
+      // Handle "Formato Courier" button
+      const orderCode = data.slice("courier:".length);
+      await answerCallbackQuery(token, cb.id, "Generando formato courier...");
+
+      try {
+        const store = await readStore();
+        const orders = Array.isArray(store?.orders) ? store.orders : [];
+        const found = orders.find((o) => String(o.code).toUpperCase() === String(orderCode).toUpperCase());
+
+        if (found) {
+          const courierLines = [
+            "📋 *DATOS DE DESPACHO · COURIER*",
+            "━━━━━━━━━━━━━━━━━━━━",
+            "*DESTINATARIO:* " + escapeTelegramMarkdown(found.deliveryFullName || found.customerName || "Cliente"),
+          ];
+          if (found.deliveryIdNumber) courierLines.push("*CÉDULA/RUC:* `" + escapeTelegramMarkdown(found.deliveryIdNumber) + "`");
+          if (found.deliveryPhone || found.customerPhone) courierLines.push("*TELÉFONO:* `" + escapeTelegramMarkdown(found.deliveryPhone || found.customerPhone) + "`");
+          if (found.deliveryCity) courierLines.push("*CIUDAD:* " + escapeTelegramMarkdown(found.deliveryCity));
+          if (found.deliveryAddress) courierLines.push("*DIRECCIÓN:* " + escapeTelegramMarkdown(found.deliveryAddress));
+          if (found.deliveryReference) courierLines.push("*REFERENCIA:* " + escapeTelegramMarkdown(found.deliveryReference));
+          courierLines.push(
+            "*CONTENIDO:* Prendas de vestir / Ropa",
+            "*VALOR DECLARADO:* *" + currency(found.total || found.subtotal) + "*",
+            "━━━━━━━━━━━━━━━━━━━━",
+            "✂️ _Copia este texto para la app o guía de Servientrega / Courier._",
+          );
+
+          await sendTelegramMessage(token, senderChatId, courierLines.join("\n"));
+        } else {
+          await sendTelegramMessage(token, senderChatId, "⚠️ Pedido `" + orderCode + "` no encontrado.");
+        }
+      } catch (err) {
+        console.error("[courier-format-error]", err?.message || err);
+        await sendTelegramMessage(token, senderChatId, "⚠️ Error al generar formato courier.");
+      }
+    } else if (data === "quick_pendientes") {
+      // Handle "Ver Siguiente Pendiente" button
+      await answerCallbackQuery(token, cb.id, "Consultando pendientes...");
+
+      try {
+        const store = await readStore();
+        const orders = Array.isArray(store?.orders) ? store.orders : [];
+        const pendingOrders = orders.filter((o) => {
+          const s = String(o.status || "").toLowerCase();
+          return s === "pendiente" || s === "en preparación" || s === "listo para retiro" || s === "enviado";
+        });
+
+        if (pendingOrders.length === 0) {
+          await sendTelegramMessage(token, senderChatId, "✅ *¡Al día!* No hay más pedidos pendientes por despachar en este momento.");
+        } else {
+          const list = pendingOrders
+            .slice(0, 8)
+            .map((o, idx) => {
+              const typeIcon = o.deliveryType === "delivery" ? "🚚" : "🏬";
+              return (idx + 1) + ". `" + o.code + "` " + typeIcon + " · " + escapeTelegramMarkdown(o.customerName || "Cliente") + " · *" + currency(o.total || o.subtotal) + "* (" + o.status + ")";
+            })
+            .join("\n");
+
+          const sliceOrders = pendingOrders.slice(0, 8);
+          const orderButtons = [];
+          for (let i = 0; i < sliceOrders.length; i += 2) {
+            const row = [];
+            row.push({ text: "🔍 Ver " + sliceOrders[i].code, callback_data: "view:" + sliceOrders[i].code });
+            if (sliceOrders[i + 1]) {
+              row.push({ text: "🔍 Ver " + sliceOrders[i + 1].code, callback_data: "view:" + sliceOrders[i + 1].code });
+            }
+            orderButtons.push(row);
+          }
+
+          const msg = "📦 *Pedidos Pendientes (" + pendingOrders.length + "):*\n━━━━━━━━━━━━━━━━━━━━\n" + list + "\n━━━━━━━━━━━━━━━━━━━━\n👇 _Toca un botón para abrir la ficha del pedido:_";
+          await sendTelegramMessage(token, senderChatId, msg, {
+            reply_markup: {
+              inline_keyboard: orderButtons,
+            },
+          });
+        }
+      } catch (err) {
+        console.error("[quick-pendientes-error]", err?.message || err);
+        await sendTelegramMessage(token, senderChatId, "⚠️ Error al consultar pendientes.");
       }
     }
 

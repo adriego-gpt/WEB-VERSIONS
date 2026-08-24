@@ -44,13 +44,14 @@ export function buildTelegramOrderKeyboard(order = {}) {
   actionRow.push({ text: "⚡ Panel Web", url: "https://adriego.vercel.app/admin" });
   rows.push(actionRow);
 
-  // Middle detail row: View Proof and/or View Delivery Address
+  // Middle detail row: View Proof, Address, Courier Format
   const detailRow = [];
   if (order.paymentProof || order.paymentMethod === "bank_transfer" || order.paymentMethod === "transfer") {
     detailRow.push({ text: "📸 Ver Comprobante", callback_data: `proof:${code}` });
   }
   if (order.deliveryType === "delivery") {
     detailRow.push({ text: "📍 Ver Dirección", callback_data: `address:${code}` });
+    detailRow.push({ text: "📋 Formato Courier", callback_data: `courier:${code}` });
   }
   if (detailRow.length > 0) {
     rows.push(detailRow);

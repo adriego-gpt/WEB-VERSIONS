@@ -111,9 +111,12 @@ test('Order Notifications Engine (Telegram & n8n)', async (t) => {
     const allButtons = keyboard.inline_keyboard.flat();
     const proofButton = allButtons.find((b) => b.text.includes('Ver Comprobante'));
     const addressButton = allButtons.find((b) => b.text.includes('Ver Dirección'));
+    const courierButton = allButtons.find((b) => b.text.includes('Formato Courier'));
     assert.ok(proofButton, 'Must have proof button');
     assert.equal(proofButton.callback_data, 'proof:ORDER-10099');
     assert.ok(addressButton, 'Must have address button');
     assert.equal(addressButton.callback_data, 'address:ORDER-10099');
+    assert.ok(courierButton, 'Must have courier button');
+    assert.equal(courierButton.callback_data, 'courier:ORDER-10099');
   });
 });
