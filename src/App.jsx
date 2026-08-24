@@ -1578,25 +1578,26 @@ function ShowcaseProductCard({ product, onOpenDetail, onAddToCart }) {
                 const isOutOfStock = sizeStock <= 0;
                 const isSelected = selectedSize === size;
                 const wasAdded = justAddedSize === size;
+                const isLocked = Boolean(justAddedSize);
                 return (
                   <button
                     key={size}
                     type="button"
                     className={`quick-size-chip${isSelected ? " selected" : ""}${isOutOfStock ? " out-of-stock" : ""}${wasAdded ? " added" : ""}`}
-                    disabled={isOutOfStock}
+                    disabled={isOutOfStock || isLocked}
                     onClick={(event) => {
                       event.stopPropagation();
-                      if (isOutOfStock) return;
+                      if (isOutOfStock || isLocked) return;
+                      setJustAddedSize(size);
                       onAddToCart(
                         product,
                         { sourceElement: event.currentTarget, image: previewImage },
                         { color: selectedColor, size }
                       );
-                      setJustAddedSize(size);
                       setTimeout(() => {
                         setIsSelectingSize(false);
                         setJustAddedSize("");
-                      }, 500);
+                      }, 400);
                     }}
                     title={isOutOfStock ? `${size} (Agotado)` : `Agregar talla ${size}`}
                   >
@@ -1768,26 +1769,27 @@ function CatalogProductCard({
                 const isOutOfStock = sizeStock <= 0;
                 const isSelected = selectedSize === size;
                 const wasAdded = justAddedSize === size;
+                const isLocked = Boolean(justAddedSize);
                 return (
                   <button
                     key={size}
                     type="button"
                     className={`quick-size-chip${isSelected ? " selected" : ""}${isOutOfStock ? " out-of-stock" : ""}${wasAdded ? " added" : ""}`}
-                    disabled={isOutOfStock}
+                    disabled={isOutOfStock || isLocked}
                     onClick={(event) => {
                       event.stopPropagation();
-                      if (isOutOfStock) return;
+                      if (isOutOfStock || isLocked) return;
+                      setJustAddedSize(size);
                       onChange(product.id, "size", size);
                       onAddToCart(
                         product,
                         { sourceElement: event.currentTarget, image: currentImage },
                         { color: selectedColor, size }
                       );
-                      setJustAddedSize(size);
                       setTimeout(() => {
                         setIsSelectingSize(false);
                         setJustAddedSize("");
-                      }, 500);
+                      }, 400);
                     }}
                     title={isOutOfStock ? `${size} (Agotado)` : `Agregar talla ${size}`}
                   >
