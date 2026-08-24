@@ -1,5 +1,5 @@
-import React from "react";
-import { Heart, PencilLine, Trash2 } from "lucide-react";
+import React, { useState } from "react";
+import { Heart, PencilLine, Trash2, X, Check } from "lucide-react";
 import { motion as Motion, AnimatePresence } from "framer-motion";
 import { currency, discountPercent } from "../../utils/currency";
 import { getProductColorSwatch } from "../../utils/productColor";
@@ -35,6 +35,8 @@ export function CatalogProductCard({
   onEdit,
   onDelete,
 }) {
+  const [isSelectingSize, setIsSelectingSize] = useState(false);
+  const [justAddedSize, setJustAddedSize] = useState("");
   const resolvedSelection = getSelectionForColor(product, selection);
   const selectedColor = resolvedSelection.color;
   const selectedSize = resolvedSelection.size;
@@ -169,9 +171,76 @@ export function CatalogProductCard({
           </div>
         </div>
 
-        <div className="product-card-actions">
-          <button type="button" className="btn btn-primary" style={{ width: "100%", opacity: availableStock <= 0 ? 0.6 : 1, cursor: availableStock <= 0 ? "not-allowed" : "pointer" }} onClick={(event) => onAddToCart(product, { sourceElement: event.currentTarget, image: currentImage })} disabled={availableStock <= 0}>{availableStock <= 0 ? "Agotado" : "Agregar"}</button>
-        </div>
+        {isSelectingSize ? (
+          <div className="quick-size-picker" onClick={(e) => e.stopPropagation()}>
+            <div className="quick-size-header">
+              <span className="quick-size-title">Talla para <strong>{selectedColor}</strong>:</span>
+              <button
+                type="button"
+                className="quick-size-close-btn"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setIsSelectingSize(false);
+                }}
+                aria-label="Cerrar selector de talla"
+              >
+                <X size={14} />
+              </button>
+            </div>
+            <div className="quick-size-chips">
+              {sizesForSelectedColor.map((size) => {
+                const sizeStock = getStockForVariant(product, selectedColor, size);
+                const isOutOfStock = sizeStock <= 0;
+                const isSelected = selectedSize === size;
+                const wasAdded = justAddedSize === size;
+                return (
+                  <button
+                    key={size}
+                    type="button"
+                    className={`quick-size-chip${isSelected ? " selected" : ""}${isOutOfStock ? " out-of-stock" : ""}${wasAdded ? " added" : ""}`}
+                    disabled={isOutOfStock}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      if (isOutOfStock) return;
+                      onChange(product.id, "size", size);
+                      onAddToCart(
+                        product,
+                        { sourceElement: event.currentTarget, image: currentImage },
+                        { color: selectedColor, size }
+                      );
+                      setJustAddedSize(size);
+                      setTimeout(() => {
+                        setIsSelectingSize(false);
+                        setJustAddedSize("");
+                      }, 500);
+                    }}
+                    title={isOutOfStock ? `${size} (Agotado)` : `Agregar talla ${size}`}
+                    aria-label={`Seleccionar y agregar talla ${size}${isOutOfStock ? ", agotada" : ""}`}
+                  >
+                    {size}
+                    {wasAdded && <Check size={12} className="quick-size-check" />}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ) : (
+          <div className="product-card-actions">
+            <button
+              type="button"
+              className="btn btn-primary"
+              style={{ width: "100%", opacity: availableStock <= 0 ? 0.6 : 1, cursor: availableStock <= 0 ? "not-allowed" : "pointer" }}
+              onClick={(event) => {
+                event.stopPropagation();
+                if (availableStock <= 0) return;
+                setIsSelectingSize(true);
+              }}
+              disabled={availableStock <= 0}
+            >
+              {availableStock <= 0 ? "Agotado" : "Agregar"}
+            </button>
+          </div>
+        )}
       </div>
     </Motion.div>
   );

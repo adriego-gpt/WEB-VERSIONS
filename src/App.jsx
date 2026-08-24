@@ -1513,10 +1513,15 @@ function buildProductFromForm(form) {
 
 
 function ShowcaseProductCard({ product, onOpenDetail, onAddToCart }) {
+  const [isSelectingSize, setIsSelectingSize] = useState(false);
+  const [justAddedSize, setJustAddedSize] = useState("");
   const fallbackSelection = getFallbackSelection(product);
+  const selectedColor = fallbackSelection.color;
+  const selectedSize = fallbackSelection.size;
   const hasStock = fallbackSelection.availableStock > 0;
   const discount = discountPercent(product.price, product.oldPrice);
-  const previewImage = getCurrentImageForProduct(product, fallbackSelection.color);
+  const previewImage = getCurrentImageForProduct(product, selectedColor);
+  const sizesForSelectedColor = getSizesForColor(product, selectedColor);
 
   return (
     <Motion.div whileHover={{ y: -4 }} className="card product-card">
@@ -1551,17 +1556,75 @@ function ShowcaseProductCard({ product, onOpenDetail, onAddToCart }) {
           </div>
         )}
 
-        <div className="product-card-actions">
-          <button
-            className="btn btn-primary"
-            onClick={(event) => onAddToCart(product, { sourceElement: event.currentTarget, image: previewImage }, fallbackSelection)}
-            disabled={!hasStock}
-            style={{ opacity: hasStock ? 1 : 0.6, cursor: hasStock ? "pointer" : "not-allowed" }}
-          >
-            {hasStock ? "Agregar" : "Agotado"}
-          </button>
-          <button className="btn btn-outline product-detail-btn" onClick={() => onOpenDetail(product, fallbackSelection)}>Detalle</button>
-        </div>
+        {isSelectingSize ? (
+          <div className="quick-size-picker" onClick={(e) => e.stopPropagation()}>
+            <div className="quick-size-header">
+              <span className="quick-size-title">Talla para <strong>{selectedColor}</strong>:</span>
+              <button
+                type="button"
+                className="quick-size-close-btn"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setIsSelectingSize(false);
+                }}
+                aria-label="Cerrar selector de talla"
+              >
+                <X size={14} />
+              </button>
+            </div>
+            <div className="quick-size-chips">
+              {sizesForSelectedColor.map((size) => {
+                const sizeStock = getStockForVariant(product, selectedColor, size);
+                const isOutOfStock = sizeStock <= 0;
+                const isSelected = selectedSize === size;
+                const wasAdded = justAddedSize === size;
+                return (
+                  <button
+                    key={size}
+                    type="button"
+                    className={`quick-size-chip${isSelected ? " selected" : ""}${isOutOfStock ? " out-of-stock" : ""}${wasAdded ? " added" : ""}`}
+                    disabled={isOutOfStock}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      if (isOutOfStock) return;
+                      onAddToCart(
+                        product,
+                        { sourceElement: event.currentTarget, image: previewImage },
+                        { color: selectedColor, size }
+                      );
+                      setJustAddedSize(size);
+                      setTimeout(() => {
+                        setIsSelectingSize(false);
+                        setJustAddedSize("");
+                      }, 500);
+                    }}
+                    title={isOutOfStock ? `${size} (Agotado)` : `Agregar talla ${size}`}
+                  >
+                    {size}
+                    {wasAdded && <Check size={12} className="quick-size-check" />}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ) : (
+          <div className="product-card-actions">
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={(event) => {
+                event.stopPropagation();
+                if (!hasStock) return;
+                setIsSelectingSize(true);
+              }}
+              disabled={!hasStock}
+              style={{ opacity: hasStock ? 1 : 0.6, cursor: hasStock ? "pointer" : "not-allowed" }}
+            >
+              {hasStock ? "Agregar" : "Agotado"}
+            </button>
+            <button type="button" className="btn btn-outline product-detail-btn" onClick={() => onOpenDetail(product, fallbackSelection)}>Detalle</button>
+          </div>
+        )}
       </div>
     </Motion.div>
   );
@@ -1579,6 +1642,8 @@ function CatalogProductCard({
   onEdit,
   onDelete,
 }) {
+  const [isSelectingSize, setIsSelectingSize] = useState(false);
+  const [justAddedSize, setJustAddedSize] = useState("");
   const resolvedSelection = getSelectionForColor(product, selection);
   const selectedColor = resolvedSelection.color;
   const selectedSize = resolvedSelection.size;
@@ -1681,10 +1746,76 @@ function CatalogProductCard({
           </div>
         </div>
 
-        <div className="product-card-actions">
-          <button className="btn btn-primary" onClick={(event) => onAddToCart(product, { sourceElement: event.currentTarget, image: currentImage })} disabled={availableStock <= 0} style={{ opacity: availableStock <= 0 ? 0.6 : 1, cursor: availableStock <= 0 ? "not-allowed" : "pointer" }}>{availableStock <= 0 ? "Agotado" : "Agregar"}</button>
-          <button className="btn btn-outline product-detail-btn" onClick={() => onOpenDetail(product, { color: selectedColor, size: selectedSize })}>Detalle</button>
-        </div>
+        {isSelectingSize ? (
+          <div className="quick-size-picker" onClick={(e) => e.stopPropagation()}>
+            <div className="quick-size-header">
+              <span className="quick-size-title">Talla para <strong>{selectedColor}</strong>:</span>
+              <button
+                type="button"
+                className="quick-size-close-btn"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setIsSelectingSize(false);
+                }}
+                aria-label="Cerrar selector de talla"
+              >
+                <X size={14} />
+              </button>
+            </div>
+            <div className="quick-size-chips">
+              {sizesForSelectedColor.map((size) => {
+                const sizeStock = getStockForVariant(product, selectedColor, size);
+                const isOutOfStock = sizeStock <= 0;
+                const isSelected = selectedSize === size;
+                const wasAdded = justAddedSize === size;
+                return (
+                  <button
+                    key={size}
+                    type="button"
+                    className={`quick-size-chip${isSelected ? " selected" : ""}${isOutOfStock ? " out-of-stock" : ""}${wasAdded ? " added" : ""}`}
+                    disabled={isOutOfStock}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      if (isOutOfStock) return;
+                      onChange(product.id, "size", size);
+                      onAddToCart(
+                        product,
+                        { sourceElement: event.currentTarget, image: currentImage },
+                        { color: selectedColor, size }
+                      );
+                      setJustAddedSize(size);
+                      setTimeout(() => {
+                        setIsSelectingSize(false);
+                        setJustAddedSize("");
+                      }, 500);
+                    }}
+                    title={isOutOfStock ? `${size} (Agotado)` : `Agregar talla ${size}`}
+                  >
+                    {size}
+                    {wasAdded && <Check size={12} className="quick-size-check" />}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ) : (
+          <div className="product-card-actions">
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={(event) => {
+                event.stopPropagation();
+                if (availableStock <= 0) return;
+                setIsSelectingSize(true);
+              }}
+              disabled={availableStock <= 0}
+              style={{ opacity: availableStock <= 0 ? 0.6 : 1, cursor: availableStock <= 0 ? "not-allowed" : "pointer" }}
+            >
+              {availableStock <= 0 ? "Agotado" : "Agregar"}
+            </button>
+            <button type="button" className="btn btn-outline product-detail-btn" onClick={() => onOpenDetail(product, { color: selectedColor, size: selectedSize })}>Detalle</button>
+          </div>
+        )}
       </div>
     </Motion.div>
   );
@@ -5507,6 +5638,25 @@ export default function App() {
     window.setTimeout(focusSearchField, 420);
   };
 
+  const handleGoHome = useCallback(() => {
+    setActiveMobileSection("catalogo");
+    setSearchTerm("");
+    setSelectedCategory("Todos");
+    setSelectedProductType("Todos");
+    setSelectedTag("Todos");
+    setSortOption("featured");
+    setCurrentPage(1);
+    setEditingCartItemKey(null);
+    setShowMobileNav(false);
+
+    if (typeof window !== "undefined") {
+      window.scrollTo({ top: 0, behavior: "smooth" });
+      if (window.history && window.location.search) {
+        window.history.pushState(null, "", window.location.pathname);
+      }
+    }
+  }, []);
+
   const stageGuestStateMerge = (user) => {
     const guestCart = normalizeAccountCartState(cart);
     const guestFavorites = normalizeStoredFavorites(favorites);
@@ -7540,12 +7690,17 @@ export default function App() {
       <header className="topbar">
         <div className="container nav">
           <div className="nav-brand">
-            <div>
+            <button
+              type="button"
+              className="brand-wordmark-btn"
+              onClick={handleGoHome}
+              aria-label={`Volver al inicio - ${storeSettings.brandName || "Adriego Store"}`}
+            >
               {storeSettings.brandLabel.toLowerCase() !== storeSettings.brandName.toLowerCase() && (
                 <p className="brand-label">{storeSettings.brandLabel}</p>
               )}
               <h1 className="brand-wordmark">{storeSettings.brandName}</h1>
-            </div>
+            </button>
             <div className="mobile-header-tools" role="group" aria-label="Accesos rápidos">
               <button type="button" className="icon-quick-btn" onClick={openCatalogSearch} aria-label="Buscar prendas">
                 <Search size={18} />
@@ -7668,7 +7823,14 @@ export default function App() {
               onClick={(event) => event.stopPropagation()}
             >
               <div className="mobile-nav-head">
-                <strong>{storeSettings.brandName}</strong>
+                <button
+                  type="button"
+                  className="brand-wordmark-btn"
+                  onClick={handleGoHome}
+                  aria-label={`Volver al inicio - ${storeSettings.brandName || "Adriego Store"}`}
+                >
+                  <strong>{storeSettings.brandName}</strong>
+                </button>
                 <button type="button" className="icon-btn" onClick={() => setShowMobileNav(false)} aria-label="Cerrar menu">
                   <X size={16} />
                 </button>
@@ -8245,10 +8407,17 @@ export default function App() {
                 </div>
               )}
             </div>
-            <p className="footer-brand-signature" aria-label="Adriego Store">
-              <span>ADRIEGO</span>
-              <small>STORE</small>
-            </p>
+            <button
+              type="button"
+              className="footer-brand-signature-btn"
+              onClick={handleGoHome}
+              aria-label={`Volver al inicio - ${storeSettings.brandName || "Adriego Store"}`}
+            >
+              <p className="footer-brand-signature" aria-label="Adriego Store">
+                <span>ADRIEGO</span>
+                <small>STORE</small>
+              </p>
+            </button>
           </div>
 
           <div className="footer-subbar" aria-label="Políticas y documentos legales">
