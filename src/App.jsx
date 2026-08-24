@@ -8259,7 +8259,8 @@ export default function App() {
                   className="footer-legal-btn"
                   onClick={() => setLegalModalState({ open: true, tab: "exchanges" })}
                 >
-                  Política de Cambios
+                  <span className="footer-legal-label-full">Política de Cambios</span>
+                  <span className="footer-legal-label-compact">Cambios</span>
                 </button>
                 <span className="footer-legal-divider" aria-hidden="true">•</span>
                 <button
@@ -8267,7 +8268,8 @@ export default function App() {
                   className="footer-legal-btn"
                   onClick={() => setLegalModalState({ open: true, tab: "privacy" })}
                 >
-                  Privacidad de Datos
+                  <span className="footer-legal-label-full">Privacidad de Datos</span>
+                  <span className="footer-legal-label-compact">Privacidad</span>
                 </button>
                 <span className="footer-legal-divider" aria-hidden="true">•</span>
                 <button
@@ -8275,16 +8277,19 @@ export default function App() {
                   className="footer-legal-btn"
                   onClick={() => setLegalModalState({ open: true, tab: "terms" })}
                 >
-                  Términos de Compra
+                  <span className="footer-legal-label-full">Términos de Compra</span>
+                  <span className="footer-legal-label-compact">Términos</span>
                 </button>
               </div>
+              <span className="footer-legal-divider footer-legal-divider-desktop" aria-hidden="true">•</span>
               <div className="footer-legal-row-extra">
                 <button
                   type="button"
                   className="footer-legal-btn"
                   onClick={() => setLegalModalState({ open: true, tab: "cookies" })}
                 >
-                  Uso de Cookies
+                  <span className="footer-legal-label-full">Uso de Cookies</span>
+                  <span className="footer-legal-label-compact">Uso de Cookies</span>
                 </button>
               </div>
             </nav>
