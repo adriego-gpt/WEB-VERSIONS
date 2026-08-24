@@ -22,6 +22,41 @@ function currency(value) {
   return new Intl.NumberFormat("es-EC", { style: "currency", currency: "USD" }).format(Number(value) || 0);
 }
 
+export function buildTelegramOrderKeyboard(order = {}) {
+  const code = order.code || "";
+  const rawPhone = String(order.customerPhone || "").replace(/\D/g, "");
+  let intlPhone = rawPhone;
+  if (rawPhone.startsWith("0") && rawPhone.length === 10) {
+    intlPhone = `593${rawPhone.slice(1)}`;
+  } else if (rawPhone.length === 9) {
+    intlPhone = `593${rawPhone}`;
+  }
+
+  const customerName = order.customerName || "Cliente";
+  const waText = encodeURIComponent(`¡Hola ${customerName}! ✨ Te saludamos de Adriego Store respecto a tu pedido ${code}.`);
+  const waUrl = intlPhone ? `https://wa.me/${intlPhone}?text=${waText}` : null;
+
+  const rows = [];
+  const actionRow = [];
+  if (waUrl) {
+    actionRow.push({ text: "💬 WhatsApp Cliente", url: waUrl });
+  }
+  actionRow.push({ text: "⚡ Panel Web", url: "https://adriego.vercel.app/admin" });
+  rows.push(actionRow);
+
+  const statusRow = [];
+  if (order.deliveryType === "pickup") {
+    statusRow.push({ text: "🏬 Listo para Retiro", callback_data: `status:ready:${code}` });
+    statusRow.push({ text: "✅ Entregado", callback_data: `status:completed:${code}` });
+  } else {
+    statusRow.push({ text: "🚚 Marcar Enviado", callback_data: `status:shipped:${code}` });
+    statusRow.push({ text: "✅ Entregado", callback_data: `status:completed:${code}` });
+  }
+  rows.push(statusRow);
+
+  return { inline_keyboard: rows };
+}
+
 export function formatTelegramOrderMessage(order = {}) {
   const isDelivery = order.deliveryType === "delivery";
   const items = Array.isArray(order.items) ? order.items : [];
@@ -91,18 +126,38 @@ export function formatTelegramOrderMessage(order = {}) {
     `💵 *TOTAL A PAGAR:* *${currency(order.total || order.subtotal)}*`,
     "━━━━━━━━━━━━━━━━━━━━",
     order.paymentProof ? "📸 *Comprobante de pago:* Adjunto en el pedido" : "⏳ *Comprobante:* Pendiente",
-    "🔒 *Canal Seguro:* Solo para el Administrador de Adriego Store",
-    "⚡ [Abrir Panel de Administración](https://adriego.vercel.app/admin)",
+    "⚡ _Usa los botones directos abajo para gestionar el pedido:_",
   );
 
   return lines.filter((line) => line !== null && line !== undefined && line !== false).join("\n");
+}
+
+export function formatTelegramStockAlert(alert = {}) {
+  const { productName, color, size, remainingStock } = alert;
+  const isOutOfStock = Number(remainingStock) <= 0;
+  const statusEmoji = isOutOfStock ? "🛑" : "⚠️";
+  const statusTitle = isOutOfStock ? "¡PRODUCTO AGOTADO!" : "¡STOCK CRÍTICO!";
+
+  const lines = [
+    `${statusEmoji} *${statusTitle}*`,
+    "━━━━━━━━━━━━━━━━━━━━",
+    `👗 *Prenda:* ${escapeTelegramMarkdown(productName || "Producto")}`,
+    `🎨 *Color:* ${escapeTelegramMarkdown(color || "N/A")} | 📏 *Talla:* ${escapeTelegramMarkdown(size || "N/A")}`,
+    `📦 *Unidades Disponibles:* *${remainingStock}*`,
+    "",
+    isOutOfStock
+      ? "🔴 _Esta talla/color ya no tiene unidades disponibles en el catálogo._"
+      : "🟡 _Quedan muy pocas unidades. Te recomendamos reponer inventario._",
+    "━━━━━━━━━━━━━━━━━━━━",
+  ];
+
+  return lines.join("\n");
 }
 
 export async function sendTelegramNotification(order = {}, options = {}) {
   const token = options.token || process.env.TELEGRAM_BOT_TOKEN || DEFAULT_TELEGRAM_BOT_TOKEN;
   const chatId = options.chatId || process.env.TELEGRAM_ADMIN_CHAT_ID || DEFAULT_TELEGRAM_CHAT_ID;
 
-  // Strict authorization check: Only allowed Admin Chat ID receives notifications
   if (!isAuthorizedAdminChatId(chatId)) {
     console.warn(`[security-alert] Unauthorized Telegram notification attempt blocked for Chat ID: ${chatId}`);
     return { ok: false, message: "Unauthorized recipient" };
@@ -113,6 +168,7 @@ export async function sendTelegramNotification(order = {}, options = {}) {
   }
 
   const messageText = formatTelegramOrderMessage(order);
+  const replyMarkup = buildTelegramOrderKeyboard(order);
 
   try {
     const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
@@ -123,6 +179,7 @@ export async function sendTelegramNotification(order = {}, options = {}) {
         text: messageText,
         parse_mode: "Markdown",
         disable_web_page_preview: true,
+        reply_markup: replyMarkup,
       }),
     });
 
@@ -131,6 +188,40 @@ export async function sendTelegramNotification(order = {}, options = {}) {
   } catch (error) {
     console.error("[telegram-notification-error]", error?.message || error);
     return { ok: false, error: error?.message || "Telegram network error" };
+  }
+}
+
+export async function sendTelegramStockAlert(alert = {}, options = {}) {
+  const token = options.token || process.env.TELEGRAM_BOT_TOKEN || DEFAULT_TELEGRAM_BOT_TOKEN;
+  const chatId = options.chatId || process.env.TELEGRAM_ADMIN_CHAT_ID || DEFAULT_TELEGRAM_CHAT_ID;
+
+  if (!isAuthorizedAdminChatId(chatId) || !token) {
+    return { ok: false, message: "Unauthorized" };
+  }
+
+  const text = formatTelegramStockAlert(alert);
+
+  try {
+    const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text,
+        parse_mode: "Markdown",
+        disable_web_page_preview: true,
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "📦 Gestionar en Panel Admin", url: "https://adriego.vercel.app/admin" }]
+          ]
+        }
+      }),
+    });
+    const result = await response.json();
+    return { ok: Boolean(result?.ok), result };
+  } catch (error) {
+    console.error("[telegram-stock-alert-error]", error?.message || error);
+    return { ok: false, error: error?.message };
   }
 }
 
@@ -168,10 +259,13 @@ export async function sendN8nWebhook(order = {}) {
   }
 }
 
-export async function dispatchOrderNotifications(order = {}) {
+export async function dispatchOrderNotifications(order = {}, options = {}) {
+  const { lowStockAlerts = [] } = options;
   const telegramPromise = sendTelegramNotification(order);
   const n8nPromise = sendN8nWebhook(order);
-  const [telegramResult, n8nResult] = await Promise.allSettled([telegramPromise, n8nPromise]);
+  const stockPromises = (Array.isArray(lowStockAlerts) ? lowStockAlerts : []).map((alert) => sendTelegramStockAlert(alert));
+
+  const [telegramResult, n8nResult] = await Promise.allSettled([telegramPromise, n8nPromise, ...stockPromises]);
   return {
     telegram: telegramResult.status === "fulfilled" ? telegramResult.value : { ok: false, error: telegramResult.reason },
     n8n: n8nResult.status === "fulfilled" ? n8nResult.value : { ok: false, error: n8nResult.reason },

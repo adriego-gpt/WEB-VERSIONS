@@ -510,6 +510,8 @@ export default async function handler(req, res) {
       return acc;
     }, new Map());
 
+    const lowStockAlerts = [];
+
     draft.products = products.map((product) => {
       const related = safeCart.filter((item) => String(item.id) === String(product.id));
       if (!related.length) return product;
@@ -518,9 +520,18 @@ export default async function handler(req, res) {
         const variantKey = buildVariantKey(product.id, variant.color, variant.size);
         const requestedQuantity = requestedByVariant.get(variantKey) || 0;
         if (!requestedQuantity) return variant;
+        const nextStock = Math.max(0, (Number(variant.stock) || 0) - requestedQuantity);
+        if (nextStock <= 1) {
+          lowStockAlerts.push({
+            productName: product.name,
+            color: variant.color,
+            size: variant.size,
+            remainingStock: nextStock,
+          });
+        }
         return {
           ...variant,
-          stock: Math.max(0, (Number(variant.stock) || 0) - requestedQuantity),
+          stock: nextStock,
         };
       });
 
@@ -582,6 +593,7 @@ export default async function handler(req, res) {
       products: draft.products,
       orderHistory: visibleOrderHistory,
       whatsappUrl,
+      lowStockAlerts,
     };
     return draft;
   });
@@ -600,7 +612,9 @@ export default async function handler(req, res) {
   }
 
   if (responsePayload.order) {
-    dispatchOrderNotifications(responsePayload.order).catch((err) => {
+    dispatchOrderNotifications(responsePayload.order, {
+      lowStockAlerts: responsePayload.lowStockAlerts,
+    }).catch((err) => {
       console.error("[notifications-dispatch-error]", err?.message || err);
     });
   }
