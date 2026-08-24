@@ -568,7 +568,9 @@ export function ProductModal({
                 </div>
                 <div className="product-modal-stock-status">
                   <span className={`badge badge-${stockStatus.tone} ${isLowStock ? "badge-low-stock" : ""}`}>
-                    {isLowStock ? `⚡ ¡Solo quedan ${selectedStock} en talla ${resolvedSelection?.size}!` : stockStatus.label}
+                    {isLowStock
+                      ? (selectedStock === 1 ? `Última unidad en talla ${resolvedSelection?.size}` : `Últimas ${selectedStock} unidades en talla ${resolvedSelection?.size}`)
+                      : stockStatus.label}
                   </span>
                 </div>
               </fieldset>

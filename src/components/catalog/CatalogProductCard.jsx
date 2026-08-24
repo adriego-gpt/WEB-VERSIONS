@@ -168,7 +168,7 @@ export function CatalogProductCard({
           </div>
           <div className="product-card-stock-line mobile-hidden">
             <span className={`badge badge-${stockStatus.tone} ${isLowStock ? "badge-low-stock" : ""}`}>
-              {isLowStock ? `⚡ ¡Solo quedan ${availableStock}!` : stockStatus.label}
+              {isLowStock ? (availableStock === 1 ? "Última unidad" : `Últimas ${availableStock} unidades`) : stockStatus.label}
             </span>
           </div>
         </div>

@@ -1744,7 +1744,7 @@ function CatalogProductCard({
             </div>
             <div style={{ marginTop: 10 }}>
               <span className={`badge badge-${stockStatus.tone} ${isLowStock ? "badge-low-stock" : ""}`}>
-                {isLowStock ? `⚡ ¡Solo quedan ${availableStock}!` : stockStatus.label}
+                {isLowStock ? (availableStock === 1 ? "Última unidad" : `Últimas ${availableStock} unidades`) : stockStatus.label}
               </span>
             </div>
           </div>
