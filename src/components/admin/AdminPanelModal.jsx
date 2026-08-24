@@ -135,6 +135,7 @@ export function AdminPanelModal({
   adminOrderCustomerOptions,
   updateOrderStatus,
   updateOrderGuide,
+  updateOrderCourier,
   updateOrderPaymentProof,
   clearOrderPaymentProof,
   handleOrderProofUpload,
@@ -1499,13 +1500,30 @@ export function AdminPanelModal({
                               {isDeliveryOrder ? (
                                 <div className="admin-delivery-highlight">
                                   <div className="admin-delivery-highlight-head">
-                                    <span className="badge badge-warning">Envío a domicilio</span>
-                                    <strong>{order.deliveryCity || "Ciudad no definida"}</strong>
+                                    <div className="admin-delivery-badge-group">
+                                      <span className="badge badge-warning">Envío a domicilio</span>
+                                      <strong className="admin-delivery-city-title">{order.deliveryCity || "Ciudad no definida"}</strong>
+                                    </div>
+                                    {deliveryPhone && (
+                                      <a
+                                        href={`https://wa.me/593${deliveryPhone.replace(/\D/g, "").replace(/^0+/, "")}`}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="btn btn-outline admin-delivery-wa-btn"
+                                      >
+                                        <MessageCircle size={14} />
+                                        <span>WhatsApp Repartidor / Cliente</span>
+                                      </a>
+                                    )}
                                   </div>
-                                  <p className="admin-delivery-address">{order.deliveryAddress || "Dirección no registrada"}</p>
+                                  <div className="admin-delivery-destination-box">
+                                    <p className="admin-delivery-address-label">Dirección exacta:</p>
+                                    <p className="admin-delivery-address">{order.deliveryAddress || "Dirección no registrada"}</p>
+                                  </div>
                                   <div className="admin-delivery-grid">
                                     <p><span>Referencia</span><strong>{order.deliveryReference || "Sin referencia"}</strong></p>
-                                    <p><span>Cliente</span><strong>{deliveryContactName}</strong></p>
+                                    <p><span>Destinatario</span><strong>{deliveryContactName}</strong></p>
+                                    <p><span>Cédula / RUC</span><strong>{order.deliveryIdNumber || "No registrada"}</strong></p>
                                     <p><span>Teléfono</span><strong>{deliveryPhone || "Sin teléfono"}</strong></p>
                                   </div>
                                 </div>
@@ -1539,8 +1557,22 @@ export function AdminPanelModal({
 
                               <div className="admin-order-fulfillment-grid">
                                 <label className="entity-field">
-                                  <span>Guía de envío</span>
-                                  <input className="input" placeholder="Sin guía registrada" value={order.guideNumber || ""} onChange={(event) => updateOrderGuide(order.id, event.target.value)} />
+                                  <span>Courier / Transporte</span>
+                                  <input
+                                    className="input"
+                                    placeholder="Ej. Servientrega, LaarCourier, Cooperativa..."
+                                    value={order.courierName || ""}
+                                    onChange={(event) => updateOrderCourier?.(order.id, event.target.value)}
+                                  />
+                                </label>
+                                <label className="entity-field">
+                                  <span>Guía de rastreo</span>
+                                  <input
+                                    className="input"
+                                    placeholder="Número de guía"
+                                    value={order.guideNumber || ""}
+                                    onChange={(event) => updateOrderGuide(order.id, event.target.value)}
+                                  />
                                 </label>
                                 <div className="admin-order-payment-proof">
                                   <label className="entity-field">

@@ -10,6 +10,8 @@ export function normalizeAddressBookEntry(rawEntry = {}, fallbackId = "") {
   return {
     id: normalizedId || createUid(),
     label: sanitizeLine(rawEntry?.label || "Dirección guardada").slice(0, 48) || "Dirección guardada",
+    fullName: sanitizeLine(rawEntry?.fullName || rawEntry?.recipientName || "").slice(0, 80),
+    idNumber: sanitizeLine(rawEntry?.idNumber || "").slice(0, 25),
     address,
     city: sanitizeLine(rawEntry?.city || "").slice(0, 80),
     reference: sanitizeParagraph(rawEntry?.reference || "").slice(0, 260),
@@ -24,6 +26,8 @@ export function normalizeAddressBook(rawAddressBook = [], options = {}) {
   const allowFallback = Boolean(options?.allowFallback);
   const fallbackAddress = sanitizeParagraph(options?.fallbackAddress || "").slice(0, 320);
   const fallbackPhone = normalizeUserPhoneNumber(options?.fallbackPhone || "");
+  const fallbackFullName = sanitizeLine(options?.fallbackFullName || "");
+  const fallbackIdNumber = sanitizeLine(options?.fallbackIdNumber || "");
   const deduped = [];
   const seenIds = new Set();
 
@@ -38,6 +42,8 @@ export function normalizeAddressBook(rawAddressBook = [], options = {}) {
   if (!deduped.length && allowFallback && fallbackAddress) {
     deduped.push(normalizeAddressBookEntry({
       label: "Principal",
+      fullName: fallbackFullName,
+      idNumber: fallbackIdNumber,
       address: fallbackAddress,
       phone: fallbackPhone,
       isDefault: true,
@@ -61,5 +67,6 @@ export function isSameAddressBookEntry(left = {}, right = {}) {
   return sanitizeParagraph(left.address || "") === sanitizeParagraph(right.address || "")
     && sanitizeLine(left.city || "") === sanitizeLine(right.city || "")
     && sanitizeParagraph(left.reference || "") === sanitizeParagraph(right.reference || "")
-    && normalizeUserPhoneNumber(left.phone || "") === normalizeUserPhoneNumber(right.phone || "");
+    && normalizeUserPhoneNumber(left.phone || "") === normalizeUserPhoneNumber(right.phone || "")
+    && sanitizeLine(left.idNumber || "") === sanitizeLine(right.idNumber || "");
 }

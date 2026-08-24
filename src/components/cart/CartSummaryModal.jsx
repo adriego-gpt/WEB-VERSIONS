@@ -154,8 +154,8 @@ export function CartSummaryModal({
   useEffect(() => {
     if (!currentUser) return;
     setDeliveryDraft((prev) => ({
-      fullName: prev.fullName || sanitizeLine(currentUser.name || ""),
-      idNumber: prev.idNumber,
+      fullName: prev.fullName || sanitizeLine(defaultSavedAddress?.fullName || currentUser.name || ""),
+      idNumber: prev.idNumber || sanitizeLine(defaultSavedAddress?.idNumber || currentUser.idNumber || ""),
       city: prev.city || sanitizeLine(defaultSavedAddress?.city || ""),
       address: prev.address || sanitizeParagraph(defaultSavedAddress?.address || currentUser.shippingAddress || ""),
       reference: prev.reference || sanitizeParagraph(defaultSavedAddress?.reference || ""),
@@ -208,10 +208,12 @@ export function CartSummaryModal({
     setSelectedSavedAddressId(String(addressEntry.id || ""));
     setDeliveryDraft((previous) => ({
       ...previous,
+      fullName: sanitizeLine(addressEntry.fullName || previous.fullName || currentUser?.name || ""),
+      idNumber: sanitizeLine(addressEntry.idNumber || previous.idNumber || currentUser?.idNumber || ""),
       city: sanitizeLine(addressEntry.city || ""),
       address: sanitizeParagraph(addressEntry.address || ""),
       reference: sanitizeParagraph(addressEntry.reference || ""),
-      phone: normalizeUserPhoneNumber(addressEntry.phone || previous.phone || ""),
+      phone: normalizeUserPhoneNumber(addressEntry.phone || previous.phone || currentUser?.phone || ""),
     }));
     setCheckoutFormError("");
   };
@@ -222,7 +224,6 @@ export function CartSummaryModal({
     const idNumber = sanitizeLine(deliveryDraft.idNumber || "");
     const city = sanitizeLine(deliveryDraft.city || "");
     const address = sanitizeParagraph(deliveryDraft.address || "");
-    const reference = sanitizeParagraph(deliveryDraft.reference || "");
     const phone = normalizeUserPhoneNumber(deliveryDraft.phone || "");
 
     if (!fullName) {
@@ -238,11 +239,7 @@ export function CartSummaryModal({
       return false;
     }
     if (!city || !address) {
-      setCheckoutFormError("Completa la ciudad y la dirección exacta para la entrega.");
-      return false;
-    }
-    if (!reference) {
-      setCheckoutFormError("Por favor ingresa una referencia de entrega para el repartidor.");
+      setCheckoutFormError("Por favor completa la ciudad y la dirección exacta de entrega.");
       return false;
     }
     return true;
@@ -269,6 +266,8 @@ export function CartSummaryModal({
       ) {
         void onSaveCheckoutAddress({
           label: "Entrega",
+          fullName: sanitizeLine(deliveryDraft.fullName || ""),
+          idNumber: sanitizeLine(deliveryDraft.idNumber || ""),
           city: sanitizeLine(deliveryDraft.city || ""),
           address: sanitizeParagraph(deliveryDraft.address || ""),
           reference: sanitizeParagraph(deliveryDraft.reference || ""),
@@ -652,9 +651,11 @@ export function CartSummaryModal({
                                       </div>
                                       <p className="checkout-saved-address-text">{entry.address}</p>
                                       <div className="checkout-saved-address-details">
+                                        {entry.fullName && <span>Recibe: {entry.fullName} · </span>}
+                                        {entry.idNumber && <span>C.I: {entry.idNumber} · </span>}
                                         {entry.city && <span>{entry.city}</span>}
-                                        {entry.phone && <span>· Tel: {entry.phone}</span>}
-                                        {entry.reference && <span>· Ref: {entry.reference}</span>}
+                                        {entry.phone && <span> · Tel: {entry.phone}</span>}
+                                        {entry.reference && <span> · Ref: {entry.reference}</span>}
                                       </div>
                                     </div>
                                   </button>

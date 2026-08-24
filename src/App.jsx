@@ -2218,10 +2218,12 @@ export default function App() {
   const [legalModalState, setLegalModalState] = useState({ open: false, tab: "exchanges" });
   const [postAuthDestination, setPostAuthDestination] = useState(null);
   const [authForm, setAuthForm] = useState(() => ({ ...AUTH_FORM_DEFAULTS }));
-  const [profileDraft, setProfileDraft] = useState({ name: "", lastName: "", phone: "", email: "", shippingAddress: "", addressBook: [] });
+  const [profileDraft, setProfileDraft] = useState({ name: "", lastName: "", idNumber: "", phone: "", email: "", shippingAddress: "", addressBook: [] });
   const [profileFeedback, setProfileFeedback] = useState(null);
   const [addressBookDraft, setAddressBookDraft] = useState({
     label: "",
+    fullName: "",
+    idNumber: "",
     address: "",
     city: "",
     reference: "",
@@ -5199,6 +5201,8 @@ export default function App() {
     setAddressBookEditingId("");
     setAddressBookDraft({
       label: "",
+      fullName: "",
+      idNumber: "",
       address: "",
       city: "",
       reference: "",
@@ -5218,6 +5222,7 @@ export default function App() {
     setProfileDraft({
       name: sanitizeLine(currentUser.name || ""),
       lastName: sanitizeLine(currentUser.lastName || ""),
+      idNumber: sanitizeLine(currentUser.idNumber || ""),
       phone: normalizeUserPhoneNumber(currentUser.phone || ""),
       email: normalizeEmail(currentUser.email || ""),
       shippingAddress: sanitizeParagraph(defaultAddress?.address || currentUser.shippingAddress || ""),
@@ -5295,6 +5300,7 @@ export default function App() {
     const response = await updateUserProfile({
       name: sanitizeLine(currentUser.name || ""),
       lastName: sanitizeLine(currentUser.lastName || ""),
+      idNumber: sanitizeLine(currentUser.idNumber || profileDraft.idNumber || ""),
       phone: normalizeUserPhoneNumber(currentUser.phone || ""),
       email: normalizeEmail(currentUser.email || ""),
       shippingAddress: sanitizeParagraph(defaultAddress?.address || ""),
@@ -5364,6 +5370,8 @@ export default function App() {
     setAddressBookEditingId(normalizedEntryId);
     setAddressBookDraft({
       label: sanitizeLine(targetEntry.label || ""),
+      fullName: sanitizeLine(targetEntry.fullName || targetEntry.recipientName || ""),
+      idNumber: sanitizeLine(targetEntry.idNumber || ""),
       address: sanitizeParagraph(targetEntry.address || ""),
       city: sanitizeLine(targetEntry.city || ""),
       reference: sanitizeParagraph(targetEntry.reference || ""),
@@ -5444,6 +5452,7 @@ export default function App() {
     const email = normalizeEmail(profileDraft.email);
     const name = sanitizeLine(profileDraft.name);
     const lastName = sanitizeLine(profileDraft.lastName);
+    const idNumber = sanitizeLine(profileDraft.idNumber || "");
     const phone = normalizeUserPhoneNumber(profileDraft.phone);
     const addressBook = normalizeAddressBook(profileDraft.addressBook);
     const shippingAddress = sanitizeParagraph(getDefaultAddressBookEntry(addressBook)?.address || profileDraft.shippingAddress || "");
@@ -5464,6 +5473,7 @@ export default function App() {
     const response = await updateUserProfile({
       name,
       lastName,
+      idNumber,
       phone,
       email,
       shippingAddress,
@@ -5484,6 +5494,7 @@ export default function App() {
       setProfileDraft({
         name: sanitizeLine(response.user.name || ""),
         lastName: sanitizeLine(response.user.lastName || ""),
+        idNumber: sanitizeLine(response.user.idNumber || idNumber),
         phone: normalizeUserPhoneNumber(response.user.phone || ""),
         email: normalizeEmail(response.user.email || ""),
         shippingAddress: sanitizeParagraph(response.user.shippingAddress || normalizedResponseDefaultAddress?.address || ""),
@@ -5502,6 +5513,8 @@ export default function App() {
     const normalizedEntry = normalizeAddressBookEntry({
       id: createUid(),
       label: payload.label || "Entrega",
+      fullName: payload.fullName || currentUser.name || "",
+      idNumber: payload.idNumber || currentUser.idNumber || "",
       address: payload.address,
       city: payload.city,
       reference: payload.reference,
@@ -7302,6 +7315,14 @@ export default function App() {
     scheduleOrderPatchSync(orderId, { guideNumber: safeGuideNumber });
   };
 
+  const updateOrderCourier = async (orderId, courierName) => {
+    const safeCourierName = sanitizeLine(courierName);
+    setOrderHistory((previous) => previous.map((order) => (
+      order.id === orderId ? { ...order, courierName: safeCourierName } : order
+    )));
+    scheduleOrderPatchSync(orderId, { courierName: safeCourierName });
+  };
+
   const updateOrderPaymentProof = async (orderId, paymentProof) => {
     setOrderHistory((previous) => previous.map((order) => (
       order.id === orderId ? { ...order, paymentProof } : order
@@ -7695,6 +7716,7 @@ export default function App() {
               adminOrderCustomerOptions={adminOrderCustomerOptions}
               updateOrderStatus={updateOrderStatus}
               updateOrderGuide={updateOrderGuide}
+              updateOrderCourier={updateOrderCourier}
               updateOrderPaymentProof={updateOrderPaymentProof}
               clearOrderPaymentProof={clearOrderPaymentProof}
               handleOrderProofUpload={handleOrderProofUpload}

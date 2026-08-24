@@ -1,4 +1,4 @@
-﻿import crypto from "node:crypto";
+import crypto from "node:crypto";
 import { normalizeCouponList } from "../../src/services/couponService.js";
 import { normalizeCardFeePercent } from "../../src/domain/orders/payment.js";
 import { normalizeBankAccounts } from "../../src/domain/contact/paymentSettings.js";
@@ -320,6 +320,10 @@ function sanitizeOrderPatch(rawPatch = {}) {
 
   if (rawPatch?.guideNumber != null) {
     next.guideNumber = normalizeLine(rawPatch.guideNumber).slice(0, 80);
+  }
+
+  if (rawPatch?.courierName != null) {
+    next.courierName = normalizeLine(rawPatch.courierName).slice(0, 80);
   }
 
   if (rawPatch?.paymentProof != null) {

@@ -75,6 +75,8 @@ function sanitizeAddressBookEntry(rawEntry = {}, fallbackId = "") {
   return {
     id: normalizeLine(rawEntry?.id || fallbackId || crypto.randomUUID()).slice(0, 80),
     label: normalizeLine(rawEntry?.label || "Direccion guardada").slice(0, USER_ADDRESS_LABEL_MAX_LENGTH),
+    fullName: normalizeLine(rawEntry?.fullName || rawEntry?.recipientName || "").slice(0, 80),
+    idNumber: normalizeLine(rawEntry?.idNumber || "").slice(0, 30),
     address,
     city: normalizeLine(rawEntry?.city || "").slice(0, USER_ADDRESS_CITY_MAX_LENGTH),
     reference: sanitizeParagraph(rawEntry?.reference || "").slice(0, USER_ADDRESS_REFERENCE_MAX_LENGTH),
@@ -204,6 +206,7 @@ function stripUserSensitiveData(user) {
     lastName: normalizeLine(user.lastName || ""),
     email: normalizeEmail(user.email || ""),
     username: normalizeUsername(user.username || normalizeEmail(user.email || "").split("@")[0] || ""),
+    idNumber: normalizeLine(user.idNumber || "").slice(0, 30),
     phone: normalizeUserPhone(user.phone || ""),
     shippingAddress: sanitizeParagraph(user.shippingAddress || ""),
     addressBook: normalizeAddressBook(user.addressBook),
@@ -942,6 +945,7 @@ export default async function handler(req, res) {
     const name = normalizeLine(body.name || "");
     const lastName = normalizeLine(body.lastName || "");
     const email = normalizeEmail(body.email || "");
+    const idNumber = normalizeLine(body.idNumber || "").slice(0, 30);
     const phone = normalizeUserPhone(body.phone || "");
     const shippingAddress = sanitizeParagraph(body.shippingAddress || "");
     const hasAddressBookPayload = Array.isArray(body.addressBook);
@@ -970,6 +974,7 @@ export default async function handler(req, res) {
           name,
           lastName,
           email,
+          idNumber: idNumber || entry.idNumber || "",
           phone,
           shippingAddress,
           addressBook: hasAddressBookPayload ? addressBook : normalizeAddressBook(entry.addressBook),

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { X, Copy, MessageCircle, Search, ZoomIn } from "lucide-react";
+import { X, Copy, MessageCircle, Search, ZoomIn, Truck, MapPin, Check } from "lucide-react";
 import { motion as Motion, AnimatePresence } from "framer-motion";
 import { formatOrderDate, normalizeOrderStatusForOrder } from "../../domain/orders/status";
 import { currency } from "../../utils/currency";
@@ -20,6 +20,21 @@ export function OrdersModal({
   onOpenOrderWhatsApp,
 }) {
   const [proofPreview, setProofPreview] = useState(null);
+  const [copiedGuideId, setCopiedGuideId] = useState(null);
+
+  const handleCopyGuideNumber = async (orderId, guideNumber) => {
+    if (!guideNumber) return;
+    try {
+      if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(guideNumber);
+        setCopiedGuideId(orderId);
+        window.setTimeout(() => setCopiedGuideId(null), 2000);
+      }
+    } catch {
+      // Fallback
+    }
+  };
+
   useEffect(() => {
     if (!open) return undefined;
     const handleKeyDown = (event) => {
@@ -93,6 +108,83 @@ export function OrdersModal({
                     </div>
                   </div>
                   <OrderStatusProgress status={order.status} deliveryType={order.deliveryType} />
+
+                  {order.deliveryType === "delivery" && (
+                    <div className="customer-order-shipping-card">
+                      <div className="customer-order-shipping-head">
+                        <span className="customer-order-shipping-icon">
+                          <Truck size={16} />
+                        </span>
+                        <div className="customer-order-shipping-title-box">
+                          <strong className="customer-order-shipping-title">
+                            {order.guideNumber ? "Información de despacho y guía" : "Entrega a domicilio"}
+                          </strong>
+                          <span className="customer-order-shipping-city">
+                            {order.deliveryCity || "Envío nacional"}
+                          </span>
+                        </div>
+                      </div>
+
+                      {order.guideNumber ? (
+                        <div className="customer-order-guide-box">
+                          <div className="customer-order-guide-info">
+                            <span className="customer-order-guide-courier">
+                              {order.courierName || "Courier de transporte"}
+                            </span>
+                            <div className="customer-order-guide-number-row">
+                              <span className="muted">Guía:</span>
+                              <strong className="customer-order-guide-code">{order.guideNumber}</strong>
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            className="btn btn-outline customer-order-copy-guide-btn"
+                            onClick={() => handleCopyGuideNumber(order.id, order.guideNumber)}
+                          >
+                            {copiedGuideId === order.id ? (
+                              <>
+                                <Check size={13} />
+                                <span>¡Copiada!</span>
+                              </>
+                            ) : (
+                              <>
+                                <Copy size={13} />
+                                <span>Copiar guía</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="customer-order-pending-guide-note">
+                          <p>
+                            {normalizedStatus === "Enviado"
+                              ? "Tu pedido ya fue despachado. El número de guía se reflejará aquí tan pronto como el courier complete el registro."
+                              : "Tu paquete se enviará a esta ubicación una vez finalizada la preparación."}
+                          </p>
+                        </div>
+                      )}
+
+                      <div className="customer-order-shipping-address-summary">
+                        <p className="customer-order-shipping-address-line">
+                          <MapPin size={13} />
+                          <span>{order.deliveryAddress || "Dirección no registrada"}</span>
+                        </p>
+                        {order.deliveryReference && (
+                          <p className="customer-order-shipping-ref-line">
+                            <span className="muted">Ref:</span> {order.deliveryReference}
+                          </p>
+                        )}
+                        {(order.deliveryFullName || order.customerName) && (
+                          <p className="customer-order-shipping-contact-line">
+                            <span className="muted">Recibe:</span> {order.deliveryFullName || order.customerName}
+                            {order.deliveryIdNumber ? ` (C.I: ${order.deliveryIdNumber})` : ""}
+                            {order.deliveryPhone ? ` · Tel: ${order.deliveryPhone}` : ""}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
                   {canOpenWhatsApp && (
                     <button type="button" className="btn btn-soft" onClick={() => onOpenOrderWhatsApp(order)}>
                       <MessageCircle size={15} />

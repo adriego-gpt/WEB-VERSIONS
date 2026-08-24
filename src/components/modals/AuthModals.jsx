@@ -460,8 +460,9 @@ export function ProfileModal({
                   <div className="settings-grid" style={{ marginTop: 14 }}>
                     <input className="input" placeholder="Nombre" value={profileDraft?.name || ""} onChange={(event) => onFieldChange("name", event.target.value)} />
                     <input className="input" placeholder="Apellido" value={profileDraft?.lastName || ""} onChange={(event) => onFieldChange("lastName", event.target.value)} />
+                    <input className="input" placeholder="Cédula / RUC" inputMode="numeric" maxLength={20} value={profileDraft?.idNumber || ""} onChange={(event) => onFieldChange("idNumber", event.target.value)} />
                     <input className="input" placeholder="Teléfono" inputMode="tel" maxLength={10} value={profileDraft?.phone || ""} onChange={(event) => onFieldChange("phone", event.target.value)} />
-                    <input className="input" placeholder="Correo" type="email" value={profileDraft?.email || ""} onChange={(event) => onFieldChange("email", event.target.value)} />
+                    <input className="input" style={{ gridColumn: "1 / -1" }} placeholder="Correo" type="email" value={profileDraft?.email || ""} onChange={(event) => onFieldChange("email", event.target.value)} />
                   </div>
                   {profileFeedback?.message && (
                     <div className={`status-message ${profileFeedback.tone === "error" ? "status-error" : "status-success"}`} style={{ marginTop: 14 }}>
@@ -521,19 +522,23 @@ export function ProfileModal({
 
                               <p className="profile-address-card-text">{entry.address}</p>
 
-                              {(entry.city || entry.reference || entry.phone) && (
-                                <div className="profile-address-card-tags">
-                                  {entry.city && (
-                                    <span className="profile-address-chip">{entry.city}</span>
-                                  )}
-                                  {entry.phone && (
-                                    <span className="profile-address-chip">Tel: {entry.phone}</span>
-                                  )}
-                                  {entry.reference && (
-                                    <span className="profile-address-chip-ref">Ref: {entry.reference}</span>
-                                  )}
-                                </div>
-                              )}
+                              <div className="profile-address-card-tags">
+                                {entry.fullName && (
+                                  <span className="profile-address-chip">Recibe: {entry.fullName}</span>
+                                )}
+                                {entry.idNumber && (
+                                  <span className="profile-address-chip">C.I: {entry.idNumber}</span>
+                                )}
+                                {entry.city && (
+                                  <span className="profile-address-chip">{entry.city}</span>
+                                )}
+                                {entry.phone && (
+                                  <span className="profile-address-chip">Tel: {entry.phone}</span>
+                                )}
+                                {entry.reference && (
+                                  <span className="profile-address-chip-ref">Ref: {entry.reference}</span>
+                                )}
+                              </div>
 
                               <div className="profile-address-card-actions">
                                 {!entry.isDefault && (
@@ -605,34 +610,37 @@ export function ProfileModal({
                       </div>
 
                       <div className="profile-address-form-inputs">
-                        <div className="form-field-group">
-                          <label className="profile-field-label">Etiqueta o nombre de la ubicación</label>
-                          <input
-                            className="input"
-                            placeholder="Ej. Casa, Oficina, Departamento..."
-                            value={addressBookDraft.label || ""}
-                            onChange={(event) => onAddressBookDraftChange("label", event.target.value)}
-                          />
-                        </div>
-
-                        <div className="form-field-group">
-                          <label className="profile-field-label">Dirección exacta *</label>
-                          <textarea
-                            className="textarea profile-address-textarea"
-                            placeholder="Calle principal, número de casa/edificio e intersección *"
-                            value={addressBookDraft.address || ""}
-                            onChange={(event) => onAddressBookDraftChange("address", event.target.value)}
-                          />
+                        <div className="settings-grid">
+                          <div className="form-field-group">
+                            <label className="profile-field-label">Etiqueta de la ubicación</label>
+                            <input
+                              className="input"
+                              placeholder="Ej. Casa, Oficina..."
+                              value={addressBookDraft.label || ""}
+                              onChange={(event) => onAddressBookDraftChange("label", event.target.value)}
+                            />
+                          </div>
+                          <div className="form-field-group">
+                            <label className="profile-field-label">Nombre de quien recibe</label>
+                            <input
+                              className="input"
+                              placeholder="Nombre y Apellido"
+                              value={addressBookDraft.fullName || ""}
+                              onChange={(event) => onAddressBookDraftChange("fullName", event.target.value)}
+                            />
+                          </div>
                         </div>
 
                         <div className="settings-grid">
                           <div className="form-field-group">
-                            <label className="profile-field-label">Ciudad / Cantón *</label>
+                            <label className="profile-field-label">Cédula de identidad / RUC</label>
                             <input
                               className="input"
-                              placeholder="Ej. Quito, Guayaquil *"
-                              value={addressBookDraft.city || ""}
-                              onChange={(event) => onAddressBookDraftChange("city", event.target.value)}
+                              placeholder="Cédula (10 dígitos)"
+                              inputMode="numeric"
+                              maxLength={20}
+                              value={addressBookDraft.idNumber || ""}
+                              onChange={(event) => onAddressBookDraftChange("idNumber", event.target.value)}
                             />
                           </div>
                           <div className="form-field-group">
@@ -648,13 +656,34 @@ export function ProfileModal({
                           </div>
                         </div>
 
+                        <div className="settings-grid">
+                          <div className="form-field-group">
+                            <label className="profile-field-label">Ciudad / Cantón *</label>
+                            <input
+                              className="input"
+                              placeholder="Ej. Quito, Guayaquil *"
+                              value={addressBookDraft.city || ""}
+                              onChange={(event) => onAddressBookDraftChange("city", event.target.value)}
+                            />
+                          </div>
+                          <div className="form-field-group">
+                            <label className="profile-field-label">Referencia de entrega</label>
+                            <input
+                              className="input"
+                              placeholder="Piso, departamento, conjunto..."
+                              value={addressBookDraft.reference || ""}
+                              onChange={(event) => onAddressBookDraftChange("reference", event.target.value)}
+                            />
+                          </div>
+                        </div>
+
                         <div className="form-field-group">
-                          <label className="profile-field-label">Referencia de entrega</label>
+                          <label className="profile-field-label">Dirección exacta *</label>
                           <textarea
-                            className="textarea"
-                            placeholder="Piso, departamento, color de fachada, portón o indicaciones de entrega..."
-                            value={addressBookDraft.reference || ""}
-                            onChange={(event) => onAddressBookDraftChange("reference", event.target.value)}
+                            className="textarea profile-address-textarea"
+                            placeholder="Calle principal, número de casa/edificio e intersección *"
+                            value={addressBookDraft.address || ""}
+                            onChange={(event) => onAddressBookDraftChange("address", event.target.value)}
                           />
                         </div>
 

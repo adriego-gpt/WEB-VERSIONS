@@ -66,6 +66,7 @@ function sanitizeAdminUser(user = {}) {
     lastName: normalizeLine(user.lastName || ""),
     email: normalizeEmail(user.email || ""),
     username: normalizeUsername(user.username || normalizeEmail(user.email || "").split("@")[0] || ""),
+    idNumber: normalizeLine(user.idNumber || "").slice(0, 30),
     phone: normalizeUserPhone(user.phone || ""),
     shippingAddress: sanitizeParagraph(user.shippingAddress || "").slice(0, SHIPPING_ADDRESS_MAX_LENGTH),
     createdAt: String(user.createdAt || ""),
@@ -540,6 +541,7 @@ export default async function handler(req, res) {
     const lastName = normalizeLine(body.lastName || "").slice(0, NAME_MAX_LENGTH);
     const email = normalizeEmail(body.email || "").slice(0, IDENTIFIER_MAX_LENGTH);
     const username = normalizeUsername(body.username || email.split("@")[0] || "");
+    const idNumber = normalizeLine(body.idNumber || "").slice(0, 30);
     const phone = normalizeUserPhone(body.phone || "");
     const shippingAddress = sanitizeParagraph(body.shippingAddress || "").slice(0, SHIPPING_ADDRESS_MAX_LENGTH);
 
@@ -596,6 +598,7 @@ export default async function handler(req, res) {
           lastName,
           email,
           username,
+          idNumber: idNumber || entry.idNumber || "",
           phone,
           shippingAddress,
           stateUpdatedAt: nowIso,
