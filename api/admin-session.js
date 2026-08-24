@@ -20,7 +20,7 @@ import {
   verifySignedToken,
 } from "./_lib/security.js";
 
-const COOKIE_NAME = "atelier_admin_session";
+const COOKIE_NAME = "adriego_admin_session";
 const LOCK_STATE = new Map();
 const SESSION_HOURS = Math.max(1, Number(process.env.ADMIN_SESSION_HOURS) || 6);
 const MAX_ATTEMPTS = Math.max(3, Number(process.env.ADMIN_MAX_ATTEMPTS) || 5);
@@ -125,7 +125,7 @@ export default async function handler(req, res) {
   const action = normalizeLine(req.query?.action || "status").toLowerCase();
   const ip = getClientIp(req);
   const cookies = parseCookies(req.headers?.cookie || "");
-  const sessionPayload = verifySignedToken(cookies[COOKIE_NAME] || "", sessionSecret);
+  const sessionPayload = verifySignedToken(cookies[COOKIE_NAME] || cookies.atelier_admin_session || "", sessionSecret);
 
   if (action === "status") {
     const rateLimit = await consumeRateLimit("admin-status-ip", ip, 100, 10 * 60 * 1000, {

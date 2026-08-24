@@ -16,14 +16,14 @@ import {
   verifySignedToken,
 } from "./_lib/security.js";
 
-const ADMIN_COOKIE_NAME = "atelier_admin_session";
+const ADMIN_COOKIE_NAME = "adriego_admin_session";
 const ENDPOINT_NAME = "security-metrics";
 
 function resolveAdminSession(req) {
   const sessionSecret = String(process.env.ADMIN_SESSION_SECRET || "").trim();
   if (!sessionSecret) return null;
   const cookies = parseCookies(req.headers?.cookie || "");
-  return verifySignedToken(cookies[ADMIN_COOKIE_NAME] || "", sessionSecret);
+  return verifySignedToken(cookies[ADMIN_COOKIE_NAME] || cookies.atelier_admin_session || "", sessionSecret);
 }
 
 export default async function handler(req, res) {

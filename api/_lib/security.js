@@ -6,14 +6,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { isKvConfigured, runKvCommand } from "./store.js";
 
-const CSRF_COOKIE_NAME = "atelier_csrf_token";
-const RATE_LIMIT_STORE_KEY = "__ATELIER_RATE_LIMIT_STORE__";
-const SECURITY_METRICS_STORE_KEY = "__ATELIER_SECURITY_METRICS_STORE__";
-const SECURITY_METRICS_INDEX_KEY = "atelier:security-metrics:endpoints";
+const CSRF_COOKIE_NAME = "adriego_csrf_token";
+const RATE_LIMIT_STORE_KEY = "__ADRIEGO_RATE_LIMIT_STORE__";
+const SECURITY_METRICS_STORE_KEY = "__ADRIEGO_SECURITY_METRICS_STORE__";
+const SECURITY_METRICS_INDEX_KEY = "adriego:security-metrics:endpoints";
 const PASSWORD_HASH_KEY_LENGTH = 64;
 const MAX_JSON_BODY_BYTES = Math.max(64 * 1024, Number(process.env.MAX_JSON_BODY_BYTES) || (4 * 1024 * 1024));
 const MAX_INLINE_IMAGE_BYTES = Math.max(48 * 1024, Number(process.env.MAX_INLINE_IMAGE_BYTES) || (380 * 1024));
-const BODY_PARSE_ERROR_KEY = "__atelierBodyParseError";
+const BODY_PARSE_ERROR_KEY = "__adriegoBodyParseError";
 
 function loadLocalEnvFile() {
   const nodeEnv = String(process.env.NODE_ENV || "").toLowerCase();
@@ -305,7 +305,7 @@ function logSecurityEvent(endpoint = "", event = "", details = {}) {
 
 function getSecurityMetricRedisKey(endpoint = "") {
   const endpointHash = crypto.createHash("sha256").update(String(endpoint || "")).digest("hex").slice(0, 24);
-  return `atelier:security-metrics:${endpointHash}`;
+  return `adriego:security-metrics:${endpointHash}`;
 }
 
 async function persistApiMetricEvent(endpoint = "", event = "request", payload = {}) {
@@ -872,7 +872,7 @@ async function consumeRateLimit(namespace, key, limit, windowMs, context = {}) {
 
   const safeNamespace = normalizeLine(namespace).toLowerCase().replace(/[^a-z0-9:_-]/g, "-").slice(0, 80);
   const keyHash = crypto.createHash("sha256").update(String(key || "unknown")).digest("hex").slice(0, 32);
-  const bucketKey = `atelier:rate-limit:${safeNamespace || "default"}:${keyHash}`;
+  const bucketKey = `adriego:rate-limit:${safeNamespace || "default"}:${keyHash}`;
 
   try {
     const count = Math.max(0, Number(await runKvCommand("INCR", bucketKey)) || 0);

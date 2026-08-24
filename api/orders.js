@@ -19,8 +19,8 @@ import {
   verifySignedToken,
 } from "./_lib/security.js";
 
-const ADMIN_COOKIE_NAME = "atelier_admin_session";
-const USER_COOKIE_NAME = "atelier_user_session";
+const ADMIN_COOKIE_NAME = "adriego_admin_session";
+const USER_COOKIE_NAME = "adriego_user_session";
 const ENDPOINT_NAME = "orders";
 const CANCELLED_STATUS = "Cancelado";
 const DEFAULT_ORDER_STATUS = "Pendiente";
@@ -30,8 +30,8 @@ function getSessions(req) {
   const adminSecret = String(process.env.ADMIN_SESSION_SECRET || "").trim();
   const userSecret = String(process.env.USER_SESSION_SECRET || "").trim();
   return {
-    adminSession: adminSecret ? verifySignedToken(cookies[ADMIN_COOKIE_NAME] || "", adminSecret) : null,
-    userSession: userSecret ? verifySignedToken(cookies[USER_COOKIE_NAME] || "", userSecret) : null,
+    adminSession: adminSecret ? verifySignedToken(cookies[ADMIN_COOKIE_NAME] || cookies.atelier_admin_session || "", adminSecret) : null,
+    userSession: userSecret ? verifySignedToken(cookies[USER_COOKIE_NAME] || cookies.atelier_user_session || "", userSecret) : null,
   };
 }
 

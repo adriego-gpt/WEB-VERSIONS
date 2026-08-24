@@ -1,4 +1,4 @@
-# Atelier Studio
+# Adriego Store
 
 Tienda online de ropa con:
 

@@ -6,7 +6,7 @@ import crypto from "node:crypto";
 
 const DATA_DIR = path.join(process.cwd(), ".data");
 const DATA_FILE = path.join(DATA_DIR, "store.json");
-const STORE_KEY = String(process.env.STORE_STATE_KEY || "atelier:store:v1").trim();
+const STORE_KEY = String(process.env.STORE_STATE_KEY || "adriego:store:v1").trim();
 const STORE_LOCK_KEY = `${STORE_KEY}:lock`;
 const STORE_LOCK_TTL_SECONDS = Math.max(4, Number(process.env.STORE_LOCK_TTL_SECONDS) || 8);
 const STORE_LOCK_MAX_WAIT_MS = Math.max(400, Number(process.env.STORE_LOCK_MAX_WAIT_MS) || 2600);
@@ -147,10 +147,10 @@ async function releaseKvLock(lockToken = "") {
 }
 
 function getMemoryStore() {
-  if (!globalThis.__ATELIER_MEMORY_STORE__) {
-    globalThis.__ATELIER_MEMORY_STORE__ = clone(DEFAULT_STORE);
+  if (!globalThis.__ADRIEGO_MEMORY_STORE__) {
+    globalThis.__ADRIEGO_MEMORY_STORE__ = globalThis.__ATELIER_MEMORY_STORE__ || clone(DEFAULT_STORE);
   }
-  return globalThis.__ATELIER_MEMORY_STORE__;
+  return globalThis.__ADRIEGO_MEMORY_STORE__;
 }
 
 function normalizeStore(raw = {}) {
@@ -263,7 +263,7 @@ async function persistStore(nextStore) {
   try {
     await writeFileStore(normalized);
   } catch {
-    globalThis.__ATELIER_MEMORY_STORE__ = clone(normalized);
+    globalThis.__ADRIEGO_MEMORY_STORE__ = clone(normalized);
   }
   return normalized;
 }

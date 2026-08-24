@@ -28,7 +28,7 @@ import {
   verifySignedToken,
 } from "./_lib/security.js";
 
-const COOKIE_NAME = "atelier_user_session";
+const COOKIE_NAME = "adriego_user_session";
 const SESSION_HOURS = Math.max(1, Number(process.env.USER_SESSION_HOURS) || 72);
 const SESSION_TTL_MS = SESSION_HOURS * 60 * 60 * 1000;
 const PASSWORD_MIN_LENGTH = 8;
@@ -217,7 +217,7 @@ function stripUserSensitiveData(user) {
 
 async function resolveSessionUser(req, sessionSecret) {
   const cookies = parseCookies(req.headers?.cookie || "");
-  const session = verifySignedToken(cookies[COOKIE_NAME] || "", sessionSecret);
+  const session = verifySignedToken(cookies[COOKIE_NAME] || cookies.atelier_user_session || "", sessionSecret);
   if (!session) return null;
   const store = await readStore();
   const user = (store.users || []).find((entry) => String(entry.id) === String(session.sub)) || null;

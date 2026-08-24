@@ -246,7 +246,7 @@ test("Security Contracts", async (t) => {
     });
     assert.equal(loginResp.statusCode, 200);
 
-    const oldSessionCookie = userCookies["atelier_user_session"];
+    const oldSessionCookie = userCookies["adriego_user_session"] || userCookies["atelier_user_session"];
     assert.ok(oldSessionCookie, "Session cookie should be set");
 
     const changePwResp = await callApi(userAuthHandler, {
@@ -258,12 +258,12 @@ test("Security Contracts", async (t) => {
     });
     assert.equal(changePwResp.statusCode, 200);
 
-    const newSessionCookie = userCookies["atelier_user_session"];
+    const newSessionCookie = userCookies["adriego_user_session"] || userCookies["atelier_user_session"];
     assert.ok(newSessionCookie, "New session cookie should be set after password change");
     assert.notEqual(oldSessionCookie, newSessionCookie, "Session cookie must rotate");
 
     // Old cookie should be invalid
-    const oldCookieJar = { "atelier_user_session": oldSessionCookie };
+    const oldCookieJar = { "adriego_user_session": oldSessionCookie, "atelier_user_session": oldSessionCookie };
     const oldCsrf = await getCsrfToken(oldCookieJar);
 
     const profileResp = await callApi(userAuthHandler, {
@@ -309,7 +309,7 @@ test("Security Contracts", async (t) => {
       json: {},
     });
     assert.equal(logoutResponse.statusCode, 200);
-    assert.equal(lifecycleCookies.atelier_user_session, undefined, "Logout must clear the browser session cookie");
+    assert.equal(lifecycleCookies.adriego_user_session, undefined, "Logout must clear the browser session cookie");
 
     const statusAfterLogout = await callApi(userAuthHandler, {
       method: "GET",

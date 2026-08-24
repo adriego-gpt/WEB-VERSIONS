@@ -36,7 +36,7 @@ import {
 } from "../src/domain/orders/payment.js";
 import { getReadyBankAccounts } from "../src/domain/contact/paymentSettings.js";
 
-const USER_COOKIE_NAME = "atelier_user_session";
+const USER_COOKIE_NAME = "adriego_user_session";
 const CART_ITEM_LIMIT = 25;
 const LINE_ITEM_LIMIT = 10;
 const ENDPOINT_NAME = "checkout-order";
@@ -272,7 +272,7 @@ export default async function handler(req, res) {
   }
 
   const cookies = parseCookies(req.headers?.cookie || "");
-  const session = verifySignedToken(cookies[USER_COOKIE_NAME] || "", userSessionSecret);
+  const session = verifySignedToken(cookies[USER_COOKIE_NAME] || cookies.atelier_user_session || "", userSessionSecret);
   if (!session) {
     res.status(401).json({ ok: false, message: "Inicia sesión para finalizar la compra." });
     return;

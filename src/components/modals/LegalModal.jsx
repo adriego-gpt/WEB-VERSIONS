@@ -246,11 +246,11 @@ export function LegalModal({
                   <ul className="legal-list">
                     <li>
                       <CheckCircle2 size={16} className="bullet-icon" />
-                      <span><strong>Cookie de Sesión (<code>atelier_user_session</code>):</strong> Mantiene tu sesión abierta de forma cifrada y segura (HTTP-only) para que puedas navegar, guardar artículos favoritos y consultar tus pedidos.</span>
+                      <span><strong>Cookie de Sesión (<code>adriego_user_session</code>):</strong> Mantiene tu sesión abierta de forma cifrada y segura (HTTP-only) para que puedas navegar, guardar artículos favoritos y consultar tus pedidos.</span>
                     </li>
                     <li>
                       <CheckCircle2 size={16} className="bullet-icon" />
-                      <span><strong>Cookie de Seguridad CSRF (<code>atelier_csrf_token</code>):</strong> Protege tu cuenta y tus formularios contra ataques maliciosos de falsificación de peticiones en sitios cruzados.</span>
+                      <span><strong>Cookie de Seguridad CSRF (<code>adriego_csrf_token</code>):</strong> Protege tu cuenta y tus formularios contra ataques maliciosos de falsificación de peticiones en sitios cruzados.</span>
                     </li>
                   </ul>
                 </div>

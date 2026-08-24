@@ -521,8 +521,8 @@ const defaultContactSettings = {
   phone: "",
   email: "",
   mapsLink: "",
-  instagram: "https://instagram.com/atelierstudio",
-  facebook: "https://facebook.com/atelierstudio",
+  instagram: "https://instagram.com/adriegostore",
+  facebook: "https://facebook.com/adriegostore",
   tiktok: "",
   paymentSettings: {
     bankAccounts: [],
@@ -8253,37 +8253,40 @@ export default function App() {
 
           <div className="footer-subbar" aria-label="Políticas y documentos legales">
             <nav className="footer-legal-links">
-              <button
-                type="button"
-                className="footer-legal-btn"
-                onClick={() => setLegalModalState({ open: true, tab: "exchanges" })}
-              >
-                Política de Cambios
-              </button>
-              <span className="footer-legal-divider" aria-hidden="true">•</span>
-              <button
-                type="button"
-                className="footer-legal-btn"
-                onClick={() => setLegalModalState({ open: true, tab: "privacy" })}
-              >
-                Privacidad de Datos
-              </button>
-              <span className="footer-legal-divider" aria-hidden="true">•</span>
-              <button
-                type="button"
-                className="footer-legal-btn"
-                onClick={() => setLegalModalState({ open: true, tab: "terms" })}
-              >
-                Términos de Compra
-              </button>
-              <span className="footer-legal-divider" aria-hidden="true">•</span>
-              <button
-                type="button"
-                className="footer-legal-btn"
-                onClick={() => setLegalModalState({ open: true, tab: "cookies" })}
-              >
-                Uso de Cookies
-              </button>
+              <div className="footer-legal-row-main">
+                <button
+                  type="button"
+                  className="footer-legal-btn"
+                  onClick={() => setLegalModalState({ open: true, tab: "exchanges" })}
+                >
+                  Política de Cambios
+                </button>
+                <span className="footer-legal-divider" aria-hidden="true">•</span>
+                <button
+                  type="button"
+                  className="footer-legal-btn"
+                  onClick={() => setLegalModalState({ open: true, tab: "privacy" })}
+                >
+                  Privacidad de Datos
+                </button>
+                <span className="footer-legal-divider" aria-hidden="true">•</span>
+                <button
+                  type="button"
+                  className="footer-legal-btn"
+                  onClick={() => setLegalModalState({ open: true, tab: "terms" })}
+                >
+                  Términos de Compra
+                </button>
+              </div>
+              <div className="footer-legal-row-extra">
+                <button
+                  type="button"
+                  className="footer-legal-btn"
+                  onClick={() => setLegalModalState({ open: true, tab: "cookies" })}
+                >
+                  Uso de Cookies
+                </button>
+              </div>
             </nav>
             <p className="footer-copyright">
               © {new Date().getFullYear()} {storeSettings.brandName || "Adriego Store"}. Todos los derechos reservados.

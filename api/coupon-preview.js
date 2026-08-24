@@ -19,7 +19,7 @@ import {
   verifySignedToken,
 } from "./_lib/security.js";
 
-const USER_COOKIE_NAME = "atelier_user_session";
+const USER_COOKIE_NAME = "adriego_user_session";
 const CART_ITEM_LIMIT = 25;
 const LINE_ITEM_LIMIT = 10;
 const ENDPOINT_NAME = "coupon-preview";
@@ -28,7 +28,7 @@ function verifyUserSession(req) {
   const secret = String(process.env.USER_SESSION_SECRET || "").trim();
   if (!secret) return null;
   const cookies = parseCookies(req.headers?.cookie || "");
-  return verifySignedToken(cookies[USER_COOKIE_NAME] || "", secret);
+  return verifySignedToken(cookies[USER_COOKIE_NAME] || cookies.atelier_user_session || "", secret);
 }
 
 function getProductImage(product, color) {

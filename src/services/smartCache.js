@@ -1,4 +1,4 @@
-const CACHE_PREFIX = "atelier-smart-cache-v1:";
+const CACHE_PREFIX = "adriego-smart-cache-v1:";
 const memoryCache = new Map();
 const inflightCache = new Map();
 

@@ -1,4 +1,4 @@
-const CSRF_COOKIE_NAME = "atelier_csrf_token";
+const CSRF_COOKIE_NAME = "adriego_csrf_token";
 const DEFAULT_REQUEST_TIMEOUT_MS = 15000;
 
 let csrfBootstrapPromise = null;
