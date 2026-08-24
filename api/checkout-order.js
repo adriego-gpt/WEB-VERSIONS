@@ -197,37 +197,66 @@ function sanitizeDeliveryPayload(rawDelivery = {}, user = {}, contactSettings = 
 }
 
 function buildOrderText(order) {
-  const deliveryMode = order.deliveryType === "delivery" ? "Envio a domicilio" : "Retiro en local";
-  return [
-    `Hola, quiero hacer este pedido. Codigo: ${order.code}`,
+  const isDelivery = order.deliveryType === "delivery";
+  const isCard = normalizePaymentMethod(order.paymentMethod) === "card_link";
+  const bankName = order.paymentBankAccount?.bankName || "";
+  const methodSummary = isCard
+    ? "Tarjeta de crédito / débito (Enlace)"
+    : (bankName ? `Transferencia (${bankName})` : "Transferencia bancaria");
+
+  const lines = [
+    `*NUEVO PEDIDO · ADRIEGO STORE*`,
+    `*Código:* ${order.code}`,
+    `━━━━━━━━━━━━━━━━━━━━`,
     "",
-    `Cliente: ${order.customerName || "Cliente"}`,
-    order.customerPhone ? `Telefono: ${order.customerPhone}` : "",
-    order.customerEmail ? `Correo: ${order.customerEmail}` : "",
-    `Entrega: ${deliveryMode}`,
-    order.deliveryType === "delivery"
-      ? `Datos entrega: ${order.deliveryFullName || order.customerName || "Cliente"} - CI ${order.deliveryIdNumber || "N/D"} - ${order.deliveryCity || "Ciudad"}`
-      : "",
-    order.deliveryType === "delivery" ? `Direccion: ${order.deliveryAddress || "N/D"}` : "",
-    order.deliveryType === "delivery" ? `Referencia: ${order.deliveryReference || "N/D"}` : "",
-    order.deliveryType === "delivery" ? `Telefono entrega: ${order.deliveryPhone || order.customerPhone || "N/D"}` : "",
-    order.deliveryType !== "delivery" && order.pickupAddress ? `Retiro en: ${order.pickupAddress}` : "",
-    order.deliveryType !== "delivery" && order.pickupNote ? `Referencia local: ${order.pickupNote}` : "",
+    `*DATOS DEL CLIENTE*`,
+    `• *Cliente:* ${order.customerName || "Cliente"}`,
+    order.customerPhone ? `• *Teléfono:* ${order.customerPhone}` : "",
+    order.customerEmail ? `• *Correo:* ${order.customerEmail}` : "",
+  ];
+
+  if (isDelivery) {
+    lines.push(
+      `• *Modalidad:* Envío a domicilio`,
+      order.deliveryFullName && order.deliveryFullName !== order.customerName ? `• *Destinatario:* ${order.deliveryFullName}` : "",
+      order.deliveryIdNumber ? `• *Cédula / RUC:* ${order.deliveryIdNumber}` : "",
+      order.deliveryCity ? `• *Ciudad:* ${order.deliveryCity}` : "",
+      order.deliveryAddress ? `• *Dirección:* ${order.deliveryAddress}` : "",
+      order.deliveryReference ? `• *Referencia:* ${order.deliveryReference}` : "",
+      order.deliveryPhone && order.deliveryPhone !== order.customerPhone ? `• *Teléfono de entrega:* ${order.deliveryPhone}` : "",
+    );
+  } else {
+    lines.push(
+      `• *Modalidad:* Retiro en local`,
+      order.pickupAddress ? `• *Punto de retiro:* ${order.pickupAddress}` : "",
+      order.pickupNote ? `• *Referencia:* ${order.pickupNote}` : "",
+    );
+  }
+
+  const items = Array.isArray(order.items) ? order.items : [];
+  lines.push(
     "",
-    ...order.items.map((item, index) => `${index + 1}. ${item.name} | Color: ${item.color} | Talla: ${item.size} | Cantidad: ${item.quantity} | ${currency(item.price * item.quantity)}`),
+    `*PRENDAS SELECCIONADAS*`,
+    ...items.map((item, index) => (
+      `${index + 1}. *${item.name}*\n   ▫️ Color: ${item.color} | Talla: ${item.size} | Cantidad: ${item.quantity} | ${currency(item.price * item.quantity)}`
+    )),
     "",
-    `Subtotal: ${currency(order.subtotal)}`,
-    order.discountAmount > 0 ? `Descuento: -${currency(order.discountAmount)}` : "",
-    order.couponCode ? `Cupon aplicado: ${order.couponCode}` : "",
-    `Forma de pago: ${order.paymentMethodLabel || getPaymentMethodLabel(order.paymentMethod)}`,
-    order.paymentBankAccount?.bankName ? `Banco elegido: ${order.paymentBankAccount.bankName}` : "",
-    order.paymentFeeAmount > 0 ? `Comision tarjeta (${order.paymentFeePercent}%): ${currency(order.paymentFeeAmount)}` : "",
-    `Total final: ${currency(order.total || order.subtotal)}`,
+    `*RESUMEN DE PAGO*`,
+    `• *Subtotal:* ${currency(order.subtotal)}`,
+    order.discountAmount > 0 ? `• *Descuento:* -${currency(order.discountAmount)}` : "",
+    order.couponCode ? `• *Cupón aplicado:* ${order.couponCode}` : "",
+    `• *Forma de pago:* ${methodSummary}`,
+    order.paymentFeeAmount > 0 ? `• *Comisión tarjeta (${order.paymentFeePercent}%):* +${currency(order.paymentFeeAmount)}` : "",
+    order.paymentProof ? `• *Comprobante:* Adjuntado en la web` : "",
+    `• *TOTAL A PAGAR:* *${currency(order.total || order.subtotal)}*`,
     "",
-    order.paymentMethod === PAYMENT_METHODS.cardLink
-      ? "Por favor envienme el enlace seguro para pagar con tarjeta."
-      : "Realizare el pago mediante transferencia bancaria.",
-  ].filter(Boolean).join("\n");
+    `━━━━━━━━━━━━━━━━━━━━`,
+    isCard
+      ? "_Por favor envíenme el enlace seguro para realizar el pago con tarjeta._"
+      : "_He registrado mi pedido y adjuntado el comprobante para su validación._",
+  );
+
+  return lines.filter(Boolean).join("\n");
 }
 
 export default async function handler(req, res) {
