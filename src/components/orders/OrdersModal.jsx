@@ -78,7 +78,7 @@ export function OrdersModal({
                   <div className="admin-toolbar customer-order-header">
                     <div>
                       <div className="order-code-row">
-                        <p style={{ margin: 0, fontWeight: 700 }}>{order.code}</p>
+                        <p className="customer-order-code-title">{order.code}</p>
                         <button type="button" className="btn btn-outline order-copy-btn" onClick={() => onCopyOrderCode(order.code)}>
                           <Copy size={13} />
                           Copiar

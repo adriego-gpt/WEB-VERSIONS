@@ -103,6 +103,7 @@ import { trackAnalyticsEvent } from "./services/analyticsService";
 import { AnimatedCurrencyValue } from "./components/ui/AnimatedCurrencyValue";
 import { EmotionalEmptyState } from "./components/ui/EmotionalEmptyState";
 import { ConfirmModal } from "./components/ui/ConfirmModal";
+import { CustomDropdown } from "./components/ui/CustomDropdown";
 import { normalizeOrderStatusForOrder } from "./domain/orders/status";
 import {
   PAYMENT_METHODS,
@@ -1742,7 +1743,9 @@ function CatalogProductCard({
               })}
             </div>
             <div style={{ marginTop: 10 }}>
-              <span className={`badge badge-${stockStatus.tone} ${isLowStock ? "badge-low-stock" : ""}`}>{stockStatus.label}</span>
+              <span className={`badge badge-${stockStatus.tone} ${isLowStock ? "badge-low-stock" : ""}`}>
+                {isLowStock ? `⚡ ¡Solo quedan ${availableStock}!` : stockStatus.label}
+              </span>
             </div>
           </div>
         </div>
@@ -8197,21 +8200,33 @@ export default function App() {
 
               <div className="filter-toolbar compact-toolbar catalog-filter-toolbar">
                 <div className="filter-field filter-field-type">
-                  <Filter size={15} className="filter-icon" />
-                  <select className="select" aria-label="Filtrar por tipo" value={productTypeFilter} onChange={(event) => setProductTypeFilter(event.target.value)}>
-                    <option value="Todos">Todos los tipos</option>
-                    {productTypeOptions.map((item) => <option key={item} value={item}>{item}</option>)}
-                  </select>
+                  <CustomDropdown
+                    options={[
+                      { value: "Todos", label: "Todos los tipos" },
+                      ...productTypeOptions.map((item) => ({ value: item, label: item })),
+                    ]}
+                    value={productTypeFilter}
+                    onChange={setProductTypeFilter}
+                    icon={Filter}
+                    placeholder="Tipo de prenda"
+                    ariaLabel="Filtrar por tipo"
+                  />
                 </div>
                 <div className="filter-field filter-field-sort">
-                  <Filter size={15} className="filter-icon" />
-                  <select className="select" aria-label="Ordenar catálogo" value={sortBy} onChange={(event) => setSortBy(event.target.value)}>
-                    <option value="destacados">Destacados</option>
-                    <option value="nuevos">Nuevos</option>
-                    <option value="rating">Mejor valorados</option>
-                    <option value="precio-asc">Precio: menor a mayor</option>
-                    <option value="precio-desc">Precio: mayor a menor</option>
-                  </select>
+                  <CustomDropdown
+                    options={[
+                      { value: "destacados", label: "Destacados" },
+                      { value: "nuevos", label: "Nuevos" },
+                      { value: "rating", label: "Mejor valorados" },
+                      { value: "precio-asc", label: "Precio: menor a mayor" },
+                      { value: "precio-desc", label: "Precio: mayor a menor" },
+                    ]}
+                    value={sortBy}
+                    onChange={setSortBy}
+                    icon={Filter}
+                    placeholder="Ordenar por"
+                    ariaLabel="Ordenar catálogo"
+                  />
                 </div>
               </div>
 

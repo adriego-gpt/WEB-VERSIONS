@@ -296,7 +296,25 @@ img {
 }
 
 .badge-low-stock {
-  animation: lowStockPulse 1.6s ease-in-out infinite;
+  background: #fff7ed !important;
+  color: #c2410c !important;
+  border: 1px solid #fed7aa !important;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  animation: lowStockPulse 2s ease-in-out infinite;
+}
+
+@keyframes lowStockPulse {
+  0%, 100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(234, 88, 12, 0);
+  }
+  50% {
+    transform: scale(1.02);
+    box-shadow: 0 0 0 3px rgba(234, 88, 12, 0.15);
+  }
 }
 
 .input,
@@ -2463,13 +2481,17 @@ img {
 }
 
 .orders-sheet-body {
-  display: grid;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
   gap: 14px;
 }
 
 .orders-search-control {
   width: 100%;
+  height: 44px;
   min-height: 44px;
+  max-height: 44px;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
@@ -2479,6 +2501,8 @@ img {
   border-radius: 14px;
   background: #fff;
   color: var(--text-muted);
+  flex-shrink: 0;
+  box-sizing: border-box;
   transition: border-color var(--time-fast) var(--ease-standard), box-shadow var(--time-fast) var(--ease-standard);
 }
 
@@ -2490,7 +2514,7 @@ img {
 .orders-search-control input {
   width: 100%;
   min-width: 0;
-  height: 42px;
+  height: 40px;
   border: 0;
   outline: 0;
   padding: 0;
@@ -2504,14 +2528,21 @@ img {
   color: #64646c;
 }
 
+.customer-order-code-title {
+  margin: 0;
+  font-weight: 700;
+  font-size: 16px;
+  letter-spacing: -0.01em;
+}
+
 .orders-sheet-header h3 {
   margin: 0;
-  font-size: 28px;
-  line-height: 1.12;
+  font-size: 24px;
+  line-height: 1.15;
 }
 
 .orders-sheet-subtitle {
-  margin: 5px 0 0;
+  margin: 4px 0 0;
   font-size: 13px;
 }
 
@@ -6646,6 +6677,124 @@ img {
 
 .catalog-filter-toolbar .filter-field {
   max-width: none;
+}
+
+.custom-dropdown-container {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+}
+
+.custom-dropdown-trigger {
+  width: 100%;
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 12px;
+  background: #ffffff;
+  border: 1px solid var(--line-strong, #e2e8f0);
+  border-radius: 12px;
+  color: var(--text-strong, #0f172a);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  transition: border-color var(--time-fast) var(--ease-standard), box-shadow var(--time-fast) var(--ease-standard);
+  text-align: left;
+}
+
+.custom-dropdown-trigger:hover {
+  border-color: #94a3b8;
+}
+
+.custom-dropdown-trigger.open,
+.custom-dropdown-trigger:focus-visible {
+  border-color: var(--brand-primary, #0f172a);
+  box-shadow: 0 0 0 3px rgba(15, 23, 42, 0.08);
+  outline: none;
+}
+
+.custom-dropdown-trigger-content {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.custom-dropdown-icon {
+  color: var(--text-muted, #64748b);
+  flex-shrink: 0;
+}
+
+.custom-dropdown-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.custom-dropdown-chevron {
+  color: var(--text-muted, #64748b);
+  flex-shrink: 0;
+  transition: transform 0.2s ease;
+}
+
+.custom-dropdown-chevron.rotated {
+  transform: rotate(180deg);
+}
+
+.custom-dropdown-menu {
+  position: absolute;
+  top: calc(100% + 5px);
+  left: 0;
+  right: 0;
+  z-index: 60;
+  max-height: 240px;
+  overflow-y: auto;
+  background: #ffffff;
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  border-radius: 12px;
+  padding: 5px;
+  box-shadow: 0 10px 25px -5px rgba(15, 23, 42, 0.12), 0 8px 10px -6px rgba(15, 23, 42, 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.custom-dropdown-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  color: var(--text-main, #334155);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background var(--time-fast) var(--ease-standard), color var(--time-fast) var(--ease-standard);
+  text-align: left;
+}
+
+.custom-dropdown-item:hover {
+  background: #f1f5f9;
+  color: var(--text-strong, #0f172a);
+}
+
+.custom-dropdown-item.selected {
+  background: #f8fafc;
+  color: var(--brand-primary, #0f172a);
+  font-weight: 700;
+}
+
+.custom-dropdown-check {
+  color: var(--brand-primary, #0f172a);
+  flex-shrink: 0;
 }
 
 .catalog-filter-toolbar .select {
@@ -11243,15 +11392,26 @@ img {
       position: sticky;
       top: 0;
       z-index: 3;
-      min-height: 44px;
+      height: 40px;
+      min-height: 40px;
+      max-height: 40px;
       padding-inline: 11px;
       background: #fff;
-      box-shadow: 0 8px 14px rgba(17, 17, 17, 0.05);
+      box-shadow: 0 4px 12px rgba(17, 17, 17, 0.05);
+      flex-shrink: 0;
     }
 
     .orders-search-control input {
-      height: 42px;
+      height: 38px;
       font-size: 13px;
+    }
+
+    .customer-order-code-title {
+      font-size: 14px;
+    }
+
+    .customer-order-total strong {
+      font-size: 15px;
     }
 
     .bank-account-editor-head {
