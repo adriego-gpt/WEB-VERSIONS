@@ -5422,6 +5422,7 @@ export default function App() {
     if (syncResult.ok) {
       resetAddressBookEditor();
     }
+    return syncResult;
   };
 
   const handleSaveProfile = async () => {
@@ -7553,6 +7554,7 @@ export default function App() {
               addressBookDraft={addressBookDraft}
               addressBookEditingId={addressBookEditingId}
               onAddressBookDraftChange={handleAddressBookDraftFieldChange}
+              onResetAddressBookDraft={resetAddressBookEditor}
               onSaveAddressBookEntry={handleSaveAddressBookEntry}
               onEditAddressBookEntry={handleEditAddressBookEntry}
               onDeleteAddressBookEntry={handleDeleteAddressBookEntry}

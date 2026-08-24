@@ -1,5 +1,5 @@
 import React, { useEffect } from "react";
-import { Heart, X, ArrowRight } from "lucide-react";
+import { Heart, X, ArrowUpRight, Eye } from "lucide-react";
 import { motion as Motion, AnimatePresence } from "framer-motion";
 import { currency } from "../../utils/currency";
 import { getCurrentImageForProduct } from "../../domain/products/variants";
@@ -33,7 +33,13 @@ export function FavoritesModal({
 
   return (
     <AnimatePresence>
-      <Motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="modal-backdrop" onClick={onClose}>
+      <Motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        className="modal-backdrop"
+        onClick={onClose}
+      >
         <Motion.div
           initial={{ opacity: 0, y: 24, scale: 0.97 }}
           animate={{ opacity: 1, y: 0, scale: 1 }}
@@ -47,8 +53,12 @@ export function FavoritesModal({
         >
           <div className="sheet-header">
             <div>
-              <p className="muted" style={{ margin: 0, textTransform: "uppercase", letterSpacing: ".25em", fontSize: 12 }}>Favoritos</p>
-              <h3 style={{ margin: "4px 0 0", fontSize: 24 }}>Tus prendas guardadas ({favoriteProducts.length})</h3>
+              <p className="muted" style={{ margin: 0, textTransform: "uppercase", letterSpacing: ".25em", fontSize: 11, fontWeight: 600 }}>
+                Wishlist
+              </p>
+              <h3 style={{ margin: "4px 0 0", fontSize: 22, fontWeight: 700, letterSpacing: "-0.02em" }}>
+                Prendas guardadas ({favoriteProducts.length})
+              </h3>
             </div>
             <button type="button" onClick={onClose} className="icon-btn" aria-label="Cerrar favoritos">
               <X size={18} />
@@ -60,7 +70,7 @@ export function FavoritesModal({
               <EmotionalEmptyState
                 icon={Heart}
                 title="Aún no guardas favoritos"
-                description="Marca prendas con el corazón y aquí tendrás tu selección para volver a ellas cuando quieras."
+                description="Marca prendas con el corazón y aquí tendrás tu selección exclusiva para volver a ellas cuando quieras."
                 actionLabel="Explorar colección"
                 onAction={onBrowseCatalog}
               />
@@ -68,7 +78,13 @@ export function FavoritesModal({
               <div className="favorites-list">
                 {favoriteProducts.map((product) => {
                   const thumb = getCurrentImageForProduct(product, product.colors?.[0]);
-                  const hasDiscount = product.oldPrice && Number(product.oldPrice) > Number(product.price);
+                  const priceNum = Number(product.price) || 0;
+                  const oldPriceNum = Number(product.oldPrice) || 0;
+                  const hasDiscount = oldPriceNum > priceNum;
+                  const discountPercent = hasDiscount
+                    ? Math.round(((oldPriceNum - priceNum) / oldPriceNum) * 100)
+                    : 0;
+
                   return (
                     <Motion.div
                       key={product.id}
@@ -92,6 +108,9 @@ export function FavoritesModal({
                           loading="lazy"
                           decoding="async"
                         />
+                        {hasDiscount && (
+                          <span className="favorite-item-badge">-{discountPercent}%</span>
+                        )}
                       </button>
 
                       <div className="favorite-item-info">
@@ -100,7 +119,7 @@ export function FavoritesModal({
                           onClick={() => onOpenProduct(product)}
                           className="favorite-item-title-btn"
                         >
-                          <span className="favorite-item-category">{product.category || "Prenda"}</span>
+                          <span className="favorite-item-category">{product.category || "Colección"}</span>
                           <h4 className="favorite-item-title">{product.name}</h4>
                         </button>
                         <div className="favorite-item-pricing">
@@ -119,15 +138,16 @@ export function FavoritesModal({
                           aria-label="Quitar de favoritos"
                           title="Quitar de favoritos"
                         >
-                          <Heart size={17} fill="#ef4444" color="#ef4444" />
+                          <Heart size={16} fill="#ef4444" color="#ef4444" />
                         </button>
                         <button
                           type="button"
-                          className="btn btn-outline favorite-item-view-btn"
+                          className="favorite-item-view-btn"
                           onClick={() => onOpenProduct(product)}
+                          aria-label={`Ver prenda ${product.name}`}
                         >
-                          <span>Ver</span>
-                          <ArrowRight size={13} />
+                          <span>Ver prenda</span>
+                          <ArrowUpRight size={14} className="favorite-item-view-icon" />
                         </button>
                       </div>
                     </Motion.div>

@@ -105,7 +105,9 @@ export function CartSummaryModal({
   const selectedPaymentMethod = transferReady ? paymentMethod : PAYMENT_METHODS.cardLink;
   const [deliveryDraft, setDeliveryDraft] = useState(() => createInitialDeliveryDraft());
   const [selectedSavedAddressId, setSelectedSavedAddressId] = useState(() => (defaultSavedAddress?.id || ""));
-  const effectiveSelectedSavedAddressId = normalizeEntityId(selectedSavedAddressId || defaultSavedAddress?.id || "");
+  const [useCustomAddress, setUseCustomAddress] = useState(false);
+  const [saveAddressToBook, setSaveAddressToBook] = useState(true);
+  const effectiveSelectedSavedAddressId = useCustomAddress ? "" : normalizeEntityId(selectedSavedAddressId || defaultSavedAddress?.id || "");
   const [checkoutFormError, setCheckoutFormError] = useState("");
   const [paymentProof, setPaymentProof] = useState("");
   const [paymentProofName, setPaymentProofName] = useState("");
@@ -180,16 +182,14 @@ export function CartSummaryModal({
       : checkoutStep === CHECKOUT_STEPS.summary
         ? "Continuar con la entrega"
         : checkoutStep === CHECKOUT_STEPS.delivery
-          ? "Confirmar dónde recibir"
+          ? "Confirmar dirección y continuar"
         : selectedPaymentMethod === PAYMENT_METHODS.cardLink
           ? `Solicitar enlace de pago (+${cardFeePercent}%)`
           : selectedBankAccount
             ? "Confirmar pago por transferencia"
             : "Selecciona un banco";
+
   const handleDeliveryDraftChange = (field, value) => {
-    if (field === "city" || field === "address" || field === "reference" || field === "phone") {
-      setSelectedSavedAddressId("");
-    }
     setDeliveryDraft((previous) => ({
       ...previous,
       [field]: field === "phone"
@@ -201,8 +201,10 @@ export function CartSummaryModal({
             : stripDangerousContent(value).replace(/[\r\n\t]+/g, " "),
     }));
   };
+
   const applySavedAddressToDeliveryDraft = (addressEntry = null) => {
     if (!addressEntry) return;
+    setUseCustomAddress(false);
     setSelectedSavedAddressId(String(addressEntry.id || ""));
     setDeliveryDraft((previous) => ({
       ...previous,
@@ -220,10 +222,22 @@ export function CartSummaryModal({
     const idNumber = sanitizeLine(deliveryDraft.idNumber || "");
     const city = sanitizeLine(deliveryDraft.city || "");
     const address = sanitizeParagraph(deliveryDraft.address || "");
-    const reference = sanitizeParagraph(deliveryDraft.reference || "");
     const phone = normalizeUserPhoneNumber(deliveryDraft.phone || "");
-    if (!fullName || !idNumber || !city || !address || !reference || phone.length !== AUTH_FIELD_LIMITS.phone) {
-      setCheckoutFormError("Completa nombre, cédula, ciudad, dirección, referencia y teléfono para el envío.");
+
+    if (!fullName) {
+      setCheckoutFormError("Por favor ingresa el nombre de quien recibe.");
+      return false;
+    }
+    if (!idNumber || idNumber.length < 10) {
+      setCheckoutFormError("Ingresa un número de cédula o RUC válido (mínimo 10 dígitos).");
+      return false;
+    }
+    if (!city || !address) {
+      setCheckoutFormError("Completa la ciudad y la dirección exacta para la entrega.");
+      return false;
+    }
+    if (phone.length !== AUTH_FIELD_LIMITS.phone) {
+      setCheckoutFormError("Ingresa un número de teléfono válido de 10 dígitos para el repartidor.");
       return false;
     }
     return true;
@@ -241,6 +255,22 @@ export function CartSummaryModal({
     }
     if (checkoutStep === CHECKOUT_STEPS.delivery) {
       if (!validateDeliverySelection()) return;
+      if (
+        deliveryType === "delivery" &&
+        saveAddressToBook &&
+        currentUser?.id &&
+        typeof onSaveCheckoutAddress === "function" &&
+        (useCustomAddress || !hasSavedAddresses)
+      ) {
+        void onSaveCheckoutAddress({
+          label: "Entrega",
+          city: sanitizeLine(deliveryDraft.city || ""),
+          address: sanitizeParagraph(deliveryDraft.address || ""),
+          reference: sanitizeParagraph(deliveryDraft.reference || ""),
+          phone: normalizeUserPhoneNumber(deliveryDraft.phone || ""),
+          isDefault: !hasSavedAddresses,
+        });
+      }
       setCheckoutStep(getNextCheckoutStep(checkoutStep));
       setCheckoutFormError("");
       return;
@@ -319,34 +349,6 @@ export function CartSummaryModal({
     setPaymentProofName("");
     setPaymentProofError("");
     setProofAttention(false);
-  };
-
-  const handleSaveCheckoutAddress = async () => {
-    if (deliveryType !== "delivery" || typeof onSaveCheckoutAddress !== "function") return;
-    const city = sanitizeLine(deliveryDraft.city || "");
-    const address = sanitizeParagraph(deliveryDraft.address || "");
-    const reference = sanitizeParagraph(deliveryDraft.reference || "");
-    const phone = normalizeUserPhoneNumber(deliveryDraft.phone || "");
-    if (!city || !address) {
-      setCheckoutFormError("Completa la ciudad y la dirección para guardarla en tu libreta.");
-      return;
-    }
-    const result = await onSaveCheckoutAddress({
-      city,
-      address,
-      reference,
-      phone,
-      isDefault: !hasSavedAddresses,
-    });
-    if (!result?.ok) {
-      setCheckoutFormError("No pudimos guardar la dirección. Inténtalo nuevamente.");
-      return;
-    }
-    const savedId = normalizeEntityId(result.savedEntryId || "");
-    if (savedId) {
-      setSelectedSavedAddressId(savedId);
-    }
-    setCheckoutFormError("");
   };
 
   useEffect(() => {
@@ -590,48 +592,144 @@ export function CartSummaryModal({
                     </div>
                   ) : (
                     <div className="checkout-delivery-form">
-                      {hasSavedAddresses && (
-                        <div className="checkout-saved-addresses">
-                          <p className="muted checkout-saved-addresses-title">Libreta de direcciones</p>
-                          <div className="checkout-saved-address-list">
-                            {normalizedSavedAddresses.map((entry) => {
-                              const isActive = String(entry.id || "") === String(effectiveSelectedSavedAddressId || "");
-                              return (
-                                <button
-                                  key={entry.id}
-                                  type="button"
-                                  className={`checkout-saved-address-chip ${isActive ? "active" : ""}`}
-                                  onClick={() => applySavedAddressToDeliveryDraft(entry)}
-                                >
-                                  <span className="checkout-saved-address-chip-label">{entry.label}</span>
-                                  <span className="checkout-saved-address-chip-text">{entry.address}</span>
-                                </button>
-                              );
-                            })}
-                          </div>
+                      <div className="checkout-recipient-card">
+                        <p className="checkout-section-badge-title">Datos del destinatario</p>
+                        <div className="checkout-delivery-grid recipient-grid">
+                          <input
+                            className="input"
+                            placeholder="Nombre completo de quien recibe"
+                            aria-label="Nombre completo"
+                            value={deliveryDraft.fullName}
+                            onChange={(event) => handleDeliveryDraftChange("fullName", event.target.value)}
+                          />
+                          <input
+                            className="input"
+                            placeholder="Cédula de identidad (10 dígitos)"
+                            aria-label="Cédula de identidad"
+                            maxLength={13}
+                            value={deliveryDraft.idNumber}
+                            onChange={(event) => handleDeliveryDraftChange("idNumber", event.target.value)}
+                          />
                         </div>
-                      )}
-                      {!hasSavedAddresses && (
-                        <p className="helper-text" style={{ margin: 0 }}>
-                          Aún no tienes direcciones guardadas. Completa el formulario y la guardaremos al confirmar tu pedido.
-                        </p>
-                      )}
-                      <div className="checkout-delivery-grid">
-                        <input className="input" placeholder="Nombre completo" aria-label="Nombre completo" value={deliveryDraft.fullName} onChange={(event) => handleDeliveryDraftChange("fullName", event.target.value)} />
-                        <input className="input" placeholder="Cédula" aria-label="Cédula de identidad" value={deliveryDraft.idNumber} onChange={(event) => handleDeliveryDraftChange("idNumber", event.target.value)} />
-                        <input className="input" placeholder="Ciudad" aria-label="Ciudad" value={deliveryDraft.city} onChange={(event) => handleDeliveryDraftChange("city", event.target.value)} />
-                        <input className="input" placeholder="Teléfono (10 dígitos)" aria-label="Teléfono" value={deliveryDraft.phone} onChange={(event) => handleDeliveryDraftChange("phone", event.target.value)} />
-                        <textarea className="textarea checkout-delivery-full" placeholder="Dirección exacta" aria-label="Dirección exacta" value={deliveryDraft.address} onChange={(event) => handleDeliveryDraftChange("address", event.target.value)} />
-                        <textarea className="textarea checkout-delivery-full" placeholder="Referencia de entrega" aria-label="Referencia de entrega" value={deliveryDraft.reference} onChange={(event) => handleDeliveryDraftChange("reference", event.target.value)} />
                       </div>
-                      <button
-                        type="button"
-                        className="btn btn-outline"
-                        onClick={() => { void handleSaveCheckoutAddress(); }}
-                        disabled={typeof onSaveCheckoutAddress !== "function"}
-                      >
-                        Guardar dirección
-                      </button>
+
+                      <div className="checkout-address-box">
+                        <p className="checkout-section-badge-title">Dirección de entrega</p>
+
+                        {hasSavedAddresses && !useCustomAddress ? (
+                          <div className="checkout-saved-addresses-flow">
+                            <div className="checkout-saved-address-list">
+                              {normalizedSavedAddresses.map((entry) => {
+                                const isActive = String(entry.id || "") === String(effectiveSelectedSavedAddressId || "");
+                                return (
+                                  <button
+                                    key={entry.id}
+                                    type="button"
+                                    className={`checkout-saved-address-card ${isActive ? "active" : ""}`}
+                                    onClick={() => applySavedAddressToDeliveryDraft(entry)}
+                                  >
+                                    <div className="checkout-saved-address-radio">
+                                      <span className={`custom-radio-circle ${isActive ? "selected" : ""}`} />
+                                    </div>
+                                    <div className="checkout-saved-address-content">
+                                      <div className="checkout-saved-address-top">
+                                        <strong className="checkout-saved-address-label">{entry.label || "Dirección guardada"}</strong>
+                                        {entry.isDefault && <span className="badge badge-dark">Principal</span>}
+                                      </div>
+                                      <p className="checkout-saved-address-text">{entry.address}</p>
+                                      <div className="checkout-saved-address-details">
+                                        {entry.city && <span>{entry.city}</span>}
+                                        {entry.phone && <span>· Tel: {entry.phone}</span>}
+                                        {entry.reference && <span>· Ref: {entry.reference}</span>}
+                                      </div>
+                                    </div>
+                                  </button>
+                                );
+                              })}
+                            </div>
+
+                            <button
+                              type="button"
+                              className="checkout-add-address-trigger"
+                              onClick={() => {
+                                setUseCustomAddress(true);
+                                setSelectedSavedAddressId("");
+                                setDeliveryDraft((prev) => ({
+                                  ...prev,
+                                  city: "",
+                                  address: "",
+                                  reference: "",
+                                }));
+                              }}
+                            >
+                              <Plus size={15} />
+                              <span>Usar otra dirección de entrega</span>
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="checkout-custom-address-container">
+                            {hasSavedAddresses && (
+                              <button
+                                type="button"
+                                className="checkout-back-to-saved-link"
+                                onClick={() => {
+                                  setUseCustomAddress(false);
+                                  if (defaultSavedAddress) {
+                                    applySavedAddressToDeliveryDraft(defaultSavedAddress);
+                                  }
+                                }}
+                              >
+                                <ChevronLeft size={14} />
+                                <span>Volver a mis direcciones guardadas</span>
+                              </button>
+                            )}
+
+                            <div className="checkout-delivery-grid">
+                              <input
+                                className="input"
+                                placeholder="Ciudad / Provincia"
+                                aria-label="Ciudad"
+                                value={deliveryDraft.city}
+                                onChange={(event) => handleDeliveryDraftChange("city", event.target.value)}
+                              />
+                              <input
+                                className="input"
+                                placeholder="Teléfono de contacto (10 dígitos)"
+                                aria-label="Teléfono"
+                                inputMode="tel"
+                                maxLength={10}
+                                value={deliveryDraft.phone}
+                                onChange={(event) => handleDeliveryDraftChange("phone", event.target.value)}
+                              />
+                              <textarea
+                                className="textarea checkout-delivery-full"
+                                placeholder="Dirección exacta (Calle principal, número e intersección)"
+                                aria-label="Dirección exacta"
+                                value={deliveryDraft.address}
+                                onChange={(event) => handleDeliveryDraftChange("address", event.target.value)}
+                              />
+                              <textarea
+                                className="textarea checkout-delivery-full"
+                                placeholder="Referencia de entrega (Color de fachada, depto, indicaciones...)"
+                                aria-label="Referencia de entrega"
+                                value={deliveryDraft.reference}
+                                onChange={(event) => handleDeliveryDraftChange("reference", event.target.value)}
+                              />
+                            </div>
+
+                            {currentUser?.id && (
+                              <label className="checkout-save-address-checkbox">
+                                <input
+                                  type="checkbox"
+                                  checked={saveAddressToBook}
+                                  onChange={(e) => setSaveAddressToBook(e.target.checked)}
+                                />
+                                <span>Guardar esta dirección en mi libreta para futuros pedidos</span>
+                              </label>
+                            )}
+                          </div>
+                        )}
+                      </div>
                     </div>
                     )}
                     </>

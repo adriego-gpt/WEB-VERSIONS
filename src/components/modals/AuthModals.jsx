@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useRef } from "react";
-import { X, Eye, EyeOff, KeyRound, UserRound, MapPin } from "lucide-react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { X, Eye, EyeOff, KeyRound, UserRound, MapPin, Plus, PencilLine, Trash2, ArrowLeft, Check } from "lucide-react";
 import { motion as Motion, AnimatePresence } from "framer-motion";
 
 export function UserAuthModal({
@@ -370,6 +370,7 @@ export function ProfileModal({
   addressBookDraft = {},
   addressBookEditingId,
   onAddressBookDraftChange,
+  onResetAddressBookDraft,
   onSaveAddressBookEntry,
   onEditAddressBookEntry,
   onDeleteAddressBookEntry,
@@ -380,12 +381,33 @@ export function ProfileModal({
   onChangePassword,
   passwordFeedback,
 }) {
+  const [isAddingNewAddress, setIsAddingNewAddress] = useState(false);
   const safeSection = activeSection === "password" || activeSection === "direccion" ? activeSection : "datos";
   const sectionMeta = safeSection === "password"
     ? { title: "Cambio de contraseña", subtitle: "Actualiza tu clave de acceso" }
     : safeSection === "direccion"
-      ? { title: "Libreta de direcciones", subtitle: "Guarda tus direcciones de envío en un solo lugar" }
+      ? { title: "Libreta de direcciones", subtitle: "Administra tus ubicaciones de entrega" }
       : { title: "Datos personales", subtitle: "Edita la información de tu cuenta" };
+
+  const isEditingOrCreatingAddress = Boolean(addressBookEditingId) || isAddingNewAddress;
+  const addressList = Array.isArray(profileDraft.addressBook) ? profileDraft.addressBook : [];
+
+  const handleStartAddNewAddress = () => {
+    onResetAddressBookDraft?.();
+    setIsAddingNewAddress(true);
+  };
+
+  const handleCancelAddressForm = () => {
+    setIsAddingNewAddress(false);
+    onResetAddressBookDraft?.();
+  };
+
+  const handleSaveAddress = async () => {
+    const result = await onSaveAddressBookEntry();
+    if (result?.ok !== false) {
+      setIsAddingNewAddress(false);
+    }
+  };
 
   useEffect(() => {
     if (!open) return undefined;
@@ -454,85 +476,217 @@ export function ProfileModal({
 
               {safeSection === "direccion" && (
                 <div className="surface profile-card">
-                  <div className="profile-card-head">
-                    <h4 className="profile-section-title" style={{ margin: 0 }}>Libreta de direcciones</h4>
-                    <MapPin size={20} />
-                  </div>
-                  <div className="profile-address-book">
-                    <p className="muted profile-address-book-title">Selecciona, agrega o edita tus direcciones</p>
-                    {Array.isArray(profileDraft.addressBook) && profileDraft.addressBook.length > 0 ? (
-                      <div className="profile-address-book-list">
-                        {profileDraft.addressBook.map((entry) => (
-                          <div key={entry.id} className={`profile-address-item ${entry.isDefault ? "is-default" : ""}`}>
-                            <div className="profile-address-item-head">
-                              <strong>{entry.label || "Dirección guardada"}</strong>
-                              {entry.isDefault && <span className="badge badge-dark">Principal</span>}
-                            </div>
-                            <p className="muted profile-address-item-text">{entry.address}</p>
-                            {(entry.city || entry.reference || entry.phone) && (
-                              <p className="muted profile-address-item-meta">
-                                {entry.city ? `Ciudad: ${entry.city}` : ""}
-                                {entry.reference ? `${entry.city ? " · " : ""}Ref: ${entry.reference}` : ""}
-                                {entry.phone ? `${entry.city || entry.reference ? " · " : ""}Tel: ${entry.phone}` : ""}
-                              </p>
-                            )}
-                            <div className="profile-address-actions">
-                              <button type="button" className="btn btn-soft" onClick={() => onSelectAddressBookEntry(entry.id)}>Usar</button>
-                              <button type="button" className="btn btn-outline" onClick={() => onEditAddressBookEntry(entry.id)}>Editar</button>
-                              <button type="button" className="btn btn-outline" onClick={() => onDeleteAddressBookEntry(entry.id)}>Eliminar</button>
-                            </div>
-                          </div>
-                        ))}
+                  {!isEditingOrCreatingAddress ? (
+                    <div className="profile-address-view-list">
+                      <div className="profile-address-header-row">
+                        <div>
+                          <h4 className="profile-section-title" style={{ margin: 0 }}>Direcciones guardadas</h4>
+                          <p className="muted" style={{ margin: "2px 0 0", fontSize: 12 }}>
+                            {addressList.length === 1 ? "1 dirección registrada" : `${addressList.length} direcciones registradas`}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          className="profile-address-add-btn"
+                          onClick={handleStartAddNewAddress}
+                        >
+                          <Plus size={15} />
+                          <span>Nueva dirección</span>
+                        </button>
                       </div>
-                    ) : (
-                      <p className="helper-text" style={{ margin: 0 }}>Aún no tienes direcciones guardadas.</p>
-                    )}
-                  </div>
-                  <div className="profile-address-editor">
-                    <input
-                      className="input"
-                      placeholder="Etiqueta (Casa, Oficina, Local...)"
-                      value={addressBookDraft.label || ""}
-                      onChange={(event) => onAddressBookDraftChange("label", event.target.value)}
-                    />
-                    <textarea
-                      className="textarea"
-                      placeholder="Direccion para guardar en tu libreta"
-                      value={addressBookDraft.address || ""}
-                      onChange={(event) => onAddressBookDraftChange("address", event.target.value)}
-                    />
-                    <div className="settings-grid">
-                      <input
-                        className="input"
-                        placeholder="Ciudad"
-                        value={addressBookDraft.city || ""}
-                        onChange={(event) => onAddressBookDraftChange("city", event.target.value)}
-                      />
-                      <input
-                        className="input"
-                        placeholder="Telefono (opcional)"
-                        value={addressBookDraft.phone || ""}
-                        onChange={(event) => onAddressBookDraftChange("phone", event.target.value)}
-                      />
+
+                      {addressList.length > 0 ? (
+                        <div className="profile-address-cards-stack">
+                          {addressList.map((entry) => (
+                            <div
+                              key={entry.id}
+                              className={`profile-address-card ${entry.isDefault ? "is-default" : ""}`}
+                            >
+                              <div className="profile-address-card-header">
+                                <div className="profile-address-card-title-box">
+                                  <span className="profile-address-card-pin">
+                                    <MapPin size={16} />
+                                  </span>
+                                  <strong className="profile-address-card-name">
+                                    {entry.label || "Dirección de entrega"}
+                                  </strong>
+                                </div>
+                                {entry.isDefault ? (
+                                  <span className="profile-address-badge-primary">
+                                    <Check size={12} />
+                                    <span>Principal</span>
+                                  </span>
+                                ) : null}
+                              </div>
+
+                              <p className="profile-address-card-text">{entry.address}</p>
+
+                              {(entry.city || entry.reference || entry.phone) && (
+                                <div className="profile-address-card-tags">
+                                  {entry.city && (
+                                    <span className="profile-address-chip">{entry.city}</span>
+                                  )}
+                                  {entry.phone && (
+                                    <span className="profile-address-chip">Tel: {entry.phone}</span>
+                                  )}
+                                  {entry.reference && (
+                                    <span className="profile-address-chip-ref">Ref: {entry.reference}</span>
+                                  )}
+                                </div>
+                              )}
+
+                              <div className="profile-address-card-actions">
+                                {!entry.isDefault && (
+                                  <button
+                                    type="button"
+                                    className="profile-address-action-link"
+                                    onClick={() => onSelectAddressBookEntry(entry.id)}
+                                  >
+                                    <Check size={13} />
+                                    <span>Hacer principal</span>
+                                  </button>
+                                )}
+                                <button
+                                  type="button"
+                                  className="profile-address-action-link"
+                                  onClick={() => {
+                                    setIsAddingNewAddress(false);
+                                    onEditAddressBookEntry(entry.id);
+                                  }}
+                                >
+                                  <PencilLine size={13} />
+                                  <span>Editar</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  className="profile-address-action-link danger"
+                                  onClick={() => onDeleteAddressBookEntry(entry.id)}
+                                  title="Eliminar dirección"
+                                >
+                                  <Trash2 size={13} />
+                                  <span>Eliminar</span>
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="profile-address-empty-state">
+                          <div className="profile-address-empty-icon">
+                            <MapPin size={28} />
+                          </div>
+                          <h5>Aún no tienes direcciones</h5>
+                          <p>Agrega tus ubicaciones de entrega para seleccionarlas rápidamente al comprar.</p>
+                          <button
+                            type="button"
+                            className="btn btn-primary"
+                            onClick={handleStartAddNewAddress}
+                          >
+                            <Plus size={16} />
+                            <span>Agregar mi primera dirección</span>
+                          </button>
+                        </div>
+                      )}
                     </div>
-                    <textarea
-                      className="textarea"
-                      placeholder="Referencia (opcional)"
-                      value={addressBookDraft.reference || ""}
-                      onChange={(event) => onAddressBookDraftChange("reference", event.target.value)}
-                    />
-                    <label className="profile-address-default">
-                      <input
-                        type="checkbox"
-                        checked={Boolean(addressBookDraft.isDefault)}
-                        onChange={(event) => onAddressBookDraftChange("isDefault", event.target.checked)}
-                      />
-                      Guardar como dirección principal
-                    </label>
-                    <button className="btn btn-outline" type="button" onClick={onSaveAddressBookEntry}>
-                      {addressBookEditingId ? "Actualizar dirección" : "Guardar dirección"}
-                    </button>
-                  </div>
+                  ) : (
+                    <div className="profile-address-form-view">
+                      <div className="profile-address-form-nav">
+                        <button
+                          type="button"
+                          className="profile-address-back-button"
+                          onClick={handleCancelAddressForm}
+                        >
+                          <ArrowLeft size={15} />
+                          <span>Volver a mis direcciones</span>
+                        </button>
+                        <h4 className="profile-address-form-heading">
+                          {addressBookEditingId ? "Editar dirección" : "Nueva dirección de entrega"}
+                        </h4>
+                      </div>
+
+                      <div className="profile-address-form-inputs">
+                        <div className="form-field-group">
+                          <label className="profile-field-label">Etiqueta o nombre de la ubicación</label>
+                          <input
+                            className="input"
+                            placeholder="Ej. Casa, Oficina, Departamento..."
+                            value={addressBookDraft.label || ""}
+                            onChange={(event) => onAddressBookDraftChange("label", event.target.value)}
+                          />
+                        </div>
+
+                        <div className="form-field-group">
+                          <label className="profile-field-label">Dirección exacta</label>
+                          <textarea
+                            className="textarea profile-address-textarea"
+                            placeholder="Calle principal, número de casa/edificio e intersección..."
+                            value={addressBookDraft.address || ""}
+                            onChange={(event) => onAddressBookDraftChange("address", event.target.value)}
+                          />
+                        </div>
+
+                        <div className="settings-grid">
+                          <div className="form-field-group">
+                            <label className="profile-field-label">Ciudad / Provincia</label>
+                            <input
+                              className="input"
+                              placeholder="Ej. Quito, Guayaquil..."
+                              value={addressBookDraft.city || ""}
+                              onChange={(event) => onAddressBookDraftChange("city", event.target.value)}
+                            />
+                          </div>
+                          <div className="form-field-group">
+                            <label className="profile-field-label">Teléfono de contacto</label>
+                            <input
+                              className="input"
+                              placeholder="Teléfono (10 dígitos)"
+                              inputMode="tel"
+                              maxLength={10}
+                              value={addressBookDraft.phone || ""}
+                              onChange={(event) => onAddressBookDraftChange("phone", event.target.value)}
+                            />
+                          </div>
+                        </div>
+
+                        <div className="form-field-group">
+                          <label className="profile-field-label">Referencia adicional (opcional)</label>
+                          <textarea
+                            className="textarea"
+                            placeholder="Piso, departamento, color de fachada, portón o puntos de referencia..."
+                            value={addressBookDraft.reference || ""}
+                            onChange={(event) => onAddressBookDraftChange("reference", event.target.value)}
+                          />
+                        </div>
+
+                        <label className="profile-address-checkbox-label">
+                          <input
+                            type="checkbox"
+                            checked={Boolean(addressBookDraft.isDefault)}
+                            onChange={(event) => onAddressBookDraftChange("isDefault", event.target.checked)}
+                          />
+                          <span>Establecer como dirección principal predeterminada</span>
+                        </label>
+                      </div>
+
+                      <div className="profile-address-form-buttons">
+                        <button
+                          className="btn btn-primary"
+                          type="button"
+                          onClick={handleSaveAddress}
+                        >
+                          {addressBookEditingId ? "Actualizar dirección" : "Guardar dirección"}
+                        </button>
+                        <button
+                          className="btn btn-outline"
+                          type="button"
+                          onClick={handleCancelAddressForm}
+                        >
+                          Cancelar
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
                   {profileFeedback?.message && (
                     <div className={`status-message ${profileFeedback.tone === "error" ? "status-error" : "status-success"}`} style={{ marginTop: 14 }}>
                       {profileFeedback.message}
