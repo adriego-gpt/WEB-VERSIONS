@@ -612,11 +612,13 @@ export default async function handler(req, res) {
   }
 
   if (responsePayload.order) {
-    dispatchOrderNotifications(responsePayload.order, {
-      lowStockAlerts: responsePayload.lowStockAlerts,
-    }).catch((err) => {
+    try {
+      await dispatchOrderNotifications(responsePayload.order, {
+        lowStockAlerts: responsePayload.lowStockAlerts,
+      });
+    } catch (err) {
       console.error("[notifications-dispatch-error]", err?.message || err);
-    });
+    }
   }
 
   res.status(200).json(responsePayload);
