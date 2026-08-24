@@ -4756,7 +4756,7 @@ export default function App() {
     } else if (field === "username") {
       nextValue = normalizeUsername(value);
     } else if (field === "name") {
-      nextValue = sanitizeLine(value).slice(0, AUTH_FIELD_LIMITS.name);
+      nextValue = String(value || "").replace(/[\r\n\t]+/g, " ").slice(0, AUTH_FIELD_LIMITS.name);
     } else if (field === "resetToken") {
       nextValue = sanitizeLine(value).slice(0, AUTH_FIELD_LIMITS.resetToken);
     } else if (field === "password" || field === "confirmPassword") {
@@ -5018,7 +5018,7 @@ export default function App() {
       ...previous,
       [field]: field === "phone"
           ? normalizeUserPhoneNumber(value)
-          : sanitizeLine(value),
+          : String(value || "").replace(/[\r\n\t]+/g, " "),
     }));
   };
 
@@ -5029,9 +5029,7 @@ export default function App() {
         ? Boolean(value)
         : field === "phone"
           ? normalizeUserPhoneNumber(value)
-          : field === "address" || field === "reference"
-            ? sanitizeParagraph(value)
-            : sanitizeLine(value),
+          : String(value || "").replace(/[\r\n\t]+/g, " "),
     }));
   };
 
