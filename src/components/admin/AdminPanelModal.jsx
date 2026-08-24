@@ -25,7 +25,8 @@ import {
 } from '../../constants';
 import {
   sanitizeLine, currency,
-  normalizeOfferDiscountMode, normalizeImageSource, formatAdminTimestamp
+  normalizeOfferDiscountMode, normalizeImageSource, formatAdminTimestamp,
+  normalizeSearchText
 } from '../../utils';
 
 
@@ -276,20 +277,21 @@ export function AdminPanelModal({
     },
   ];
 
-  const normalizedAdminUsersQuery = sanitizeLine(adminUsersSearch || "").toLowerCase();
+  const normalizedAdminUsersQuery = normalizeSearchText(adminUsersSearch);
   const visibleAdminUsers = useMemo(() => {
     if (!normalizedAdminUsersQuery) return adminUsers;
     return adminUsers.filter((user) => {
-      const searchText = [
+      const searchText = normalizeSearchText([
         user.name,
         user.lastName,
         user.email,
         user.username,
         user.phone,
-      ].join(" ").toLowerCase();
+      ].join(" "));
       return searchText.includes(normalizedAdminUsersQuery);
     });
   }, [adminUsers, normalizedAdminUsersQuery]);
+
   const visibleCatalogProductIds = useMemo(
     () => adminCatalogProducts.map((product) => String(product.id)),
     [adminCatalogProducts],

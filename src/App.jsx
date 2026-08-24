@@ -1,4 +1,4 @@
-import React, { Suspense, lazy, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import React, { Suspense, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import {
   ShoppingBag,
   Plus,
@@ -148,6 +148,7 @@ import {
   sanitizeLine,
   sanitizeParagraph,
   stripDangerousContent,
+  normalizeSearchText,
   normalizeEmail,
   slugify,
   splitFilterTagsText,
@@ -2688,17 +2689,17 @@ export default function App() {
     return [...new Set(mergedTags)];
   }, [activeFilterTagNames, productForm.filterTagsText]);
 
-  const normalizedCatalogSearch = deferredSearch.toLowerCase().trim();
-  const normalizedOrderSearch = deferredOrderSearch.toLowerCase().trim();
-  const normalizedOrderCustomerFilter = deferredOrderCustomerFilter.toLowerCase().trim();
-  const normalizedUserOrderSearch = deferredUserOrderSearch.toLowerCase().trim();
-  const normalizedAdminCatalogSearch = deferredAdminCatalogQuery.toLowerCase().trim();
+  const normalizedCatalogSearch = normalizeSearchText(deferredSearch);
+  const normalizedOrderSearch = normalizeSearchText(deferredOrderSearch);
+  const normalizedOrderCustomerFilter = normalizeSearchText(deferredOrderCustomerFilter);
+  const normalizedUserOrderSearch = normalizeSearchText(deferredUserOrderSearch);
+  const normalizedAdminCatalogSearch = normalizeSearchText(deferredAdminCatalogQuery);
   const normalizedProductTypeFilter = useMemo(() => normalizeOptionLabel(productTypeFilter), [productTypeFilter]);
 
   const productSearchIndex = useMemo(() => products.map((product) => {
     const normalizedType = normalizeOptionLabel(product.productType || "General");
-    const catalogText = `${product.name} ${product.category} ${product.productType || ""} ${product.description} ${(product.filterTags || []).join(" ")}`.toLowerCase();
-    const adminText = `${product.name} ${product.category} ${product.productType || ""} ${(product.filterTags || []).join(" ")} ${product.offerEnabled ? "oferta" : ""}`.toLowerCase();
+    const catalogText = normalizeSearchText(`${product.name} ${product.category} ${product.productType || ""} ${product.description} ${(product.filterTags || []).join(" ")}`);
+    const adminText = normalizeSearchText(`${product.name} ${product.category} ${product.productType || ""} ${(product.filterTags || []).join(" ")} ${product.offerEnabled ? "oferta" : ""}`);
     return {
       product,
       normalizedType,
@@ -2758,7 +2759,7 @@ export default function App() {
 
   const orderSearchIndex = useMemo(() => orderHistory.map((order) => ({
     order,
-    text: [
+    text: normalizeSearchText([
       order.code,
       order.customerName,
       order.customerEmail,
@@ -2768,7 +2769,7 @@ export default function App() {
       order.deliveryReference,
       order.deliveryPhone,
       order.items.map((item) => `${item.name} ${item.color} ${item.size}`).join(" "),
-    ].join(" ").toLowerCase(),
+    ].join(" ")),
   })), [orderHistory]);
   const adminOrderCustomerOptions = useMemo(() => {
     const options = new Set();
@@ -2789,7 +2790,7 @@ export default function App() {
     })
     .map((order) => ({
       order,
-      text: `${order.code} ${order.items.map((item) => `${item.name} ${item.color} ${item.size}`).join(" ")}`.toLowerCase(),
+      text: normalizeSearchText(`${order.code} ${order.items.map((item) => `${item.name} ${item.color} ${item.size}`).join(" ")}`),
     })), [orderHistory, currentUser?.id, currentUser?.email]);
 
   const adminProductSearchIndex = useMemo(() => productSearchIndex.map((entry) => ({
@@ -3888,7 +3889,7 @@ export default function App() {
       window.history.replaceState({}, document.title, "/");
       setPathname("/");
     } else if (normalizedPathname === "/admin") {
-      setShowAdminLogin(true);
+      setShowAdminPanel(true);
       window.history.replaceState({}, document.title, "/");
       setPathname("/");
     } else if (normalizedPathname === "/buscar") {
@@ -4962,12 +4963,17 @@ export default function App() {
       return;
     }
 
+    const product = productsById.get(normalizeEntityId(item.id));
+    const availableStock = getStockForVariant(product, item.color, item.size);
+    const nextQuantity = item.quantity + delta;
+    if (delta > 0 && nextQuantity > availableStock) {
+      showToastMessage("Has alcanzado el stock disponible para esta prenda y talla.", "warning");
+      return;
+    }
+
     setCart((previous) => previous
       .map((entry) => {
         if (entry.key !== key) return entry;
-        const product = productsById.get(normalizeEntityId(entry.id));
-        const availableStock = getStockForVariant(product, entry.color, entry.size);
-        const nextQuantity = entry.quantity + delta;
         if (nextQuantity > availableStock) return entry;
         return { ...entry, quantity: nextQuantity };
       }));

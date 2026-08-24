@@ -1,6 +1,7 @@
 export {
   normalizeEntityId,
   normalizeOptionLabel,
+  normalizeSearchText,
   sanitizeLine,
   sanitizeParagraph,
   normalizeEmail,

@@ -75,3 +75,12 @@ export function splitFilterTagsText(value = "") {
     return match || key;
   });
 }
+
+export function normalizeSearchText(value = "") {
+  return String(value || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim();
+}
+

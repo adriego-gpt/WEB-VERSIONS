@@ -51,9 +51,10 @@ export function ProductEditorPanel({
   onReset,
 }) {
   const [activeSection, setActiveSection] = useState("datos");
-  const [expandedColorId, setExpandedColorId] = useState(form?.colorsData?.[0]?.uid || "");
+  const colorsData = form?.colorsData;
+  const [expandedColorId, setExpandedColorId] = useState(colorsData?.[0]?.uid || "");
   const formTags = useMemo(() => splitFilterTagsText(form?.filterTagsText), [form?.filterTagsText]);
-  const colors = useMemo(() => (Array.isArray(form?.colorsData) ? form.colorsData : []), [form?.colorsData]);
+  const colors = useMemo(() => (Array.isArray(colorsData) ? colorsData : []), [colorsData]);
   const activeColorId = colors.some((color) => color.uid === expandedColorId)
     ? expandedColorId
     : (colors[0]?.uid || "");
