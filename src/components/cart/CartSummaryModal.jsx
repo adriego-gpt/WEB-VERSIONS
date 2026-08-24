@@ -111,6 +111,7 @@ export function CartSummaryModal({
   const [paymentProofName, setPaymentProofName] = useState("");
   const [paymentProofBusy, setPaymentProofBusy] = useState(false);
   const [paymentProofError, setPaymentProofError] = useState("");
+  const [proofAttention, setProofAttention] = useState(false);
   const [accountCopyFeedback, setAccountCopyFeedback] = useState("");
   const [selectedBankAccountId, setSelectedBankAccountId] = useState("");
   const [lightboxImage, setLightboxImage] = useState(null);
@@ -118,6 +119,7 @@ export function CartSummaryModal({
   const selectedBankLogoImage = normalizeImageSource(selectedBankAccount?.bankLogoImage || "");
   const bankQrImage = normalizeImageSource(selectedBankAccount?.bankQrImage || "");
   const checkoutSummaryRef = useRef(null);
+  const proofSectionRef = useRef(null);
   const accountCopyTimerRef = useRef(null);
 
   useEffect(() => {
@@ -254,7 +256,9 @@ export function CartSummaryModal({
         return;
       }
       if (!paymentProof) {
-        setCheckoutFormError("Por favor sube la foto o captura del comprobante bancario para confirmar tu pedido.");
+        setCheckoutFormError("Por favor sube la foto o captura de tu comprobante bancario para confirmar el pedido.");
+        setProofAttention(true);
+        proofSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
         return;
       }
     }
@@ -301,6 +305,8 @@ export function CartSummaryModal({
       const nextPaymentProof = await fileToDataUrl(file);
       setPaymentProof(nextPaymentProof);
       setPaymentProofName(sanitizeLine(file.name || "Comprobante").slice(0, 80));
+      setProofAttention(false);
+      setCheckoutFormError("");
     } catch (error) {
       setPaymentProofError(error instanceof Error ? error.message : "No pudimos cargar el comprobante.");
     } finally {
@@ -312,6 +318,7 @@ export function CartSummaryModal({
     setPaymentProof("");
     setPaymentProofName("");
     setPaymentProofError("");
+    setProofAttention(false);
   };
 
   const handleSaveCheckoutAddress = async () => {
@@ -767,7 +774,10 @@ export function CartSummaryModal({
                           </button>
                         ) : null}
                       </div>
-                      <div className={`checkout-payment-proof ${paymentProof ? "has-file" : ""}`}>
+                      <div
+                        ref={proofSectionRef}
+                        className={`checkout-payment-proof ${paymentProof ? "has-file" : ""} ${proofAttention && !paymentProof ? "is-required-attention" : ""}`}
+                      >
                         <div className="checkout-payment-proof-heading">
                           <span className="checkout-payment-proof-icon" aria-hidden="true">
                             {paymentProof ? <FileCheck2 size={18} /> : <Upload size={18} />}
@@ -780,6 +790,12 @@ export function CartSummaryModal({
                             <p>Sube la foto o captura de tu transferencia (JPG, PNG o WEBP de hasta {FILE_SECURITY.maxImageSizeMb} MB). La adjuntaremos a tu pedido para validarlo.</p>
                           </div>
                         </div>
+                        {proofAttention && !paymentProof && (
+                          <div className="checkout-proof-missing-alert" role="alert">
+                            <AlertCircle size={15} aria-hidden="true" />
+                            <span>Debes adjuntar la captura del pago antes de confirmar</span>
+                          </div>
+                        )}
                         {paymentProof ? (
                           <div className="checkout-payment-proof-file">
                             <button
