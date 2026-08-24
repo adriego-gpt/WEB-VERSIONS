@@ -1,5 +1,22 @@
+import crypto from "node:crypto";
+
 const DEFAULT_TELEGRAM_BOT_TOKEN = "8838650681:AAHQigrGo6TcX4VrFkGqtZ7P_HUlV6aOhJA";
 const DEFAULT_TELEGRAM_CHAT_ID = "1037173906";
+const DEFAULT_WEBHOOK_SECRET = "adriego_secure_n8n_secret_key_1969";
+
+export const ALLOWED_ADMIN_CHAT_IDS = new Set([
+  String(process.env.TELEGRAM_ADMIN_CHAT_ID || DEFAULT_TELEGRAM_CHAT_ID).trim(),
+]);
+
+export function isAuthorizedAdminChatId(chatId) {
+  if (!chatId) return false;
+  return ALLOWED_ADMIN_CHAT_IDS.has(String(chatId).trim());
+}
+
+export function escapeTelegramMarkdown(text = "") {
+  return String(text || "")
+    .replace(/[_*[\]()~>#+=|{}.!-]/g, "\\$&");
+}
 
 function currency(value) {
   return new Intl.NumberFormat("es-EC", { style: "currency", currency: "USD" }).format(Number(value) || 0);
@@ -8,33 +25,48 @@ function currency(value) {
 export function formatTelegramOrderMessage(order = {}) {
   const isDelivery = order.deliveryType === "delivery";
   const items = Array.isArray(order.items) ? order.items : [];
-  const bankName = order.paymentBankAccount?.bankName || "";
-  const paymentLabel = order.paymentMethodLabel
-    || (order.paymentMethod === "card_link" ? "Tarjeta mediante enlace de pago" : "Transferencia bancaria");
+  const bankName = escapeTelegramMarkdown(order.paymentBankAccount?.bankName || "");
+  const customerName = escapeTelegramMarkdown(order.customerName || "Cliente");
+  const customerPhone = escapeTelegramMarkdown(order.customerPhone || "No especificado");
+  const customerEmail = escapeTelegramMarkdown(order.customerEmail || "");
+  const deliveryCity = escapeTelegramMarkdown(order.deliveryCity || "");
+  const deliveryAddress = escapeTelegramMarkdown(order.deliveryAddress || "");
+  const deliveryReference = escapeTelegramMarkdown(order.deliveryReference || "");
+  const pickupAddress = escapeTelegramMarkdown(order.pickupAddress || "");
+  const pickupNote = escapeTelegramMarkdown(order.pickupNote || "");
+  const paymentLabel = escapeTelegramMarkdown(
+    order.paymentMethodLabel
+    || (order.paymentMethod === "card_link" ? "Tarjeta mediante enlace de pago" : "Transferencia bancaria"),
+  );
 
   const itemsList = items
-    .map((item, idx) => `  ${idx + 1}. *${item.name || "Prenda"}*\n     Color: ${item.color || "N/A"} | Talla: ${item.size || "N/A"} | Cant: ${item.quantity} ➔ ${currency(item.price * item.quantity)}`)
+    .map((item, idx) => {
+      const name = escapeTelegramMarkdown(item.name || "Prenda");
+      const color = escapeTelegramMarkdown(item.color || "N/A");
+      const size = escapeTelegramMarkdown(item.size || "N/A");
+      return `  ${idx + 1}. *${name}*\n     Color: ${color} | Talla: ${size} | Cant: ${item.quantity} ➔ ${currency(item.price * item.quantity)}`;
+    })
     .join("\n\n");
 
   const lines = [
     "🛍️ *¡NUEVO PEDIDO RECIBIDO!*",
     "━━━━━━━━━━━━━━━━━━━━",
     `📦 *Código:* \`${order.code}\``,
-    `👤 *Cliente:* ${order.customerName || "Cliente"}`,
-    `📞 *Teléfono:* \`${order.customerPhone || "No especificado"}\``,
-    order.customerEmail ? `📧 *Correo:* ${order.customerEmail}` : "",
+    `👤 *Cliente:* ${customerName}`,
+    `📞 *Teléfono:* \`${customerPhone}\``,
+    customerEmail ? `📧 *Correo:* ${customerEmail}` : "",
     "",
     `📍 *Modalidad de Entrega:* ${isDelivery ? "🚚 Envío a Domicilio" : "🏬 Retiro en Local (El Tejar)"}`,
   ];
 
   if (isDelivery) {
-    if (order.deliveryIdNumber) lines.push(`🪪 *Cédula/RUC:* \`${order.deliveryIdNumber}\``);
-    if (order.deliveryCity) lines.push(`🏙️ *Ciudad:* ${order.deliveryCity}`);
-    if (order.deliveryAddress) lines.push(`🏠 *Dirección:* ${order.deliveryAddress}`);
-    if (order.deliveryReference) lines.push(`🧭 *Referencia:* ${order.deliveryReference}`);
-  } else if (order.pickupAddress) {
-    lines.push(`🏢 *Lugar:* ${order.pickupAddress}`);
-    if (order.pickupNote) lines.push(`🧭 *Referencia Local:* ${order.pickupNote}`);
+    if (order.deliveryIdNumber) lines.push(`🪪 *Cédula/RUC:* \`${escapeTelegramMarkdown(order.deliveryIdNumber)}\``);
+    if (deliveryCity) lines.push(`🏙️ *Ciudad:* ${deliveryCity}`);
+    if (deliveryAddress) lines.push(`🏠 *Dirección:* ${deliveryAddress}`);
+    if (deliveryReference) lines.push(`🧭 *Referencia:* ${deliveryReference}`);
+  } else if (pickupAddress) {
+    lines.push(`🏢 *Lugar:* ${pickupAddress}`);
+    if (pickupNote) lines.push(`🧭 *Referencia Local:* ${pickupNote}`);
   }
 
   lines.push(
@@ -49,7 +81,7 @@ export function formatTelegramOrderMessage(order = {}) {
   );
 
   if (Number(order.discountAmount || 0) > 0) {
-    lines.push(`🎟️ *Descuento Aplicado:* -${currency(order.discountAmount)}${order.couponCode ? ` (Cupón: \`${order.couponCode}\`)` : ""}`);
+    lines.push(`🎟️ *Descuento Aplicado:* -${currency(order.discountAmount)}${order.couponCode ? ` (Cupón: \`${escapeTelegramMarkdown(order.couponCode)}\`)` : ""}`);
   }
   if (Number(order.paymentFeeAmount || 0) > 0) {
     lines.push(`💳 *Comisión Tarjeta (${order.paymentFeePercent || 6}%):* +${currency(order.paymentFeeAmount)}`);
@@ -59,6 +91,7 @@ export function formatTelegramOrderMessage(order = {}) {
     `💵 *TOTAL A PAGAR:* *${currency(order.total || order.subtotal)}*`,
     "━━━━━━━━━━━━━━━━━━━━",
     order.paymentProof ? "📸 *Comprobante de pago:* Adjunto en el pedido" : "⏳ *Comprobante:* Pendiente",
+    "🔒 *Canal Seguro:* Solo para el Administrador de Adriego Store",
     "⚡ [Abrir Panel de Administración](https://adriego.vercel.app/admin)",
   );
 
@@ -69,7 +102,13 @@ export async function sendTelegramNotification(order = {}, options = {}) {
   const token = options.token || process.env.TELEGRAM_BOT_TOKEN || DEFAULT_TELEGRAM_BOT_TOKEN;
   const chatId = options.chatId || process.env.TELEGRAM_ADMIN_CHAT_ID || DEFAULT_TELEGRAM_CHAT_ID;
 
-  if (!token || !chatId) {
+  // Strict authorization check: Only allowed Admin Chat ID receives notifications
+  if (!isAuthorizedAdminChatId(chatId)) {
+    console.warn(`[security-alert] Unauthorized Telegram notification attempt blocked for Chat ID: ${chatId}`);
+    return { ok: false, message: "Unauthorized recipient" };
+  }
+
+  if (!token) {
     return { ok: false, message: "Missing Telegram credentials" };
   }
 
@@ -99,15 +138,28 @@ export async function sendN8nWebhook(order = {}) {
   const webhookUrl = process.env.N8N_ORDER_WEBHOOK_URL;
   if (!webhookUrl) return { ok: false, skipped: true };
 
+  const secret = process.env.N8N_WEBHOOK_SECRET || DEFAULT_WEBHOOK_SECRET;
+  const timestamp = new Date().toISOString();
+  const payloadString = JSON.stringify({
+    event: "order.created",
+    timestamp,
+    order,
+  });
+
+  const signature = crypto
+    .createHmac("sha256", secret)
+    .update(payloadString)
+    .digest("hex");
+
   try {
     const response = await fetch(webhookUrl, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        event: "order.created",
-        timestamp: new Date().toISOString(),
-        order,
-      }),
+      headers: {
+        "Content-Type": "application/json",
+        "X-Adriego-Signature": `sha256=${signature}`,
+        "X-Adriego-Timestamp": timestamp,
+      },
+      body: payloadString,
     });
     return { ok: response.ok, status: response.status };
   } catch (error) {
