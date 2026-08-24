@@ -16,6 +16,15 @@ function currency(value) {
   return new Intl.NumberFormat("es-EC", { style: "currency", currency: "USD" }).format(Number(value) || 0);
 }
 
+const ADMIN_KEYBOARD_MARKUP = {
+  keyboard: [
+    [{ text: "📊 Ventas de Hoy" }, { text: "📦 Pedidos Pendientes" }],
+    [{ text: "⚠️ Stock Bajo" }, { text: "⚡ Abrir Panel Web" }],
+  ],
+  resize_keyboard: true,
+  is_persistent: true,
+};
+
 async function answerCallbackQuery(token, callbackQueryId, text = "") {
   try {
     await fetch("https://api.telegram.org/bot" + token + "/answerCallbackQuery", {
@@ -39,6 +48,7 @@ async function sendTelegramMessage(token, chatId, text, options = {}) {
       text,
       parse_mode: "Markdown",
       disable_web_page_preview: true,
+      reply_markup: ADMIN_KEYBOARD_MARKUP,
       ...options,
     };
     await fetch("https://api.telegram.org/bot" + token + "/sendMessage", {
@@ -300,10 +310,10 @@ export default async function handler(req, res) {
   const lowerText = text.toLowerCase();
 
   // Command Handlers for Admin
-  if (lowerText === "/start" || lowerText === "hola" || lowerText === "/menu") {
-    const welcome = "👑 *Panel Administrativo · Adriego Store*\n\n¡Hola " + senderName + "! Tu sesión está autenticada y protegida con máxima seguridad.\n\n⚡ *Comandos disponibles:*\n• `/ventas` - Ver resumen de ventas y pedidos de hoy\n• `/pendientes` - Ver pedidos por preparar o despachar\n• `/stock_bajo` - Ver prendas con poco inventario\n• `/buscar <código>` - Consultar un pedido específico\n\n🔗 [Abrir Panel Web](https://adriego.vercel.app/admin)";
+  if (lowerText === "/start" || lowerText === "hola" || lowerText === "/menu" || lowerText === "menu") {
+    const welcome = "👑 *Panel Administrativo · Adriego Store*\n\n¡Hola " + senderName + "! Tu sesión está protegida y lista.\n\n⚡ *Toca cualquiera de los botones de abajo:*";
     await sendTelegramMessage(token, senderChatId, welcome);
-  } else if (lowerText === "/ventas" || lowerText === "ventas") {
+  } else if (lowerText.includes("ventas") || lowerText === "/ventas") {
     const store = await readStore();
     const orders = Array.isArray(store?.orders) ? store.orders : [];
     const todayIso = new Date().toISOString().slice(0, 10);
@@ -313,7 +323,7 @@ export default async function handler(req, res) {
 
     const report = "📊 *Resumen de Ventas · Adriego Store*\n━━━━━━━━━━━━━━━━━━━━\n📅 *Ventas de Hoy (" + todayIso + "):*\n• *Pedidos:* " + todayOrders.length + "\n• *Total Facturado:* *" + currency(todayTotal) + "*\n\n📈 *Ventas Totales Registradas:*\n• *Total Pedidos:* " + orders.length + "\n• *Monto Acumulado:* *" + currency(allTotal) + "*\n━━━━━━━━━━━━━━━━━━━━\n⚡ [Ver Historial en Panel Admin](https://adriego.vercel.app/admin)";
     await sendTelegramMessage(token, senderChatId, report);
-  } else if (lowerText === "/pendientes" || lowerText === "pendientes") {
+  } else if (lowerText.includes("pendientes") || lowerText === "/pendientes") {
     const store = await readStore();
     const orders = Array.isArray(store?.orders) ? store.orders : [];
     const pendingOrders = orders.filter((o) => {
@@ -334,7 +344,7 @@ export default async function handler(req, res) {
       const msg = "📦 *Pedidos Pendientes (" + pendingOrders.length + "):*\n━━━━━━━━━━━━━━━━━━━━\n" + list + "\n━━━━━━━━━━━━━━━━━━━━\n⚡ [Gestionar en Panel Admin](https://adriego.vercel.app/admin)";
       await sendTelegramMessage(token, senderChatId, msg);
     }
-  } else if (lowerText === "/stock_bajo" || lowerText === "stock" || lowerText === "/stock") {
+  } else if (lowerText.includes("stock") || lowerText === "/stock_bajo") {
     const store = await readStore();
     const products = Array.isArray(store?.products) ? store.products : [];
     const lowList = [];
@@ -364,6 +374,9 @@ export default async function handler(req, res) {
       const msg = "⚠️ *Prendas con Stock Bajo / Agotadas (" + lowList.length + "):*\n━━━━━━━━━━━━━━━━━━━━\n" + list + "\n━━━━━━━━━━━━━━━━━━━━\n⚡ [Reponer en Panel Admin](https://adriego.vercel.app/admin)";
       await sendTelegramMessage(token, senderChatId, msg);
     }
+  } else if (lowerText.includes("panel") || lowerText === "/panel") {
+    const panelMsg = "⚡ *Acceso al Panel Web Administrativo*\n━━━━━━━━━━━━━━━━━━━━\n🔗 [Toca aquí para abrir el Panel Admin](https://adriego.vercel.app/admin)";
+    await sendTelegramMessage(token, senderChatId, panelMsg);
   } else if (lowerText.startsWith("/buscar") || lowerText.startsWith("buscar")) {
     const query = text.replace(/^[/]?buscar\s*/i, "").trim().toUpperCase();
     const store = await readStore();
@@ -383,7 +396,7 @@ export default async function handler(req, res) {
     await sendTelegramMessage(
       token,
       senderChatId,
-      "🤖 *Comando no reconocido.*\n\nEscribe `/ventas`, `/pendientes`, `/stock_bajo` o `/start` para ver las opciones disponibles.",
+      "🤖 *Comando no reconocido.*\n\nToca cualquiera de los botones de abajo para consultar:",
     );
   }
 
