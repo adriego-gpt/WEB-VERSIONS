@@ -188,19 +188,22 @@ import {
   buildAuthValidation,
 } from "./utils";
 
+import { lazyWithRetry } from "./utils/lazyWithRetry.js";
+import { ErrorBoundary } from "./components/ui/ErrorBoundary.jsx";
+
 const { startTransition } = React;
-const UserAuthSheet = lazy(() => import("./components/modals/AuthModals").then((module) => ({ default: module.UserAuthModal })));
-const ProfileModal = lazy(() => import("./components/modals/AuthModals").then((module) => ({ default: module.ProfileModal })));
-const ExternalAdminPanelModal = lazy(() => import("./components/admin/AdminPanelModal").then((module) => ({ default: module.AdminPanelModal })));
+const UserAuthSheet = lazyWithRetry(() => import("./components/modals/AuthModals").then((module) => ({ default: module.UserAuthModal })));
+const ProfileModal = lazyWithRetry(() => import("./components/modals/AuthModals").then((module) => ({ default: module.ProfileModal })));
+const ExternalAdminPanelModal = lazyWithRetry(() => import("./components/admin/AdminPanelModal").then((module) => ({ default: module.AdminPanelModal })));
 const ADMIN_PANEL_HISTORY_KEY = "__adriegoAdminPanel";
 const MAX_RECENTLY_VIEWED_PRODUCTS = 4;
-const ProductModal = lazy(() => import("./components/products/ProductModal"));
-const CartSummaryModal = lazy(() => import("./components/cart/CartSummaryModal"));
-const FavoritesModal = lazy(() => import("./components/cart/FavoritesModal"));
-const ProfileQuickMenu = lazy(() => import("./components/cart/ProfileQuickMenu"));
-const OrdersModal = lazy(() => import("./components/orders/OrdersModal"));
-const OrderReferenceModal = lazy(() => import("./components/orders/OrderReferenceModal"));
-const LegalModal = lazy(() => import("./components/modals/LegalModal").then((module) => ({ default: module.LegalModal })));
+const ProductModal = lazyWithRetry(() => import("./components/products/ProductModal"));
+const CartSummaryModal = lazyWithRetry(() => import("./components/cart/CartSummaryModal"));
+const FavoritesModal = lazyWithRetry(() => import("./components/cart/FavoritesModal"));
+const ProfileQuickMenu = lazyWithRetry(() => import("./components/cart/ProfileQuickMenu"));
+const OrdersModal = lazyWithRetry(() => import("./components/orders/OrdersModal"));
+const OrderReferenceModal = lazyWithRetry(() => import("./components/orders/OrderReferenceModal"));
+const LegalModal = lazyWithRetry(() => import("./components/modals/LegalModal").then((module) => ({ default: module.LegalModal })));
 
 const CATALOG_SORT_OPTIONS = new Set(["destacados", "nuevos", "mejor-valorados", "precio-asc", "precio-desc"]);
 
@@ -3871,14 +3874,44 @@ export default function App() {
   }, [isResetRoute]);
 
   useEffect(() => {
-    if (!productRouteSlug || !catalogReady) return;
-    const product = products.find((entry) => (
-      entry?.isPublic !== false
-      && slugify(entry?.slug || entry?.name || entry?.id || "") === productRouteSlug
-    ));
-    if (!product) return;
-    setSelectedProduct((previous) => (String(previous?.id) === String(product.id) ? previous : product));
-  }, [catalogReady, productRouteSlug, products]);
+    if (typeof window === "undefined") return;
+    if (normalizedPathname === "/carrito") {
+      setShowCartSummary(true);
+      window.history.replaceState({}, document.title, "/");
+      setPathname("/");
+    } else if (normalizedPathname === "/favoritos") {
+      setShowFavoritesPanel(true);
+      window.history.replaceState({}, document.title, "/");
+      setPathname("/");
+    } else if (normalizedPathname === "/pedidos") {
+      setShowOrdersModal(true);
+      window.history.replaceState({}, document.title, "/");
+      setPathname("/");
+    } else if (normalizedPathname === "/admin") {
+      setShowAdminLogin(true);
+      window.history.replaceState({}, document.title, "/");
+      setPathname("/");
+    } else if (normalizedPathname === "/buscar") {
+      openCatalogSearch();
+      window.history.replaceState({}, document.title, "/");
+      setPathname("/");
+    }
+  }, [normalizedPathname]);
+
+  useEffect(() => {
+    if (!catalogReady) return;
+    if (productRouteSlug) {
+      const product = products.find((entry) => (
+        entry?.isPublic !== false
+        && slugify(entry?.slug || entry?.name || entry?.id || "") === productRouteSlug
+      ));
+      if (product) {
+        setSelectedProduct((previous) => (String(previous?.id) === String(product.id) ? previous : product));
+      }
+    } else if (selectedProduct && !editingCartItemKey) {
+      setSelectedProduct(null);
+    }
+  }, [catalogReady, editingCartItemKey, productRouteSlug, products, selectedProduct]);
 
   useEffect(() => {
     void ensureCsrfToken();
@@ -5705,6 +5738,18 @@ export default function App() {
 
   const openCatalogSearch = () => {
     if (typeof document === "undefined") return;
+    if (selectedProduct) {
+      setSelectedProduct(null);
+    }
+    if (productRouteSlug && typeof window !== "undefined") {
+      window.history.replaceState({}, document.title, "/");
+      setPathname("/");
+    }
+    setShowCartSummary(false);
+    setShowFavoritesPanel(false);
+    setShowMobileNav(false);
+    setShowOrdersModal(false);
+    setShowUserAuth(false);
     setActiveMobileSection("catalogo");
     const focusSearchField = () => {
       catalogSearchInputRef.current?.focus();
@@ -7313,8 +7358,9 @@ export default function App() {
   const ToastIcon = toastTone === "error"
     ? CircleX
     : (toastTone === "warning" ? Clock3 : (toastTone === "info" ? MessageCircle : BadgeCheck));
-  const routeNotFound = normalizedPathname !== "/"
-    && !isResetRoute
+  const knownDirectRoutes = new Set(["/", "/cuenta/restablecer", "/carrito", "/favoritos", "/pedidos", "/admin", "/buscar"]);
+  const routeNotFound = catalogReady
+    && !knownDirectRoutes.has(normalizedPathname)
     && (!productRouteSlug || (catalogReady && !routedProduct));
 
   const returnHomeFromRoute = () => {
@@ -7336,30 +7382,32 @@ export default function App() {
     <MotionConfig reducedMotion="user">
       <>
       {selectedProduct && (
-        <Suspense fallback={null}>
-      <ProductModal
-        product={selectedProduct}
-        selection={selectedProduct ? selections[selectedProduct.id] : null}
-        recommendations={recommendedProducts.slice(0, 4)}
-        onOpenRecommendation={openRecommendedProduct}
-        onClose={() => closeProductModal({ returnToCart: true })}
-        onChange={handleSelection}
-        cartEditMode={Boolean(editingCartItemKey)}
-        onAddToCart={(product, animationMeta) => {
-          const wasEditingCartItem = Boolean(editingCartItemKey);
-          addToCart(product, animationMeta);
-          if (wasEditingCartItem) {
-            closeProductModal();
-            setShowCartSummary(true);
-          }
-        }}
-        isAdmin={isAdmin}
-        onEditProduct={(product) => {
-          startEditingProduct(product);
-          setSelectedProduct(null);
-        }}
-      />
-        </Suspense>
+        <ErrorBoundary onReset={() => closeProductModal({ returnToCart: true })}>
+          <Suspense fallback={null}>
+            <ProductModal
+              product={selectedProduct}
+              selection={selectedProduct ? selections[selectedProduct.id] : null}
+              recommendations={recommendedProducts.slice(0, 4)}
+              onOpenRecommendation={openRecommendedProduct}
+              onClose={() => closeProductModal({ returnToCart: true })}
+              onChange={handleSelection}
+              cartEditMode={Boolean(editingCartItemKey)}
+              onAddToCart={(product, animationMeta) => {
+                const wasEditingCartItem = Boolean(editingCartItemKey);
+                addToCart(product, animationMeta);
+                if (wasEditingCartItem) {
+                  closeProductModal();
+                  setShowCartSummary(true);
+                }
+              }}
+              isAdmin={isAdmin}
+              onEditProduct={(product) => {
+                startEditingProduct(product);
+                setSelectedProduct(null);
+              }}
+            />
+          </Suspense>
+        </ErrorBoundary>
       )}
 
       <AnimatePresence>
@@ -7393,299 +7441,284 @@ export default function App() {
       </div>
 
       {showCartSummary && (
-        <Suspense fallback={null}>
-      <CartSummaryModal
-        key={`cart-summary-${showCartSummary ? "open" : "closed"}-${currentUser?.id || "guest"}`}
-        open={showCartSummary}
-        onClose={() => setShowCartSummary(false)}
-        cart={cart}
-        subtotal={subtotal}
-        discountAmount={discountAmount}
-        finalTotal={finalTotal}
-        totalItems={totalItems}
-        onUpdateQuantity={updateQuantity}
-        onRemoveItem={removeItem}
-        onOpenItem={openProductFromCartItem}
-        onEditItem={startEditingCartItem}
-        products={products}
-        onCheckout={handleCheckoutViaWhatsApp}
-        onSaveCheckoutAddress={saveCheckoutAddressToBook}
-        checkoutDisabled={checkoutDisabled}
-        requiresLogin={!currentUser?.email}
-        couponDraftCode={couponInputCode}
-        onCouponDraftChange={setCouponInputCode}
-        onApplyCoupon={applyCouponFromInput}
-        onRemoveCoupon={clearActiveCoupon}
-        couponState={activeCouponCode ? appliedCouponState : null}
-        hasActiveCoupon={Boolean(activeCouponCode)}
-        couponBusy={couponBusy}
-        checkoutBusy={checkoutBusy}
-        onBrowseCatalog={browseCatalogFromModal}
-        currentUser={currentUser}
-        savedAddresses={currentUserAddressBook}
-        contactSettings={publicContactSettings}
-      />
-        </Suspense>
+        <ErrorBoundary onReset={() => setShowCartSummary(false)}>
+          <Suspense fallback={null}>
+            <CartSummaryModal
+              key={`cart-summary-${showCartSummary ? "open" : "closed"}-${currentUser?.id || "guest"}`}
+              open={showCartSummary}
+              onClose={() => setShowCartSummary(false)}
+              cart={cart}
+              subtotal={subtotal}
+              discountAmount={discountAmount}
+              finalTotal={finalTotal}
+              totalItems={totalItems}
+              onUpdateQuantity={updateQuantity}
+              onRemoveItem={removeItem}
+              onOpenItem={openProductFromCartItem}
+              onEditItem={startEditingCartItem}
+              products={products}
+              onCheckout={handleCheckoutViaWhatsApp}
+              onSaveCheckoutAddress={saveCheckoutAddressToBook}
+              checkoutDisabled={checkoutDisabled}
+              requiresLogin={!currentUser?.email}
+              couponDraftCode={couponInputCode}
+              onCouponDraftChange={setCouponInputCode}
+              onApplyCoupon={applyCouponFromInput}
+              onRemoveCoupon={clearActiveCoupon}
+              couponState={activeCouponCode ? appliedCouponState : null}
+              hasActiveCoupon={Boolean(activeCouponCode)}
+              couponBusy={couponBusy}
+              checkoutBusy={checkoutBusy}
+              onBrowseCatalog={browseCatalogFromModal}
+              currentUser={currentUser}
+              savedAddresses={currentUserAddressBook}
+              contactSettings={publicContactSettings}
+            />
+          </Suspense>
+        </ErrorBoundary>
       )}
 
       {showFavoritesPanel && (
-        <Suspense fallback={null}>
-      <FavoritesModal
-        open={showFavoritesPanel}
-        onClose={() => setShowFavoritesPanel(false)}
-        favorites={favorites}
-        products={products}
-        onOpenProduct={(product) => openProductDetail(product)}
-        onToggleFavorite={toggleFavorite}
-        onBrowseCatalog={browseCatalogFromModal}
-      />
-        </Suspense>
+        <ErrorBoundary onReset={() => setShowFavoritesPanel(false)}>
+          <Suspense fallback={null}>
+            <FavoritesModal
+              open={showFavoritesPanel}
+              onClose={() => setShowFavoritesPanel(false)}
+              favorites={favorites}
+              products={products}
+              onOpenProduct={(product) => openProductDetail(product)}
+              onToggleFavorite={toggleFavorite}
+              onBrowseCatalog={browseCatalogFromModal}
+            />
+          </Suspense>
+        </ErrorBoundary>
       )}
 
       {showProfileQuickMenu && (
-        <Suspense fallback={null}>
-      <ProfileQuickMenu
-        open={showProfileQuickMenu}
-        position={profileQuickMenuPosition}
-        onClose={() => setShowProfileQuickMenu(false)}
-        onOpenSection={openProfileActionFromMenu}
-        onOpenOrders={openOrdersFromProfileMenu}
-        onLogout={() => { void handleUserLogout(); }}
-      />
-        </Suspense>
+        <ErrorBoundary onReset={() => setShowProfileQuickMenu(false)}>
+          <Suspense fallback={null}>
+            <ProfileQuickMenu
+              open={showProfileQuickMenu}
+              position={profileQuickMenuPosition}
+              onClose={() => setShowProfileQuickMenu(false)}
+              onOpenSection={openProfileActionFromMenu}
+              onOpenOrders={openOrdersFromProfileMenu}
+              onLogout={() => { void handleUserLogout(); }}
+            />
+          </Suspense>
+        </ErrorBoundary>
       )}
 
-      <Suspense fallback={null}>
-        {showUserAuth && (
-        <UserAuthSheet
-          open={showUserAuth}
-          mode={authMode}
-          form={authForm}
-          validation={authValidation}
-          canSubmit={authValidation.canSubmit}
-          error={authError}
-          busy={authBusy}
-          passwordVisible={authPasswordVisible}
-          resetEmailLocked={authResetEmailLocked}
-          onClose={closeUserAuth}
-          onModeChange={(nextMode) => {
-            setAuthMode(nextMode);
-            setAuthResetEmailLocked(false);
-            setAuthError("");
-            setAuthBusy(false);
-            setAuthPasswordVisible(false);
-            setAuthForm((previous) => ({ ...previous, password: "", confirmPassword: "", resetToken: nextMode === "reset" ? previous.resetToken : "" }));
-          }}
-          onFieldChange={handleAuthFieldChange}
-          onTogglePasswordVisibility={() => setAuthPasswordVisible((previous) => !previous)}
-          onSubmit={handleUserAuthSubmit}
-        />
-        )}
+      <ErrorBoundary onReset={() => { setShowUserAuth(false); setShowProfileModal(false); }}>
+        <Suspense fallback={null}>
+          {showUserAuth && (
+            <UserAuthSheet
+              open={showUserAuth}
+              mode={authMode}
+              form={authForm}
+              validation={authValidation}
+              canSubmit={authValidation.canSubmit}
+              error={authError}
+              busy={authBusy}
+              passwordVisible={authPasswordVisible}
+              resetEmailLocked={authResetEmailLocked}
+              onClose={closeUserAuth}
+              onModeChange={(nextMode) => {
+                setAuthMode(nextMode);
+                setAuthResetEmailLocked(false);
+                setAuthError("");
+                setAuthBusy(false);
+                setAuthPasswordVisible(false);
+                setAuthForm((previous) => ({ ...previous, password: "", confirmPassword: "", resetToken: nextMode === "reset" ? previous.resetToken : "" }));
+              }}
+              onFieldChange={handleAuthFieldChange}
+              onTogglePasswordVisibility={() => setAuthPasswordVisible((previous) => !previous)}
+              onSubmit={handleUserAuthSubmit}
+            />
+          )}
 
-        {showProfileModal && (
-        <ProfileModal
-          open={showProfileModal}
-          onClose={() => {
-            setShowProfileModal(false);
-            setProfileFeedback(null);
-            setPasswordFeedback(null);
-            resetAddressBookEditor();
-          }}
-          activeSection={profileModalSection}
-          profileDraft={profileDraft}
-          onFieldChange={handleProfileFieldChange}
-          onSaveProfile={handleSaveProfile}
-          addressBookDraft={addressBookDraft}
-          addressBookEditingId={addressBookEditingId}
-          onAddressBookDraftChange={handleAddressBookDraftFieldChange}
-          onSaveAddressBookEntry={handleSaveAddressBookEntry}
-          onEditAddressBookEntry={handleEditAddressBookEntry}
-          onDeleteAddressBookEntry={handleDeleteAddressBookEntry}
-          onSelectAddressBookEntry={handleSelectAddressBookEntry}
-          profileFeedback={profileFeedback}
-          passwordDraft={passwordDraft}
-          onPasswordFieldChange={handlePasswordFieldChange}
-          onChangePassword={handleChangePassword}
-          passwordFeedback={passwordFeedback}
-        />
-        )}
-      </Suspense>
+          {showProfileModal && (
+            <ProfileModal
+              open={showProfileModal}
+              onClose={() => {
+                setShowProfileModal(false);
+                setProfileFeedback(null);
+                setPasswordFeedback(null);
+                resetAddressBookEditor();
+              }}
+              activeSection={profileModalSection}
+              profileDraft={profileDraft}
+              onFieldChange={handleProfileFieldChange}
+              onSaveProfile={handleSaveProfile}
+              addressBookDraft={addressBookDraft}
+              addressBookEditingId={addressBookEditingId}
+              onAddressBookDraftChange={handleAddressBookDraftFieldChange}
+              onSaveAddressBookEntry={handleSaveAddressBookEntry}
+              onEditAddressBookEntry={handleEditAddressBookEntry}
+              onDeleteAddressBookEntry={handleDeleteAddressBookEntry}
+              onSelectAddressBookEntry={handleSelectAddressBookEntry}
+              profileFeedback={profileFeedback}
+              passwordDraft={passwordDraft}
+              onPasswordFieldChange={handlePasswordFieldChange}
+              onChangePassword={handleChangePassword}
+              passwordFeedback={passwordFeedback}
+            />
+          )}
+        </Suspense>
+      </ErrorBoundary>
 
       {showOrdersModal && (
-        <Suspense fallback={null}>
-      <OrdersModal
-        open={showOrdersModal}
-        onClose={() => setShowOrdersModal(false)}
-        orders={customerOrders}
-        onSearchChange={setUserOrderSearch}
-        searchValue={userOrderSearch}
-        onOpenReference={setReferenceOrder}
-        onCopyOrderCode={handleCopyOrderCode}
-        onOpenOrderWhatsApp={handleOpenOrderWhatsApp}
-      />
-        </Suspense>
-      )}
-
-      {legalModalState.open && (
-        <Suspense fallback={null}>
-          <LegalModal
-            open={legalModalState.open}
-            tab={legalModalState.tab}
-            onTabChange={(tab) => setLegalModalState((prev) => ({ ...prev, tab }))}
-            onClose={() => setLegalModalState((prev) => ({ ...prev, open: false }))}
-            brandName={storeSettings.brandName || "Adriego Store"}
-          />
-        </Suspense>
+        <ErrorBoundary onReset={() => setShowOrdersModal(false)}>
+          <Suspense fallback={null}>
+            <OrdersModal
+              open={showOrdersModal}
+              onClose={() => setShowOrdersModal(false)}
+              orders={customerOrders}
+              onSearchChange={setUserOrderSearch}
+              searchValue={userOrderSearch}
+              onOpenReference={setReferenceOrder}
+              onCopyOrderCode={handleCopyOrderCode}
+              onOpenOrderWhatsApp={handleOpenOrderWhatsApp}
+            />
+          </Suspense>
+        </ErrorBoundary>
+{legalModalState.open && (
+        <ErrorBoundary onReset={() => setLegalModalState((prev) => ({ ...prev, open: false }))}>
+          <Suspense fallback={null}>
+            <LegalModal
+              open={legalModalState.open}
+              tab={legalModalState.tab}
+              onTabChange={(tab) => setLegalModalState((prev) => ({ ...prev, tab }))}
+              onClose={() => setLegalModalState((prev) => ({ ...prev, open: false }))}
+              brandName={storeSettings.brandName || "Adriego Store"}
+            />
+          </Suspense>
+        </ErrorBoundary>
       )}
 
       {showAdminPanel && isAdmin && (
-        <Suspense fallback={null}>
-      <ExternalAdminPanelModal
-        open={showAdminPanel && isAdmin}
-        onClose={requestCloseAdminPanel}
-        adminTab={adminTab === "inventario" ? "resumen" : adminTab}
-        setAdminTab={requestAdminTabChange}
-        editorMessage={editorMessage}
-        editorError={editorError}
-        adminProductCount={adminProductCount}
-        adminColorVariantCount={adminColorVariantCount}
-        adminPhotoCount={adminPhotoCount}
-        adminOutOfStockCount={adminOutOfStockCount}
-        adminLowStockCount={adminLowStockCount}
-        adminPendingOrders={adminPendingOrders}
-        adminRegisteredUsers={adminRegisteredUsers}
-        adminOrdersToday={adminOrdersToday}
-        adminRevenueTotal={adminRevenueTotal}
-        adminAverageOrderTotal={adminAverageOrderTotal}
-        adminCatalogQuery={adminCatalogQuery}
-        setAdminCatalogQuery={setAdminCatalogQuery}
-        onSaveOffers={saveOffersFromAdmin}
-        offersSaving={offerSaveBusy}
-        adminCatalogProducts={adminCatalogProducts}
-        products={products}
-        startEditingProduct={startEditingProduct}
-        duplicateProduct={duplicateProductForAdmin}
-        handleDeleteProduct={handleDeleteProduct}
-        bulkDeleteCatalogProducts={bulkDeleteCatalogProducts}
-        bulkSetCatalogFeatured={bulkSetCatalogFeatured}
-        toggleProductPublicVisibility={toggleProductPublicVisibility}
-        productForm={productForm}
-        productDraftRecovery={productDraftRecovery}
-        productDraftSavedAt={productDraftSavedAt}
-        productDraftSaveError={productDraftSaveError}
-        hasUnsavedProductChanges={hasUnsavedProductChanges}
-        restoreProductDraft={restoreProductDraft}
-        discardProductDraft={discardProductDraft}
-        resetEditor={resetEditor}
-        handleProductFieldChange={handleProductFieldChange}
-        setContactDraft={setContactDraft}
-        contactDraft={contactDraft}
-        saveContactConfiguration={saveContactConfiguration}
-        contactSaveBusy={contactSaveBusy}
-        bankQrUploadBusy={bankQrUploadBusy}
-        contactSyncFeedback={contactSyncFeedback}
-        addColorVariant={addColorVariant}
-        handleColorFieldChange={handleColorFieldChange}
-        removeColorVariant={removeColorVariant}
-        handleColorFilesUpload={handleColorFilesUpload}
-        addImageField={addImageField}
-        handleColorImageChange={handleColorImageChange}
-        removeImageField={removeImageField}
-        saveProduct={saveProduct}
-        setStoreDraft={setStoreDraft}
-        storeDraft={storeDraft}
-        handleStoreSlideImageUpload={handleStoreSlideImageUpload}
-        handleBankImageUpload={handleBankImageUpload}
-        saveStoreConfiguration={saveStoreConfiguration}
-        addHeroSlide={addHeroSlide}
-        removeHeroSlide={removeHeroSlide}
-        previewColor={previewColor}
-        setPreviewColor={setPreviewColor}
-        previewImageIndex={previewImageIndex}
-        setPreviewImageIndex={setPreviewImageIndex}
-        filteredOrderHistory={filteredOrderHistory}
-        orderSearch={orderSearch}
-        setOrderSearch={setOrderSearch}
-        orderStatusFilter={orderStatusFilter}
-        setOrderStatusFilter={setOrderStatusFilter}
-        orderDeliveryFilter={orderDeliveryFilter}
-        setOrderDeliveryFilter={setOrderDeliveryFilter}
-        orderDateFilter={orderDateFilter}
-        setOrderDateFilter={setOrderDateFilter}
-        orderCustomerFilter={orderCustomerFilter}
-        setOrderCustomerFilter={setOrderCustomerFilter}
-        clearAdminOrderFilters={clearAdminOrderFilters}
-        adminOrderCustomerOptions={adminOrderCustomerOptions}
-        updateOrderStatus={updateOrderStatus}
-        updateOrderGuide={updateOrderGuide}
-        updateOrderPaymentProof={updateOrderPaymentProof}
-        clearOrderPaymentProof={clearOrderPaymentProof}
-        handleOrderProofUpload={handleOrderProofUpload}
-        deleteOrder={deleteOrder}
-        liveOrdersEnabled={liveOrdersEnabled}
-        setLiveOrdersEnabled={setLiveOrdersEnabled}
-        liveOrdersRefreshing={liveOrdersRefreshing}
-        liveOrdersUpdatedAt={liveOrdersUpdatedAt}
-        orderLiveAlert={orderLiveAlert}
-        clearOrderLiveAlert={() => setOrderLiveAlert(null)}
-        refreshOrdersFromServer={refreshOrdersFromServer}
-        onOpenOrderReference={setReferenceOrder}
-        onCopyOrderCode={handleCopyOrderCode}
-        productTypeOptions={productTypeOptions}
-        customProductTypeInput={customProductTypeInput}
-        setCustomProductTypeInput={setCustomProductTypeInput}
-        addManagedProductType={addManagedProductType}
-        filterTagOptions={filterTagOptions}
-        customFilterTagInput={customFilterTagInput}
-        setCustomFilterTagInput={setCustomFilterTagInput}
-        addManagedFilterTag={addManagedFilterTag}
-        appendFilterTagToForm={appendFilterTagToForm}
-        removeFilterTagFromForm={removeFilterTagFromForm}
-        addSizeRow={addSizeRow}
-        handleSizeRowChange={handleSizeRowChange}
-        removeSizeRow={removeSizeRow}
-        productTypeRecords={productTypeRecords}
-        filterTagRecords={filterTagRecords}
-        handleManagedProductTypeDraftChange={handleManagedProductTypeDraftChange}
-        saveManagedProductType={saveManagedProductType}
-        deleteManagedProductType={deleteManagedProductType}
-        toggleManagedProductTypeActive={toggleManagedProductTypeActive}
-        handleManagedFilterTagDraftChange={handleManagedFilterTagDraftChange}
-        saveManagedFilterTag={saveManagedFilterTag}
-        deleteManagedFilterTag={deleteManagedFilterTag}
-        toggleManagedFilterTagActive={toggleManagedFilterTagActive}
-        coupons={coupons}
-        couponDraft={couponDraft}
-        couponEditorMessage={couponEditorMessage}
-        couponEditorError={couponEditorError}
-        handleCouponDraftFieldChange={handleCouponDraftFieldChange}
-        toggleCouponDraftProduct={toggleCouponDraftProduct}
-        toggleCouponDraftProductType={toggleCouponDraftProductType}
-        saveCoupon={saveCoupon}
-        resetCouponDraft={resetCouponDraft}
-        startEditingCoupon={startEditingCoupon}
-        toggleCouponActive={toggleCouponActive}
-        deleteCoupon={deleteCoupon}
-        securityMetrics={securityMetrics}
-        securityMetricsBusy={securityMetricsBusy}
-        securityMetricsResetBusy={securityMetricsResetBusy}
-        securityMetricsError={securityMetricsError}
-        securityMetricsUpdatedAt={securityMetricsUpdatedAt}
-        refreshSecurityMetrics={refreshSecurityMetrics}
-        resetSecurityMetricsData={resetSecurityMetricsData}
-        adminUsers={adminUsers}
-        adminUsersBusy={adminUsersBusy}
-        adminUsersError={adminUsersError}
-        adminUsersSearch={adminUsersSearch}
-        setAdminUsersSearch={setAdminUsersSearch}
-        refreshAdminUsers={refreshAdminUsers}
-        saveAdminUser={saveAdminUser}
-        removeAdminUser={removeAdminUser}
-        sendAdminUserResetLink={sendAdminUserResetLink}
-        copyAdminUserResetLink={copyAdminUserResetLink}
-        requestDestructiveConfirmation={requestDestructiveConfirmation}
-      />
-        </Suspense>
+        <ErrorBoundary onReset={requestCloseAdminPanel}>
+          <Suspense fallback={null}>
+            <ExternalAdminPanelModal
+              open={showAdminPanel && isAdmin}
+              onClose={requestCloseAdminPanel}
+              adminTab={adminTab === "inventario" ? "resumen" : adminTab}
+              setAdminTab={requestAdminTabChange}
+              editorMessage={editorMessage}
+              editorError={editorError}
+              adminProductCount={adminProductCount}
+              adminColorVariantCount={adminColorVariantCount}
+              adminPhotoCount={adminPhotoCount}
+              adminOutOfStockCount={adminOutOfStockCount}
+              adminLowStockCount={adminLowStockCount}
+              adminPendingOrders={adminPendingOrders}
+              adminRegisteredUsers={adminRegisteredUsers}
+              adminOrdersToday={adminOrdersToday}
+              adminRevenueTotal={adminRevenueTotal}
+              adminAverageOrderTotal={adminAverageOrderTotal}
+              adminCatalogQuery={adminCatalogQuery}
+              setAdminCatalogQuery={setAdminCatalogQuery}
+              onSaveOffers={saveOffersFromAdmin}
+              offersSaving={offerSaveBusy}
+              adminCatalogProducts={adminCatalogProducts}
+              products={products}
+              startEditingProduct={startEditingProduct}
+              duplicateProduct={duplicateProductForAdmin}
+              handleDeleteProduct={handleDeleteProduct}
+              bulkDeleteCatalogProducts={bulkDeleteCatalogProducts}
+              bulkSetCatalogFeatured={bulkSetCatalogFeatured}
+              toggleProductPublicVisibility={toggleProductPublicVisibility}
+              productForm={productForm}
+              productDraftRecovery={productDraftRecovery}
+              productDraftSavedAt={productDraftSavedAt}
+              productDraftSaveError={productDraftSaveError}
+              hasUnsavedProductChanges={hasUnsavedProductChanges}
+              restoreProductDraft={restoreProductDraft}
+              saveCurrentProductDraft={saveCurrentProductDraft}
+              discardCurrentProductChanges={discardCurrentProductChanges}
+              handleProductFieldChange={handleProductFieldChange}
+              handleToggleColor={handleToggleColor}
+              handleColorVariantChange={handleColorVariantChange}
+              addColorVariant={addColorVariant}
+              removeColorVariant={removeColorVariant}
+              handleBulkStockChange={handleBulkStockChange}
+              applyStockToAllVariants={applyStockToAllVariants}
+              handleProductImageUpload={handleProductImageUpload}
+              handleRemoveProductImage={handleRemoveProductImage}
+              handleSetPrimaryImage={handleSetPrimaryImage}
+              saveProduct={saveProduct}
+              startCreatingProduct={startCreatingProduct}
+              storeSettings={storeSettings}
+              storeDraft={storeDraft}
+              setStoreDraft={setStoreDraft}
+              onSaveStore={saveStoreInfo}
+              savingStore={savingStore}
+              contactSettings={contactSettings}
+              contactDraft={contactDraft}
+              setContactDraft={setContactDraft}
+              onSaveContact={saveContactInfo}
+              savingContact={savingContact}
+              orders={adminOrders}
+              onUpdateOrderStatus={handleUpdateOrderStatus}
+              onDeleteOrder={handleDeleteOrder}
+              onOpenOrderReference={setReferenceOrder}
+              onCopyOrderCode={handleCopyOrderCode}
+              productTypeOptions={productTypeOptions}
+              customProductTypeInput={customProductTypeInput}
+              setCustomProductTypeInput={setCustomProductTypeInput}
+              addManagedProductType={addManagedProductType}
+              filterTagOptions={filterTagOptions}
+              customFilterTagInput={customFilterTagInput}
+              setCustomFilterTagInput={setCustomFilterTagInput}
+              addManagedFilterTag={addManagedFilterTag}
+              appendFilterTagToForm={appendFilterTagToForm}
+              removeFilterTagFromForm={removeFilterTagFromForm}
+              addSizeRow={addSizeRow}
+              handleSizeRowChange={handleSizeRowChange}
+              removeSizeRow={removeSizeRow}
+              productTypeRecords={productTypeRecords}
+              filterTagRecords={filterTagRecords}
+              handleManagedProductTypeDraftChange={handleManagedProductTypeDraftChange}
+              saveManagedProductType={saveManagedProductType}
+              deleteManagedProductType={deleteManagedProductType}
+              toggleManagedProductTypeActive={toggleManagedProductTypeActive}
+              handleManagedFilterTagDraftChange={handleManagedFilterTagDraftChange}
+              saveManagedFilterTag={saveManagedFilterTag}
+              deleteManagedFilterTag={deleteManagedFilterTag}
+              toggleManagedFilterTagActive={toggleManagedFilterTagActive}
+              coupons={coupons}
+              couponDraft={couponDraft}
+              couponEditorMessage={couponEditorMessage}
+              couponEditorError={couponEditorError}
+              handleCouponDraftFieldChange={handleCouponDraftFieldChange}
+              toggleCouponDraftProduct={toggleCouponDraftProduct}
+              toggleCouponDraftProductType={toggleCouponDraftProductType}
+              saveCoupon={saveCoupon}
+              resetCouponDraft={resetCouponDraft}
+              startEditingCoupon={startEditingCoupon}
+              toggleCouponActive={toggleCouponActive}
+              deleteCoupon={deleteCoupon}
+              securityMetrics={securityMetrics}
+              securityMetricsBusy={securityMetricsBusy}
+              securityMetricsResetBusy={securityMetricsResetBusy}
+              securityMetricsError={securityMetricsError}
+              securityMetricsUpdatedAt={securityMetricsUpdatedAt}
+              refreshSecurityMetrics={refreshSecurityMetrics}
+              resetSecurityMetricsData={resetSecurityMetricsData}
+              adminUsers={adminUsers}
+              adminUsersBusy={adminUsersBusy}
+              adminUsersError={adminUsersError}
+              adminUsersSearch={adminUsersSearch}
+              setAdminUsersSearch={setAdminUsersSearch}
+              refreshAdminUsers={refreshAdminUsers}
+              saveAdminUser={saveAdminUser}
+              removeAdminUser={removeAdminUser}
+              sendAdminUserResetLink={sendAdminUserResetLink}
+              copyAdminUserResetLink={copyAdminUserResetLink}
+              requestDestructiveConfirmation={requestDestructiveConfirmation}
+            />
+          </Suspense>
+        </ErrorBoundary>
       )}
 
       <ConfirmModal
@@ -7704,13 +7737,15 @@ export default function App() {
       </ConfirmModal>
 
       {referenceOrder && (
-        <Suspense fallback={null}>
-      <OrderReferenceModal
-        open={Boolean(referenceOrder)}
-        order={referenceOrder}
-        onClose={() => setReferenceOrder(null)}
-      />
-        </Suspense>
+        <ErrorBoundary onReset={() => setReferenceOrder(null)}>
+          <Suspense fallback={null}>
+            <OrderReferenceModal
+              open={Boolean(referenceOrder)}
+              order={referenceOrder}
+              onClose={() => setReferenceOrder(null)}
+            />
+          </Suspense>
+        </ErrorBoundary>
       )}
 
       {isAdmin && !showAdminPanel && orderLiveAlert && (
