@@ -1773,21 +1773,57 @@ img {
   box-shadow: var(--shadow-sm);
 }
 
-.sheet-body::-webkit-scrollbar,
-.admin-modal-content::-webkit-scrollbar,
-.modal-right::-webkit-scrollbar,
-.admin-sidebar-nav::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+/* ==========================================================================
+   PREMIUM DESKTOP SCROLLBAR (Minimalista, Discreto y Elegante)
+   ========================================================================== */
+html,
+body,
+.login-card,
+.sheet-body,
+.admin-modal-content,
+.modal-right,
+.admin-sidebar-nav,
+.orders-sheet-body,
+.cart-fullscreen-list,
+.legal-sheet-content,
+.profile-sheet-body,
+.favorites-sheet-body,
+.product-modal-option-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(18, 21, 27, 0.22) transparent;
 }
 
-.sheet-body::-webkit-scrollbar-thumb,
-.admin-modal-content::-webkit-scrollbar-thumb,
-.modal-right::-webkit-scrollbar-thumb,
-.admin-sidebar-nav::-webkit-scrollbar-thumb,
-.filter-chip-scroll::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.12);
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(18, 21, 27, 0.2);
   border-radius: var(--radius-full);
+  transition: background var(--time-fast) var(--ease-standard);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(18, 21, 27, 0.45);
+}
+
+::-webkit-scrollbar-thumb:active {
+  background: rgba(18, 21, 27, 0.65);
+}
+
+::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 .cart-item {
@@ -6065,6 +6101,27 @@ img {
   -webkit-overflow-scrolling: touch;
   display: grid;
   gap: 14px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(18, 21, 27, 0.22) transparent;
+}
+
+.login-card::-webkit-scrollbar {
+  width: 5px;
+}
+
+.login-card::-webkit-scrollbar-track {
+  background: transparent;
+  margin: 16px 0;
+}
+
+.login-card::-webkit-scrollbar-thumb {
+  background: rgba(18, 21, 27, 0.2);
+  border-radius: var(--radius-full);
+  transition: background var(--time-fast) var(--ease-standard);
+}
+
+.login-card::-webkit-scrollbar-thumb:hover {
+  background: rgba(18, 21, 27, 0.45);
 }
 
 .auth-backdrop {
