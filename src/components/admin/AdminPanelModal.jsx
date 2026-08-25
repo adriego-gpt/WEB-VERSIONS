@@ -1,7 +1,7 @@
 import { isValidEmail } from '../../utils';
 import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import { motion as Motion, AnimatePresence } from 'framer-motion';
-import { RotateCcw, Plus, Package, UserRound, Navigation, ShieldCheck, Search, PencilLine, Mail, Copy, Trash2, CheckCircle2, Star, Link, Eye, AlertCircle, AlertTriangle, Play, RefreshCw, Upload, Image as ImageIcon, MapPin, SearchX, Clock, CreditCard, Tag, Tags, X, Image, ChevronDown, SlidersHorizontal, ZoomIn, MessageCircle, ExternalLink } from 'lucide-react';
+import { RotateCcw, Plus, Package, UserRound, Navigation, ShieldCheck, Search, PencilLine, Mail, Copy, Trash2, CheckCircle2, Star, Link, Eye, AlertCircle, AlertTriangle, Play, RefreshCw, Upload, Image as ImageIcon, MapPin, SearchX, Clock, CreditCard, Tag, Tags, X, Image, ChevronDown, SlidersHorizontal, ZoomIn, MessageCircle, ExternalLink, Truck } from 'lucide-react';
 import { ShowcaseProductCard } from "../catalog/ShowcaseProductCard";
 import { CatalogProductCard } from "../catalog/CatalogProductCard";
 import { ProductDraftPreview } from '../products/ProductDraftPreview';
@@ -267,7 +267,7 @@ export function AdminPanelModal({
       tabs: [
         { id: "cuentas", label: "Cuentas bancarias" },
         { id: "contacto", label: "Contacto" },
-        { id: "portada", label: "Portada" },
+        { id: "portada", label: "Portada y Envíos" },
       ],
     },
     {
@@ -1212,30 +1212,146 @@ export function AdminPanelModal({
               <div className="admin-tab-panel">
                 <div className="card admin-general-card">
                   <AdminSectionHeader
-                    title="Portada"
-                    description="Edita la identidad de la tienda y abre cada slide solo cuando necesites modificarlo."
+                    title="Portada y Tarifas de Envío"
+                    description="Configura los costos de envío a domicilio, la meta de envío gratis y la identidad visual de la tienda."
                   />
 
-                  <div className="settings-grid" style={{ marginTop: 18 }}>
-                    <input className="input" placeholder="Etiqueta de marca" value={storeDraft.brandLabel} onChange={(event) => setStoreDraft((previous) => ({ ...previous, brandLabel: event.target.value }))} />
-                    <input className="input" placeholder="Nombre de marca" value={storeDraft.brandName} onChange={(event) => setStoreDraft((previous) => ({ ...previous, brandName: event.target.value }))} />
+                  {/* SECCIÓN 1: TARIFAS DE ENVÍO */}
+                  <div className="admin-full" style={{ marginTop: 18 }}>
+                    <div className="card" style={{ padding: "18px", background: "rgba(15, 23, 42, 0.02)", border: "1px solid rgba(15, 23, 42, 0.08)", borderRadius: "14px" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "6px" }}>
+                        <div style={{ width: 32, height: 32, borderRadius: 8, background: "rgba(15, 23, 42, 0.06)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                          <Truck size={18} />
+                        </div>
+                        <div>
+                          <h5 style={{ margin: 0, fontSize: 18, fontWeight: 700 }}>Tarifas de Envío y Despacho</h5>
+                          <p className="helper-text" style={{ margin: 0 }}>Define los costos de entrega y el monto para desbloquear Envío Gratis en el carrito.</p>
+                        </div>
+                      </div>
+
+                      <div className="settings-grid" style={{ marginTop: 16 }}>
+                        <label className="admin-live-toggle admin-full" style={{ margin: "2px 0 8px" }}>
+                          <input
+                            className="checkbox"
+                            type="checkbox"
+                            checked={storeDraft?.shippingSettings?.shippingEnabled !== false}
+                            onChange={(event) => setStoreDraft((previous) => ({
+                              ...previous,
+                              shippingSettings: {
+                                ...(previous?.shippingSettings || {}),
+                                shippingEnabled: event.target.checked,
+                              },
+                            }))}
+                          />
+                          <span style={{ fontWeight: 600 }}>Cobrar costo de envío a domicilio</span>
+                        </label>
+
+                        <label className="entity-field">
+                          <span style={{ fontWeight: 500 }}>Ciudad local de despacho</span>
+                          <input
+                            className="input"
+                            placeholder="Ej. Quito"
+                            value={storeDraft?.shippingSettings?.localShippingCity || "Quito"}
+                            onChange={(event) => setStoreDraft((previous) => ({
+                              ...previous,
+                              shippingSettings: {
+                                ...(previous?.shippingSettings || {}),
+                                localShippingCity: event.target.value,
+                              },
+                            }))}
+                          />
+                          <small className="helper-text">Los pedidos a esta ciudad pagarán tarifa local.</small>
+                        </label>
+
+                        <label className="entity-field">
+                          <span style={{ fontWeight: 500 }}>Costo de envío local ($)</span>
+                          <input
+                            className="input"
+                            type="number"
+                            step="0.25"
+                            min="0"
+                            placeholder="3.50"
+                            value={storeDraft?.shippingSettings?.localShippingCost ?? 3.5}
+                            onChange={(event) => setStoreDraft((previous) => ({
+                              ...previous,
+                              shippingSettings: {
+                                ...(previous?.shippingSettings || {}),
+                                localShippingCost: event.target.value,
+                              },
+                            }))}
+                          />
+                          <small className="helper-text">Tarifa dentro de tu misma ciudad.</small>
+                        </label>
+
+                        <label className="entity-field">
+                          <span style={{ fontWeight: 500 }}>Costo de envío nacional ($)</span>
+                          <input
+                            className="input"
+                            type="number"
+                            step="0.25"
+                            min="0"
+                            placeholder="5.50"
+                            value={storeDraft?.shippingSettings?.nationalShippingCost ?? 5.5}
+                            onChange={(event) => setStoreDraft((previous) => ({
+                              ...previous,
+                              shippingSettings: {
+                                ...(previous?.shippingSettings || {}),
+                                nationalShippingCost: event.target.value,
+                              },
+                            }))}
+                          />
+                          <small className="helper-text">Tarifa para el resto de ciudades del país.</small>
+                        </label>
+
+                        <label className="entity-field">
+                          <span style={{ fontWeight: 500 }}>Monto mínimo para Envío Gratis ($)</span>
+                          <input
+                            className="input"
+                            type="number"
+                            step="1"
+                            min="0"
+                            placeholder="50.00"
+                            value={storeDraft?.shippingSettings?.freeShippingThreshold ?? 50}
+                            onChange={(event) => setStoreDraft((previous) => ({
+                              ...previous,
+                              shippingSettings: {
+                                ...(previous?.shippingSettings || {}),
+                                freeShippingThreshold: event.target.value,
+                              },
+                            }))}
+                          />
+                          <small className="helper-text">Si el subtotal supera este valor, el envío es $0.</small>
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* SECCIÓN 2: IDENTIDAD Y TEXTOS */}
+                  <div className="admin-full" style={{ marginTop: 22 }}>
+                    <h5 style={{ margin: "0 0 12px", fontSize: 18, fontWeight: 700 }}>Identidad y Textos de la Tienda</h5>
+                  </div>
+
+                  <div className="settings-grid">
+                    <input className="input" placeholder="Etiqueta de marca" value={storeDraft.brandLabel || ""} onChange={(event) => setStoreDraft((previous) => ({ ...previous, brandLabel: event.target.value }))} />
+                    <input className="input" placeholder="Nombre de marca" value={storeDraft.brandName || ""} onChange={(event) => setStoreDraft((previous) => ({ ...previous, brandName: event.target.value }))} />
                     <input className="input" placeholder="Badge principal del hero" value={storeDraft.heroBadgeText || ""} onChange={(event) => setStoreDraft((previous) => ({ ...previous, heroBadgeText: event.target.value }))} />
                     <input className="input" placeholder="Texto CTA principal" value={storeDraft.primaryCtaText || ""} onChange={(event) => setStoreDraft((previous) => ({ ...previous, primaryCtaText: event.target.value }))} />
                     <input className="input" placeholder="Etiqueta de ofertas (ej: Ofertas)" value={storeDraft.offerLabel || ""} onChange={(event) => setStoreDraft((previous) => ({ ...previous, offerLabel: event.target.value }))} />
                     <input className="input" placeholder="Porcentaje de oferta (ej: 30)" value={storeDraft.offerPercentage ?? ""} onChange={(event) => setStoreDraft((previous) => ({ ...previous, offerPercentage: event.target.value }))} />
                     <div className="admin-full"><input className="input" placeholder="Texto breve de oferta (opcional)" value={storeDraft.offerText || ""} onChange={(event) => setStoreDraft((previous) => ({ ...previous, offerText: event.target.value }))} /></div>
-                    <input className="input" placeholder="Titulo del bloque de WhatsApp" value={storeDraft.saleTitle} onChange={(event) => setStoreDraft((previous) => ({ ...previous, saleTitle: event.target.value }))} />
-                    <div className="admin-full"><textarea className="textarea" placeholder="Descripcion del bloque de WhatsApp" value={storeDraft.saleDescription} onChange={(event) => setStoreDraft((previous) => ({ ...previous, saleDescription: event.target.value }))} /></div>
-                    <input className="input" placeholder="Titulo del footer" value={storeDraft.footerTitle} onChange={(event) => setStoreDraft((previous) => ({ ...previous, footerTitle: event.target.value }))} />
-                    <input className="input" placeholder="Texto del footer" value={storeDraft.footerText} onChange={(event) => setStoreDraft((previous) => ({ ...previous, footerText: event.target.value }))} />
+                    <input className="input" placeholder="Titulo del bloque de WhatsApp" value={storeDraft.saleTitle || ""} onChange={(event) => setStoreDraft((previous) => ({ ...previous, saleTitle: event.target.value }))} />
+                    <div className="admin-full"><textarea className="textarea" placeholder="Descripcion del bloque de WhatsApp" value={storeDraft.saleDescription || ""} onChange={(event) => setStoreDraft((previous) => ({ ...previous, saleDescription: event.target.value }))} /></div>
+                    <input className="input" placeholder="Titulo del footer" value={storeDraft.footerTitle || ""} onChange={(event) => setStoreDraft((previous) => ({ ...previous, footerTitle: event.target.value }))} />
+                    <input className="input" placeholder="Texto del footer" value={storeDraft.footerText || ""} onChange={(event) => setStoreDraft((previous) => ({ ...previous, footerText: event.target.value }))} />
 
+                    {/* SECCIÓN 3: SLIDES DEL HERO */}
                     <div className="admin-full">
-                      <div className="slides-toolbar" style={{ margin: "6px 0 12px" }}>
-                        <h5 style={{ margin: 0, fontSize: 20 }}>Slides del hero</h5>
+                      <div className="slides-toolbar" style={{ margin: "14px 0 12px" }}>
+                        <h5 style={{ margin: 0, fontSize: 18, fontWeight: 700 }}>Slides del hero</h5>
                         <button className="btn btn-soft" onClick={addHeroSlide}><Plus size={16} />Agregar slide</button>
                       </div>
                       <div className="admin-slide-list">
-                        {storeDraft.heroSlides.map((slide, index) => (
+                        {(storeDraft.heroSlides || []).map((slide, index) => (
                           <details key={slide.id} className="admin-slide-editor">
                             <summary>
                               {slide.image
@@ -1250,123 +1366,27 @@ export function AdminPanelModal({
                             <div className="admin-slide-editor-body">
                               <div className="admin-actions">
                                 <label className="btn btn-outline admin-file-btn"><Upload size={16} />Subir imagen<input type="file" accept="image/*" onChange={(event) => handleStoreSlideImageUpload(slide.id, event)} /></label>
-                                <button className="btn btn-outline" onClick={() => removeHeroSlide(slide.id)} disabled={storeDraft.heroSlides.length === 1}><Trash2 size={16} />Quitar</button>
+                                <button className="btn btn-outline" onClick={() => removeHeroSlide(slide.id)} disabled={(storeDraft.heroSlides || []).length === 1}><Trash2 size={16} />Quitar</button>
                               </div>
-                              <input className="input" placeholder="Título del slide" value={slide.title || ""} onChange={(event) => setStoreDraft((previous) => ({ ...previous, heroSlides: previous.heroSlides.map((entry) => entry.id === slide.id ? { ...entry, title: event.target.value } : entry) }))} />
-                              <textarea className="textarea" placeholder="Subtítulo del slide" value={slide.subtitle || ""} onChange={(event) => setStoreDraft((previous) => ({ ...previous, heroSlides: previous.heroSlides.map((entry) => entry.id === slide.id ? { ...entry, subtitle: event.target.value } : entry) }))} />
-                              <select className="select" value={slide.linkedProductId || ""} onChange={(event) => setStoreDraft((previous) => ({ ...previous, heroSlides: previous.heroSlides.map((entry) => entry.id === slide.id ? { ...entry, linkedProductId: event.target.value } : entry) }))}>
+                              <input className="input" placeholder="Título del slide" value={slide.title || ""} onChange={(event) => setStoreDraft((previous) => ({ ...previous, heroSlides: (previous.heroSlides || []).map((entry) => entry.id === slide.id ? { ...entry, title: event.target.value } : entry) }))} />
+                              <textarea className="textarea" placeholder="Subtítulo del slide" value={slide.subtitle || ""} onChange={(event) => setStoreDraft((previous) => ({ ...previous, heroSlides: (previous.heroSlides || []).map((entry) => entry.id === slide.id ? { ...entry, subtitle: event.target.value } : entry) }))} />
+                              <select className="select" value={slide.linkedProductId || ""} onChange={(event) => setStoreDraft((previous) => ({ ...previous, heroSlides: (previous.heroSlides || []).map((entry) => entry.id === slide.id ? { ...entry, linkedProductId: event.target.value } : entry) }))}>
                                 <option value="">Sin producto relacionado</option>
                                 {products.map((product) => <option key={product.id} value={String(product.id)}>{product.name}</option>)}
                               </select>
-                              <input className="input" placeholder="URL externa opcional" value={slide.targetUrl || ""} onChange={(event) => setStoreDraft((previous) => ({ ...previous, heroSlides: previous.heroSlides.map((entry) => entry.id === slide.id ? { ...entry, targetUrl: event.target.value } : entry) }))} />
-                              <input className="input" placeholder="URL de imagen" value={slide.image} onChange={(event) => setStoreDraft((previous) => ({ ...previous, heroSlides: previous.heroSlides.map((entry) => entry.id === slide.id ? { ...entry, image: event.target.value } : entry) }))} />
+                              <input className="input" placeholder="URL externa opcional" value={slide.targetUrl || ""} onChange={(event) => setStoreDraft((previous) => ({ ...previous, heroSlides: (previous.heroSlides || []).map((entry) => entry.id === slide.id ? { ...entry, targetUrl: event.target.value } : entry) }))} />
+                              <input className="input" placeholder="URL de imagen" value={slide.image || ""} onChange={(event) => setStoreDraft((previous) => ({ ...previous, heroSlides: (previous.heroSlides || []).map((entry) => entry.id === slide.id ? { ...entry, image: event.target.value } : entry) }))} />
                             </div>
                           </details>
                         ))}
                       </div>
                     </div>
 
-                    <div className="admin-full" style={{ marginTop: 16 }}>
-                      <div className="card" style={{ padding: "16px", background: "rgba(0,0,0,0.02)", border: "1px solid rgba(0,0,0,0.06)", borderRadius: "12px" }}>
-                        <h5 style={{ margin: "0 0 4px", fontSize: 18, display: "flex", alignItems: "center", gap: "8px" }}>
-                          <Truck size={18} /> Tarifas de Envío y Despacho
-                        </h5>
-                        <p className="helper-text" style={{ margin: "0 0 14px" }}>Configura los costos de envío a domicilio y la meta para ofrecer Envío Gratis.</p>
-                        
-                        <div className="settings-grid">
-                          <label className="admin-live-toggle admin-full" style={{ margin: "4px 0 10px" }}>
-                            <input
-                              className="checkbox"
-                              type="checkbox"
-                              checked={storeDraft.shippingSettings?.shippingEnabled !== false}
-                              onChange={(event) => setStoreDraft((previous) => ({
-                                ...previous,
-                                shippingSettings: {
-                                  ...previous.shippingSettings,
-                                  shippingEnabled: event.target.checked,
-                                },
-                              }))}
-                            />
-                            <span>Cobrar costo de envío a domicilio</span>
-                          </label>
-
-                          <label className="entity-field">
-                            <span>Ciudad local de despacho</span>
-                            <input
-                              className="input"
-                              placeholder="Ej. Quito"
-                              value={storeDraft.shippingSettings?.localShippingCity || "Quito"}
-                              onChange={(event) => setStoreDraft((previous) => ({
-                                ...previous,
-                                shippingSettings: {
-                                  ...previous.shippingSettings,
-                                  localShippingCity: event.target.value,
-                                },
-                              }))}
-                            />
-                          </label>
-
-                          <label className="entity-field">
-                            <span>Costo de envío local ($)</span>
-                            <input
-                              className="input"
-                              type="number"
-                              step="0.25"
-                              min="0"
-                              placeholder="3.50"
-                              value={storeDraft.shippingSettings?.localShippingCost ?? 3.5}
-                              onChange={(event) => setStoreDraft((previous) => ({
-                                ...previous,
-                                shippingSettings: {
-                                  ...previous.shippingSettings,
-                                  localShippingCost: event.target.value,
-                                },
-                              }))}
-                            />
-                          </label>
-
-                          <label className="entity-field">
-                            <span>Costo de envío nacional ($)</span>
-                            <input
-                              className="input"
-                              type="number"
-                              step="0.25"
-                              min="0"
-                              placeholder="5.50"
-                              value={storeDraft.shippingSettings?.nationalShippingCost ?? 5.5}
-                              onChange={(event) => setStoreDraft((previous) => ({
-                                ...previous,
-                                shippingSettings: {
-                                  ...previous.shippingSettings,
-                                  nationalShippingCost: event.target.value,
-                                },
-                              }))}
-                            />
-                          </label>
-
-                          <label className="entity-field">
-                            <span>Monto mínimo para Envío Gratis ($)</span>
-                            <input
-                              className="input"
-                              type="number"
-                              step="1"
-                              min="0"
-                              placeholder="50.00"
-                              value={storeDraft.shippingSettings?.freeShippingThreshold ?? 50}
-                              onChange={(event) => setStoreDraft((previous) => ({
-                                ...previous,
-                                shippingSettings: {
-                                  ...previous.shippingSettings,
-                                  freeShippingThreshold: event.target.value,
-                                },
-                              }))}
-                            />
-                          </label>
-                        </div>
-                      </div>
+                    <div className="admin-full" style={{ marginTop: 12 }}>
+                      <button className="btn btn-primary" onClick={saveStoreConfiguration}>
+                        <ShieldCheck size={16} />Guardar ajustes, tarifas y portada
+                      </button>
                     </div>
-
-                    <div className="admin-full"><button className="btn btn-primary" onClick={saveStoreConfiguration}><ShieldCheck size={16} />Guardar ajustes y tarifas</button></div>
                   </div>
                 </div>
               </div>
