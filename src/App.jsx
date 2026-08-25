@@ -512,7 +512,7 @@ const initialProducts = [
     category: "Mujer",
     description: "Pantalón recto de talle alto con estructura impecable y caída fluida.",
     imagesByColor: {
-      Negro: ["https://images.unsplash.com/photo-1506629905607-d9c297d66f42?auto=format&fit=crop&w=1200&q=80"],
+      Negro: ["https://images.unsplash.com/photo-1594633312681-425c7b97ccd1?auto=format&fit=crop&w=1200&q=80"],
       Camel: ["https://images.unsplash.com/photo-1512436991641-6745cdb1723f?auto=format&fit=crop&w=1200&q=80"],
       Gris: ["https://images.unsplash.com/photo-1521572267360-ee0c2909d518?auto=format&fit=crop&w=1200&q=80"],
     },

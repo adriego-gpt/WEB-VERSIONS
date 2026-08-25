@@ -81,6 +81,11 @@ export function CatalogProductCard({
               exit={{ opacity: 0, scale: 0.99 }}
               transition={{ duration: ANIMATION.fast }}
               className="product-img"
+              onError={(event) => {
+                if (event.currentTarget.src !== FALLBACK_IMAGE) {
+                  event.currentTarget.src = FALLBACK_IMAGE;
+                }
+              }}
             />
           </AnimatePresence>
         </button>
