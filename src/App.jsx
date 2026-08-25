@@ -211,6 +211,7 @@ const ProfileQuickMenu = lazyWithRetry(() => import("./components/cart/ProfileQu
 const OrdersModal = lazyWithRetry(() => import("./components/orders/OrdersModal"));
 const OrderReferenceModal = lazyWithRetry(() => import("./components/orders/OrderReferenceModal"));
 const LegalModal = lazyWithRetry(() => import("./components/modals/LegalModal").then((module) => ({ default: module.LegalModal })));
+const OrderSuccessRedirectModal = lazyWithRetry(() => import("./components/modals/OrderSuccessRedirectModal").then((module) => ({ default: module.OrderSuccessRedirectModal || module.default })));
 
 const CATALOG_SORT_OPTIONS = new Set(["destacados", "nuevos", "mejor-valorados", "precio-asc", "precio-desc"]);
 
@@ -2175,6 +2176,7 @@ export default function App() {
   const [authPasswordVisible, setAuthPasswordVisible] = useState(false);
   const [authResetEmailLocked, setAuthResetEmailLocked] = useState(false);
   const [legalModalState, setLegalModalState] = useState({ open: false, tab: "exchanges" });
+  const [orderSuccessModal, setOrderSuccessModal] = useState({ open: false, order: null, whatsappUrl: "", preferredWindow: null });
   const [postAuthDestination, setPostAuthDestination] = useState(null);
   const [authForm, setAuthForm] = useState(() => ({ ...AUTH_FORM_DEFAULTS }));
   const [profileDraft, setProfileDraft] = useState({ name: "", lastName: "", idNumber: "", phone: "", email: "", shippingAddress: "", addressBook: [] });
@@ -2544,6 +2546,7 @@ export default function App() {
     || showUserAuth
     || showProfileModal
     || legalModalState.open
+    || orderSuccessModal.open
     || Boolean(selectedProduct);
   const heroAutoplayDelayMs = isMobileViewport ? 5600 : 4200;
   const showPreviousHeroSlide = useCallback(() => {
@@ -4423,6 +4426,7 @@ export default function App() {
     || showCartSummary
     || showFavoritesPanel
     || showOrdersModal
+    || orderSuccessModal.open
     || showUserAuth
     || showProfileModal
     || referenceOrder
@@ -6169,41 +6173,45 @@ export default function App() {
       const whatsappTarget = buildWhatsAppOrderUrl(response.order, response.whatsappUrl || "", {
         mobile: isMobileViewport,
       });
-      const launchResult = launchWhatsAppUrl(whatsappTarget.url, {
-        preferredWindow: pendingExternalWindow,
-        isMobile: isMobileViewport,
-        fallbackDelayMs: isMobileViewport ? 1450 : 1200,
-      });
-      const launched = Boolean(launchResult.launched);
-      if (!launched) {
-        closeExternalWindow(pendingExternalWindow);
-        showToastMessage("Recibimos tu pedido, pero no pudimos abrir WhatsApp. Ábrelo y envíanos el resumen desde Mis pedidos.", "warning");
-      } else {
-        whatsappLaunched = true;
-        trackAnalyticsEvent("whatsapp_opened", {
-          order_id: String(response.order.id || ""),
-          total: Number(response.order.total || response.order.subtotal || 0),
-          device_type: isMobileViewport ? "mobile" : "desktop",
-          is_reopen: false,
-        });
-      }
 
+      setShowCartSummary(false);
       clearActiveCoupon();
       clearCartState();
-      setShowOrdersModal(true);
+
+      setOrderSuccessModal({
+        open: true,
+        order: response.order,
+        whatsappUrl: whatsappTarget.url,
+        preferredWindow: pendingExternalWindow,
+      });
+
       triggerConfetti("checkout");
       showToastMessage({
         title: `Pedido ${response.order.code} recibido`,
-        message: `Gracias ${firstName}. Envíanos el resumen por WhatsApp para confirmarlo.`,
+        message: `Gracias ${firstName}. Te estamos redirigiendo a WhatsApp para confirmarlo.`,
       }, "success");
     } catch {
       closeExternalWindow(pendingExternalWindow);
       showToastMessage("No pudimos recibir tu pedido. Revisa tu conexión e inténtalo nuevamente.", "error");
     } finally {
-      if (!whatsappLaunched) {
-        closeExternalWindow(pendingExternalWindow);
-      }
       setCheckoutBusy(false);
+    }
+  };
+
+  const handleLaunchOrderSuccessWhatsApp = () => {
+    if (!orderSuccessModal.order || !orderSuccessModal.whatsappUrl) return;
+    const launchResult = launchWhatsAppUrl(orderSuccessModal.whatsappUrl, {
+      preferredWindow: orderSuccessModal.preferredWindow,
+      isMobile: isMobileViewport,
+      fallbackDelayMs: isMobileViewport ? 1450 : 1200,
+    });
+    if (launchResult.launched) {
+      trackAnalyticsEvent("whatsapp_opened", {
+        order_id: String(orderSuccessModal.order.id || ""),
+        total: Number(orderSuccessModal.order.total || orderSuccessModal.order.subtotal || 0),
+        device_type: isMobileViewport ? "mobile" : "desktop",
+        is_reopen: false,
+      });
     }
   };
 
@@ -7619,6 +7627,27 @@ export default function App() {
           )}
         </Suspense>
       </ErrorBoundary>
+
+      {orderSuccessModal.open && orderSuccessModal.order && (
+        <ErrorBoundary onReset={() => setOrderSuccessModal({ open: false, order: null, whatsappUrl: "", preferredWindow: null })}>
+          <Suspense fallback={null}>
+            <OrderSuccessRedirectModal
+              open={orderSuccessModal.open}
+              order={orderSuccessModal.order}
+              whatsappUrl={orderSuccessModal.whatsappUrl}
+              onClose={() => {
+                setOrderSuccessModal({ open: false, order: null, whatsappUrl: "", preferredWindow: null });
+                setShowOrdersModal(true);
+              }}
+              onOpenOrders={() => {
+                setOrderSuccessModal({ open: false, order: null, whatsappUrl: "", preferredWindow: null });
+                setShowOrdersModal(true);
+              }}
+              onLaunchWhatsApp={handleLaunchOrderSuccessWhatsApp}
+            />
+          </Suspense>
+        </ErrorBoundary>
+      )}
 
       {showOrdersModal && (
         <ErrorBoundary onReset={() => setShowOrdersModal(false)}>
