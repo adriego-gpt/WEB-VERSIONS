@@ -598,7 +598,7 @@ export default async function handler(req, res) {
           lastName,
           email,
           username,
-          idNumber: idNumber || entry.idNumber || "",
+          idNumber: body.idNumber != null ? idNumber : (entry.idNumber || ""),
           phone,
           shippingAddress,
           stateUpdatedAt: nowIso,

@@ -660,11 +660,11 @@ export function CartSummaryModal({
                                       </div>
                                       <p className="checkout-saved-address-text">{entry.address}</p>
                                       <div className="checkout-saved-address-details">
-                                        {entry.fullName && <span>Recibe: {entry.fullName} · </span>}
-                                        {entry.idNumber && <span>C.I: {entry.idNumber} · </span>}
+                                        {entry.fullName && <span>Recibe: {entry.fullName}</span>}
+                                        {entry.idNumber && <span>C.I: {entry.idNumber}</span>}
                                         {entry.city && <span>{entry.city}</span>}
-                                        {entry.phone && <span> · Tel: {entry.phone}</span>}
-                                        {entry.reference && <span> · Ref: {entry.reference}</span>}
+                                        {entry.phone && <span>Tel: {entry.phone}</span>}
+                                        {entry.reference && <span>Ref: {entry.reference}</span>}
                                       </div>
                                     </div>
                                   </button>

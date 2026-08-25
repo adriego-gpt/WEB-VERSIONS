@@ -974,7 +974,7 @@ export default async function handler(req, res) {
           name,
           lastName,
           email,
-          idNumber: idNumber || entry.idNumber || "",
+          idNumber: body.idNumber != null ? idNumber : (entry.idNumber || ""),
           phone,
           shippingAddress,
           addressBook: hasAddressBookPayload ? addressBook : normalizeAddressBook(entry.addressBook),

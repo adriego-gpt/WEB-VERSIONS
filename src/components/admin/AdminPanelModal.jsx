@@ -1506,7 +1506,7 @@ export function AdminPanelModal({
                                     </div>
                                     {deliveryPhone && (
                                       <a
-                                        href={`https://wa.me/593${deliveryPhone.replace(/\D/g, "").replace(/^0+/, "")}`}
+                                        href={`https://wa.me/593${String(deliveryPhone || "").replace(/\D/g, "").replace(/^0+/, "")}`}
                                         target="_blank"
                                         rel="noopener noreferrer"
                                         className="btn btn-outline admin-delivery-wa-btn"
