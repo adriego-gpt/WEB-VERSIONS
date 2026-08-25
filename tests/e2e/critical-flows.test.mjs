@@ -419,7 +419,7 @@ test("critical user/admin flows and security monitoring", async () => {
   assert.equal(invalidDeliveryCheckoutResponse.statusCode, 400);
   assert.match(
     String(invalidDeliveryCheckoutResponse.jsonBody?.message || ""),
-    /Completa nombre, cedula, ciudad, direccion, referencia y telefono/i,
+    /Completa nombre.*c[eé]dula.*ciudad.*direcci[oó]n.*tel[eé]fono/i,
     "Delivery checkout should require all delivery fields",
   );
 

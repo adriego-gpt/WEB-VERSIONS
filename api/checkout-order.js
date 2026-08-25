@@ -184,13 +184,12 @@ function sanitizeDeliveryPayload(rawDelivery = {}, user = {}, contactSettings = 
       || !safePayload.deliveryIdNumber
       || !safePayload.deliveryCity
       || !safePayload.deliveryAddress
-      || !safePayload.deliveryReference
       || !safePayload.deliveryPhone;
     if (missingRequired) {
-      return { ok: false, message: "Completa nombre, cedula, ciudad, direccion, referencia y telefono para envio." };
+      return { ok: false, message: "Completa nombre, cédula, ciudad, dirección y teléfono para el envío." };
     }
     if (safePayload.deliveryPhone.length < 9) {
-      return { ok: false, message: "El telefono de entrega no es valido." };
+      return { ok: false, message: "El teléfono de entrega no es válido." };
     }
   }
 

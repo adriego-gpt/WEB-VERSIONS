@@ -6116,9 +6116,9 @@ export default function App() {
     }
 
     if (deliveryType === "delivery") {
-      if (!deliveryDetails.fullName || !deliveryDetails.idNumber || !deliveryDetails.city || !deliveryDetails.address || !deliveryDetails.reference) {
+      if (!deliveryDetails.fullName || !deliveryDetails.idNumber || !deliveryDetails.city || !deliveryDetails.address) {
         closeExternalWindow(pendingExternalWindow);
-        showToastMessage("Completa todos los datos de envío antes de confirmar el pedido.", "error");
+        showToastMessage("Completa nombre, cédula, ciudad, dirección y teléfono para el envío.", "error");
         return;
       }
       if (deliveryDetails.phone.length !== AUTH_FIELD_LIMITS.phone) {
@@ -6127,22 +6127,21 @@ export default function App() {
         return;
       }
 
-      const addressBook = normalizeAddressBook(currentUser?.addressBook);
-      const selectedAddress = addressBook.find((entry) => String(entry.id || "") === selectedAddressId);
-      const hasMatchingAddress = selectedAddress || addressBook.some((entry) => isSameAddressBookEntry(entry, deliveryDetails));
-      if (!hasMatchingAddress) {
-        const saveAddressResult = await saveCheckoutAddressToBook({
-          label: "Entrega",
-          city: deliveryDetails.city,
-          address: deliveryDetails.address,
-          reference: deliveryDetails.reference,
-          phone: deliveryDetails.phone,
-          isDefault: addressBook.length === 0,
-        });
-        if (!saveAddressResult.ok) {
-          closeExternalWindow(pendingExternalWindow);
-          showToastMessage(saveAddressResult.message || "No pudimos guardar tu dirección.", "error");
-          return;
+      if (currentUser?.id) {
+        const addressBook = normalizeAddressBook(currentUser?.addressBook);
+        const selectedAddress = addressBook.find((entry) => String(entry.id || "") === selectedAddressId);
+        const hasMatchingAddress = selectedAddress || addressBook.some((entry) => isSameAddressBookEntry(entry, deliveryDetails));
+        if (!hasMatchingAddress) {
+          void saveCheckoutAddressToBook({
+            label: "Entrega",
+            fullName: deliveryDetails.fullName,
+            idNumber: deliveryDetails.idNumber,
+            city: deliveryDetails.city,
+            address: deliveryDetails.address,
+            reference: deliveryDetails.reference,
+            phone: deliveryDetails.phone,
+            isDefault: addressBook.length === 0,
+          });
         }
       }
     }
