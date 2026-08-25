@@ -725,8 +725,8 @@ export function CartSummaryModal({
                               />
                               <textarea
                                 className="textarea checkout-delivery-full"
-                                placeholder="Referencia de entrega (Color de fachada, depto, indicaciones...) *"
-                                aria-label="Referencia de entrega"
+                                placeholder="Referencia de entrega (Opcional: Color de fachada, depto, indicaciones...)"
+                                aria-label="Referencia de entrega (opcional)"
                                 value={deliveryDraft.reference}
                                 onChange={(event) => handleDeliveryDraftChange("reference", event.target.value)}
                               />

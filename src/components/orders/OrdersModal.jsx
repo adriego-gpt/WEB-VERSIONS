@@ -234,7 +234,7 @@ export function OrdersModal({
                         </div>
                       )}
                       {order.couponCode && <span className="badge badge-light">Cupón: {order.couponCode}</span>}
-                      {order.guideNumber && <p className="helper-text" style={{ margin: 0 }}>Guía de envío: <strong>{order.guideNumber}</strong></p>}
+                      {effectiveGuide && <p className="helper-text" style={{ margin: 0 }}>Guía de envío: <strong>{effectiveGuide}</strong></p>}
                       {order.paymentProof ? (
                         <button
                           type="button"

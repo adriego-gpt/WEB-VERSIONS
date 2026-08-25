@@ -41,7 +41,7 @@ function getOrderSlaMeta(order = {}) {
   const ageMinutes = getOrderAgeMinutes(order.createdAt);
 
   if (status === "Pendiente") {
-    if (ageMinutes >= 90) return { tone: "danger", label: "SLA critico", ageMinutes };
+    if (ageMinutes >= 90) return { tone: "danger", label: "SLA crítico", ageMinutes };
     if (ageMinutes >= 30) return { tone: "warning", label: "SLA en riesgo", ageMinutes };
     return { tone: "success", label: "SLA saludable", ageMinutes };
   }
@@ -49,7 +49,7 @@ function getOrderSlaMeta(order = {}) {
     if (ageMinutes >= 24 * 60) return { tone: "danger", label: "Retrasado", ageMinutes };
     return { tone: "warning", label: "En tiempo esperado", ageMinutes };
   }
-  return { tone: "neutral", label: "Tiempo SLA inactivo", ageMinutes };
+  return { tone: "neutral", label: "SLA inactivo", ageMinutes };
 }
 
 function getCurrentImageForProduct(product, selectedColor) {

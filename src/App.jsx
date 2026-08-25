@@ -1432,11 +1432,11 @@ function buildProductFromForm(form) {
   }
 
   if (parsedColors.some((color) => color.images.length === 0)) {
-    return { error: "Cada color necesita al menos una foto en su galera." };
+    return { error: "Cada color necesita al menos una foto en su galería." };
   }
 
   if (parsedColors.some((color) => color.images.length > PRODUCT_FORM_LIMITS.maxImagesPerColor)) {
-    return { error: `Cada color admite maximo ${PRODUCT_FORM_LIMITS.maxImagesPerColor} imagenes.` };
+    return { error: `Cada color admite un máximo de ${PRODUCT_FORM_LIMITS.maxImagesPerColor} imágenes.` };
   }
 
   if (parsedColors.some((color) => color.sizes.length === 0)) {
@@ -1444,7 +1444,7 @@ function buildProductFromForm(form) {
   }
 
   if (parsedColors.some((color) => color.sizes.length > PRODUCT_FORM_LIMITS.maxSizesPerColor)) {
-    return { error: `Cada color admite maximo ${PRODUCT_FORM_LIMITS.maxSizesPerColor} tallas.` };
+    return { error: `Cada color admite un máximo de ${PRODUCT_FORM_LIMITS.maxSizesPerColor} tallas.` };
   }
 
   const colorNamesLower = parsedColors.map((color) => color.name.toLowerCase());
