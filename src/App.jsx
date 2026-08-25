@@ -633,7 +633,9 @@ function normalizeAddressBookEntry(rawEntry = {}, fallbackId = "") {
   const normalizedId = normalizeEntityId(rawEntry?.id || fallbackId || createUid());
   return {
     id: normalizedId || createUid(),
-    label: sanitizeLine(rawEntry?.label || "Direccion guardada").slice(0, 48) || "Direccion guardada",
+    label: sanitizeLine(rawEntry?.label || "Dirección guardada").slice(0, 48) || "Dirección guardada",
+    fullName: sanitizeLine(rawEntry?.fullName || rawEntry?.recipientName || "").slice(0, 80),
+    idNumber: sanitizeLine(rawEntry?.idNumber || "").slice(0, 25),
     address,
     city: sanitizeLine(rawEntry?.city || "").slice(0, 80),
     reference: sanitizeParagraph(rawEntry?.reference || "").slice(0, 260),
@@ -648,6 +650,8 @@ function normalizeAddressBook(rawAddressBook = [], options = {}) {
   const allowFallback = Boolean(options?.allowFallback);
   const fallbackAddress = sanitizeParagraph(options?.fallbackAddress || "").slice(0, 320);
   const fallbackPhone = normalizeUserPhoneNumber(options?.fallbackPhone || "");
+  const fallbackFullName = sanitizeLine(options?.fallbackFullName || "");
+  const fallbackIdNumber = sanitizeLine(options?.fallbackIdNumber || "");
   const deduped = [];
   const seenIds = new Set();
 
@@ -662,6 +666,8 @@ function normalizeAddressBook(rawAddressBook = [], options = {}) {
   if (!deduped.length && allowFallback && fallbackAddress) {
     deduped.push(normalizeAddressBookEntry({
       label: "Principal",
+      fullName: fallbackFullName,
+      idNumber: fallbackIdNumber,
       address: fallbackAddress,
       phone: fallbackPhone,
       isDefault: true,
@@ -5301,11 +5307,14 @@ export default function App() {
 
     const normalizedAddressBook = normalizeAddressBook(nextBook);
     const defaultAddress = getDefaultAddressBookEntry(normalizedAddressBook);
+    const effectiveIdNumber = sanitizeLine(defaultAddress?.idNumber || currentUser.idNumber || profileDraft.idNumber || "");
+    const effectivePhone = normalizeUserPhoneNumber(defaultAddress?.phone || currentUser.phone || profileDraft.phone || "");
+
     const response = await updateUserProfile({
       name: sanitizeLine(currentUser.name || ""),
       lastName: sanitizeLine(currentUser.lastName || ""),
-      idNumber: sanitizeLine(currentUser.idNumber || profileDraft.idNumber || ""),
-      phone: normalizeUserPhoneNumber(currentUser.phone || ""),
+      idNumber: effectiveIdNumber,
+      phone: effectivePhone,
       email: normalizeEmail(currentUser.email || ""),
       shippingAddress: sanitizeParagraph(defaultAddress?.address || ""),
       addressBook: normalizedAddressBook,
@@ -5323,12 +5332,16 @@ export default function App() {
     const nextDefaultAddress = getDefaultAddressBookEntry(nextAddressBook);
     const nextUser = {
       ...response.user,
+      idNumber: sanitizeLine(response.user.idNumber || effectiveIdNumber),
+      phone: normalizeUserPhoneNumber(response.user.phone || effectivePhone),
       shippingAddress: sanitizeParagraph(response.user.shippingAddress || nextDefaultAddress?.address || ""),
       addressBook: nextAddressBook,
     };
     setCurrentUser(nextUser);
     setProfileDraft((previous) => ({
       ...previous,
+      idNumber: nextUser.idNumber,
+      phone: nextUser.phone,
       shippingAddress: nextUser.shippingAddress,
       addressBook: nextAddressBook,
     }));
@@ -5407,6 +5420,9 @@ export default function App() {
   const handleSaveAddressBookEntry = async () => {
     const normalizedEntry = normalizeAddressBookEntry({
       ...addressBookDraft,
+      fullName: sanitizeLine(addressBookDraft.fullName || profileDraft.name || currentUser?.name || ""),
+      idNumber: sanitizeLine(addressBookDraft.idNumber || profileDraft.idNumber || currentUser?.idNumber || ""),
+      phone: normalizeUserPhoneNumber(addressBookDraft.phone || profileDraft.phone || currentUser?.phone || ""),
       id: addressBookEditingId || createUid(),
     });
     if (!normalizedEntry || !normalizedEntry.address) {
@@ -5458,7 +5474,18 @@ export default function App() {
     const lastName = sanitizeLine(profileDraft.lastName);
     const idNumber = sanitizeLine(profileDraft.idNumber || "");
     const phone = normalizeUserPhoneNumber(profileDraft.phone);
-    const addressBook = normalizeAddressBook(profileDraft.addressBook);
+    const baseAddressBook = normalizeAddressBook(profileDraft.addressBook);
+    const addressBook = baseAddressBook.map((entry, index) => {
+      if (entry.isDefault || (index === 0 && !baseAddressBook.some((e) => e.isDefault))) {
+        return {
+          ...entry,
+          fullName: entry.fullName || [name, lastName].filter(Boolean).join(" ").trim() || name,
+          idNumber: idNumber || entry.idNumber || "",
+          phone: phone || entry.phone || "",
+        };
+      }
+      return entry;
+    });
     const shippingAddress = sanitizeParagraph(getDefaultAddressBookEntry(addressBook)?.address || profileDraft.shippingAddress || "");
 
     if (!name) {
@@ -5514,34 +5541,38 @@ export default function App() {
       return { ok: false, message: "Inicia sesión para guardar direcciones." };
     }
 
+    const currentBook = normalizeAddressBook(currentUser.addressBook);
+    const existingIndex = currentBook.findIndex((entry) => (
+      (payload.id && String(entry.id) === String(payload.id)) || isSameAddressBookEntry(entry, payload)
+    ));
+
     const normalizedEntry = normalizeAddressBookEntry({
-      id: createUid(),
-      label: payload.label || "Entrega",
+      id: existingIndex >= 0 ? currentBook[existingIndex].id : (payload.id || createUid()),
+      label: payload.label || (existingIndex >= 0 ? currentBook[existingIndex].label : "Entrega"),
       fullName: payload.fullName || currentUser.name || "",
       idNumber: payload.idNumber || currentUser.idNumber || "",
       address: payload.address,
       city: payload.city,
       reference: payload.reference,
       phone: payload.phone,
-      isDefault: Boolean(payload.isDefault),
+      isDefault: existingIndex >= 0 ? currentBook[existingIndex].isDefault : Boolean(payload.isDefault),
     });
 
     if (!normalizedEntry || !normalizedEntry.address) {
       return { ok: false, message: "Ingresa una dirección válida para guardarla." };
     }
 
-    const currentBook = normalizeAddressBook(currentUser.addressBook);
-    const existingEntry = currentBook.find((entry) => isSameAddressBookEntry(entry, normalizedEntry));
-    if (existingEntry) {
-      return { ok: true, savedEntryId: String(existingEntry.id || ""), addressBook: currentBook };
-    }
-
-    let nextBook = [normalizedEntry, ...currentBook].slice(0, MAX_ADDRESS_BOOK_ENTRIES);
-    if (!currentBook.length || normalizedEntry.isDefault) {
-      nextBook = nextBook.map((entry) => ({
-        ...entry,
-        isDefault: String(entry.id) === String(normalizedEntry.id),
-      }));
+    let nextBook;
+    if (existingIndex >= 0) {
+      nextBook = currentBook.map((entry, idx) => (idx === existingIndex ? normalizedEntry : entry));
+    } else {
+      nextBook = [normalizedEntry, ...currentBook].slice(0, MAX_ADDRESS_BOOK_ENTRIES);
+      if (!currentBook.length || normalizedEntry.isDefault) {
+        nextBook = nextBook.map((entry) => ({
+          ...entry,
+          isDefault: String(entry.id) === String(normalizedEntry.id),
+        }));
+      }
     }
     nextBook = normalizeAddressBook(nextBook);
 

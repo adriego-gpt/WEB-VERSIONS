@@ -217,11 +217,11 @@ export function CartSummaryModal({
     setDeliveryDraft((previous) => ({
       ...previous,
       fullName: sanitizeLine(addressEntry.fullName || previous.fullName || userFullName),
-      idNumber: sanitizeLine(addressEntry.idNumber || previous.idNumber || currentUser?.idNumber || ""),
-      city: sanitizeLine(addressEntry.city || ""),
+      idNumber: sanitizeLine(addressEntry.idNumber || currentUser?.idNumber || previous.idNumber || ""),
+      city: sanitizeLine(addressEntry.city || previous.city || ""),
       address: sanitizeParagraph(addressEntry.address || ""),
       reference: sanitizeParagraph(addressEntry.reference || ""),
-      phone: normalizeUserPhoneNumber(addressEntry.phone || previous.phone || currentUser?.phone || ""),
+      phone: normalizeUserPhoneNumber(addressEntry.phone || currentUser?.phone || previous.phone || ""),
     }));
     setCheckoutFormError("");
   };
@@ -269,10 +269,10 @@ export function CartSummaryModal({
         deliveryType === "delivery" &&
         saveAddressToBook &&
         currentUser?.id &&
-        typeof onSaveCheckoutAddress === "function" &&
-        (useCustomAddress || !hasSavedAddresses)
+        typeof onSaveCheckoutAddress === "function"
       ) {
         void onSaveCheckoutAddress({
+          id: effectiveSelectedSavedAddressId || undefined,
           label: "Entrega",
           fullName: sanitizeLine(deliveryDraft.fullName || ""),
           idNumber: sanitizeLine(deliveryDraft.idNumber || ""),
@@ -280,7 +280,7 @@ export function CartSummaryModal({
           address: sanitizeParagraph(deliveryDraft.address || ""),
           reference: sanitizeParagraph(deliveryDraft.reference || ""),
           phone: normalizeUserPhoneNumber(deliveryDraft.phone || ""),
-          isDefault: !hasSavedAddresses,
+          isDefault: !hasSavedAddresses || Boolean(defaultSavedAddress?.id === effectiveSelectedSavedAddressId),
         });
       }
       setCheckoutStep(getNextCheckoutStep(checkoutStep));
