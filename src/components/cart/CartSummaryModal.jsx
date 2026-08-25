@@ -89,14 +89,17 @@ export function CartSummaryModal({
     [contactSettings?.paymentSettings],
   );
   const transferReady = readyBankAccounts.length > 0;
-  const createInitialDeliveryDraft = () => ({
-    fullName: sanitizeLine(currentUser?.name || ""),
-    idNumber: "",
-    city: sanitizeLine(defaultSavedAddress?.city || ""),
-    address: sanitizeParagraph(defaultSavedAddress?.address || currentUser?.shippingAddress || ""),
-    reference: sanitizeParagraph(defaultSavedAddress?.reference || ""),
-    phone: normalizeUserPhoneNumber(defaultSavedAddress?.phone || currentUser?.phone || ""),
-  });
+  const createInitialDeliveryDraft = () => {
+    const userFullName = [currentUser?.name, currentUser?.lastName].filter(Boolean).join(" ").trim() || currentUser?.name || "";
+    return {
+      fullName: sanitizeLine(defaultSavedAddress?.fullName || userFullName),
+      idNumber: sanitizeLine(defaultSavedAddress?.idNumber || currentUser?.idNumber || ""),
+      city: sanitizeLine(defaultSavedAddress?.city || ""),
+      address: sanitizeParagraph(defaultSavedAddress?.address || currentUser?.shippingAddress || ""),
+      reference: sanitizeParagraph(defaultSavedAddress?.reference || ""),
+      phone: normalizeUserPhoneNumber(defaultSavedAddress?.phone || currentUser?.phone || ""),
+    };
+  };
   const [checkoutStep, setCheckoutStep] = useState(CHECKOUT_STEPS.summary);
   const [deliveryType, setDeliveryType] = useState("pickup");
   const [paymentMethod, setPaymentMethod] = useState(() => (
@@ -153,15 +156,19 @@ export function CartSummaryModal({
 
   useEffect(() => {
     if (!currentUser) return;
+    const userFullName = [currentUser.name, currentUser.lastName].filter(Boolean).join(" ").trim() || currentUser.name || "";
     setDeliveryDraft((prev) => ({
-      fullName: prev.fullName || sanitizeLine(defaultSavedAddress?.fullName || currentUser.name || ""),
+      fullName: prev.fullName || sanitizeLine(defaultSavedAddress?.fullName || userFullName),
       idNumber: prev.idNumber || sanitizeLine(defaultSavedAddress?.idNumber || currentUser.idNumber || ""),
       city: prev.city || sanitizeLine(defaultSavedAddress?.city || ""),
       address: prev.address || sanitizeParagraph(defaultSavedAddress?.address || currentUser.shippingAddress || ""),
       reference: prev.reference || sanitizeParagraph(defaultSavedAddress?.reference || ""),
       phone: prev.phone || normalizeUserPhoneNumber(defaultSavedAddress?.phone || currentUser.phone || ""),
     }));
-  }, [currentUser, defaultSavedAddress]);
+    if (defaultSavedAddress?.id && !selectedSavedAddressId) {
+      setSelectedSavedAddressId(String(defaultSavedAddress.id));
+    }
+  }, [currentUser, defaultSavedAddress, selectedSavedAddressId]);
 
   const pickupAddress = sanitizeLine(contactSettings?.address || "");
   const pickupNote = sanitizeParagraph(contactSettings?.locationNote || "");
@@ -195,7 +202,7 @@ export function CartSummaryModal({
       [field]: field === "phone"
         ? normalizeUserPhoneNumber(value)
         : field === "idNumber"
-          ? String(value || "").replace(/\s+/g, "").slice(0, 20)
+          ? String(value || "").replace(/\D/g, "").slice(0, 13)
           : field === "address" || field === "reference"
             ? stripDangerousContent(value).replace(/\r/g, "")
             : stripDangerousContent(value).replace(/[\r\n\t]+/g, " "),
@@ -204,11 +211,12 @@ export function CartSummaryModal({
 
   const applySavedAddressToDeliveryDraft = (addressEntry = null) => {
     if (!addressEntry) return;
+    const userFullName = [currentUser?.name, currentUser?.lastName].filter(Boolean).join(" ").trim() || currentUser?.name || "";
     setUseCustomAddress(false);
     setSelectedSavedAddressId(String(addressEntry.id || ""));
     setDeliveryDraft((previous) => ({
       ...previous,
-      fullName: sanitizeLine(addressEntry.fullName || previous.fullName || currentUser?.name || ""),
+      fullName: sanitizeLine(addressEntry.fullName || previous.fullName || userFullName),
       idNumber: sanitizeLine(addressEntry.idNumber || previous.idNumber || currentUser?.idNumber || ""),
       city: sanitizeLine(addressEntry.city || ""),
       address: sanitizeParagraph(addressEntry.address || ""),
@@ -608,20 +616,21 @@ export function CartSummaryModal({
                           />
                           <input
                             className="input"
-                            placeholder="Cédula de identidad (10 dígitos obligatorios) *"
+                            placeholder="Cédula / RUC (10 a 13 dígitos) *"
                             aria-label="Cédula de identidad"
+                            inputMode="numeric"
                             maxLength={13}
                             value={deliveryDraft.idNumber}
-                            onChange={(event) => handleDeliveryDraftChange("idNumber", event.target.value)}
+                            onChange={(event) => handleDeliveryDraftChange("idNumber", event.target.value.replace(/\D/g, "").slice(0, 13))}
                           />
                           <input
                             className="input"
-                            placeholder="Teléfono móvil para entrega (10 dígitos) *"
+                            placeholder="Teléfono móvil (10 dígitos) *"
                             aria-label="Teléfono para entrega"
                             inputMode="tel"
                             maxLength={10}
                             value={deliveryDraft.phone}
-                            onChange={(event) => handleDeliveryDraftChange("phone", event.target.value)}
+                            onChange={(event) => handleDeliveryDraftChange("phone", event.target.value.replace(/\D/g, "").slice(0, 10))}
                           />
                         </div>
                       </div>

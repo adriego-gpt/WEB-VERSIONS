@@ -5274,7 +5274,9 @@ export default function App() {
     setProfileDraft((previous) => ({
       ...previous,
       [field]: field === "phone"
-          ? normalizeUserPhoneNumber(value)
+        ? normalizeUserPhoneNumber(value)
+        : field === "idNumber"
+          ? String(value || "").replace(/\D/g, "").slice(0, 13)
           : stripDangerousContent(value).replace(/[\r\n\t]+/g, " "),
     }));
   };
@@ -5286,7 +5288,9 @@ export default function App() {
         ? Boolean(value)
         : field === "phone"
           ? normalizeUserPhoneNumber(value)
-          : stripDangerousContent(value).replace(/[\r\n\t]+/g, " "),
+          : field === "idNumber"
+            ? String(value || "").replace(/\D/g, "").slice(0, 13)
+            : stripDangerousContent(value).replace(/[\r\n\t]+/g, " "),
     }));
   };
 

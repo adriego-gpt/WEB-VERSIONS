@@ -206,7 +206,7 @@ export function UserAuthModal({
                     inputMode="tel"
                     autoComplete="tel-national"
                     maxLength={10}
-                    onChange={(event) => onFieldChange("phone", event.target.value)}
+                    onChange={(event) => onFieldChange("phone", event.target.value.replace(/\D/g, "").slice(0, 10))}
                     disabled={busy}
                     aria-invalid={showPhoneError}
                     aria-describedby={showPhoneError ? "auth-phone-error" : undefined}
@@ -460,8 +460,8 @@ export function ProfileModal({
                   <div className="settings-grid" style={{ marginTop: 14 }}>
                     <input className="input" placeholder="Nombre" value={profileDraft?.name || ""} onChange={(event) => onFieldChange("name", event.target.value)} />
                     <input className="input" placeholder="Apellido" value={profileDraft?.lastName || ""} onChange={(event) => onFieldChange("lastName", event.target.value)} />
-                    <input className="input" placeholder="Cédula / RUC" inputMode="numeric" maxLength={20} value={profileDraft?.idNumber || ""} onChange={(event) => onFieldChange("idNumber", event.target.value)} />
-                    <input className="input" placeholder="Teléfono" inputMode="tel" maxLength={10} value={profileDraft?.phone || ""} onChange={(event) => onFieldChange("phone", event.target.value)} />
+                    <input className="input" placeholder="Cédula / RUC (solo números)" inputMode="numeric" maxLength={13} value={profileDraft?.idNumber || ""} onChange={(event) => onFieldChange("idNumber", event.target.value.replace(/\D/g, "").slice(0, 13))} />
+                    <input className="input" placeholder="Teléfono (10 dígitos)" inputMode="tel" maxLength={10} value={profileDraft?.phone || ""} onChange={(event) => onFieldChange("phone", event.target.value.replace(/\D/g, "").slice(0, 10))} />
                     <input className="input" style={{ gridColumn: "1 / -1" }} placeholder="Correo" type="email" value={profileDraft?.email || ""} onChange={(event) => onFieldChange("email", event.target.value)} />
                   </div>
                   {profileFeedback?.message && (
@@ -636,11 +636,11 @@ export function ProfileModal({
                             <label className="profile-field-label">Cédula de identidad / RUC</label>
                             <input
                               className="input"
-                              placeholder="Cédula (10 dígitos)"
+                              placeholder="Cédula (10 a 13 dígitos)"
                               inputMode="numeric"
-                              maxLength={20}
+                              maxLength={13}
                               value={addressBookDraft.idNumber || ""}
-                              onChange={(event) => onAddressBookDraftChange("idNumber", event.target.value)}
+                              onChange={(event) => onAddressBookDraftChange("idNumber", event.target.value.replace(/\D/g, "").slice(0, 13))}
                             />
                           </div>
                           <div className="form-field-group">
@@ -651,7 +651,7 @@ export function ProfileModal({
                               inputMode="tel"
                               maxLength={10}
                               value={addressBookDraft.phone || ""}
-                              onChange={(event) => onAddressBookDraftChange("phone", event.target.value)}
+                              onChange={(event) => onAddressBookDraftChange("phone", event.target.value.replace(/\D/g, "").slice(0, 10))}
                             />
                           </div>
                         </div>

@@ -733,7 +733,7 @@ export function AdminPanelModal({
                                   <input className="input" placeholder="Apellido" value={adminUserDraft.lastName} onChange={(event) => setAdminUserDraft((previous) => ({ ...previous, lastName: event.target.value }))} />
                                   <input className="input" placeholder="Correo" value={adminUserDraft.email} onChange={(event) => setAdminUserDraft((previous) => ({ ...previous, email: event.target.value }))} />
                                   <input className="input" placeholder="Usuario" value={adminUserDraft.username} onChange={(event) => setAdminUserDraft((previous) => ({ ...previous, username: event.target.value }))} />
-                                  <input className="input" placeholder="Teléfono" value={adminUserDraft.phone} onChange={(event) => setAdminUserDraft((previous) => ({ ...previous, phone: event.target.value }))} />
+                                  <input className="input" placeholder="Teléfono" inputMode="tel" maxLength={10} value={adminUserDraft.phone} onChange={(event) => setAdminUserDraft((previous) => ({ ...previous, phone: event.target.value.replace(/\D/g, "").slice(0, 10) }))} />
                                   <div className="admin-full"><textarea className="textarea" placeholder="Dirección de envío" value={adminUserDraft.shippingAddress} onChange={(event) => setAdminUserDraft((previous) => ({ ...previous, shippingAddress: event.target.value }))} /></div>
                                 </div>
                               )}
