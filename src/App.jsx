@@ -5036,21 +5036,17 @@ export default function App() {
       return;
     }
 
-    const pendingExternalWindow = preOpenExternalWindow();
     const targetUrl = buildWhatsAppOrderFollowupUrl(order, { mobile: isMobileViewport });
     if (!targetUrl) {
-      closeExternalWindow(pendingExternalWindow);
       showToastMessage("WhatsApp no está disponible en este momento. Escríbenos por otro medio de contacto.", "error");
       return;
     }
 
     const launchResult = launchWhatsAppUrl(targetUrl, {
-      preferredWindow: pendingExternalWindow,
       isMobile: isMobileViewport,
       fallbackDelayMs: isMobileViewport ? 1300 : 900,
     });
     if (!launchResult.launched) {
-      closeExternalWindow(pendingExternalWindow);
       showToastMessage("No pudimos abrir WhatsApp automáticamente. Inténtalo nuevamente.", "warning");
     }
   };
@@ -6044,9 +6040,6 @@ export default function App() {
       return;
     }
 
-    const pendingExternalWindow = preOpenExternalWindow();
-    let whatsappLaunched = false;
-
     const deliveryType = checkoutPayload?.deliveryType === "delivery" ? "delivery" : "pickup";
     const paymentMethod = normalizePaymentMethod(checkoutPayload?.paymentMethod);
     const paymentProof = paymentMethod === PAYMENT_METHODS.transfer
@@ -6067,19 +6060,16 @@ export default function App() {
     };
 
     if (paymentMethod === PAYMENT_METHODS.transfer && !paymentProof) {
-      closeExternalWindow(pendingExternalWindow);
       showToastMessage("Es obligatorio adjuntar el comprobante de transferencia antes de confirmar tu pedido.", "error");
       return;
     }
 
     if (deliveryType === "delivery") {
       if (!deliveryDetails.fullName || !deliveryDetails.idNumber || !deliveryDetails.city || !deliveryDetails.address) {
-        closeExternalWindow(pendingExternalWindow);
         showToastMessage("Completa nombre, cédula, ciudad, dirección y teléfono para el envío.", "error");
         return;
       }
       if (deliveryDetails.phone.length !== AUTH_FIELD_LIMITS.phone) {
-        closeExternalWindow(pendingExternalWindow);
         showToastMessage("El teléfono para envío debe tener 10 dígitos.", "error");
         return;
       }
@@ -6182,16 +6172,14 @@ export default function App() {
         open: true,
         order: response.order,
         whatsappUrl: whatsappTarget.url,
-        preferredWindow: pendingExternalWindow,
       });
 
       triggerConfetti("checkout");
       showToastMessage({
         title: `Pedido ${response.order.code} recibido`,
-        message: `Gracias ${firstName}. Te estamos redirigiendo a WhatsApp para confirmarlo.`,
+        message: `Gracias ${firstName}. Conectando con WhatsApp para confirmarlo.`,
       }, "success");
     } catch {
-      closeExternalWindow(pendingExternalWindow);
       showToastMessage("No pudimos recibir tu pedido. Revisa tu conexión e inténtalo nuevamente.", "error");
     } finally {
       setCheckoutBusy(false);
@@ -6201,9 +6189,8 @@ export default function App() {
   const handleLaunchOrderSuccessWhatsApp = () => {
     if (!orderSuccessModal.order || !orderSuccessModal.whatsappUrl) return;
     const launchResult = launchWhatsAppUrl(orderSuccessModal.whatsappUrl, {
-      preferredWindow: orderSuccessModal.preferredWindow,
       isMobile: isMobileViewport,
-      fallbackDelayMs: isMobileViewport ? 1450 : 1200,
+      fallbackDelayMs: isMobileViewport ? 1200 : 800,
     });
     if (launchResult.launched) {
       trackAnalyticsEvent("whatsapp_opened", {

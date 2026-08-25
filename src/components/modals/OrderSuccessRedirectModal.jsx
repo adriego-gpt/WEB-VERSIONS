@@ -24,40 +24,26 @@ export function OrderSuccessRedirectModal({
   onOpenOrders,
   onLaunchWhatsApp,
 }) {
-  const [timeLeft, setTimeLeft] = useState(COUNTDOWN_SECONDS);
-  const [isLaunched, setIsLaunched] = useState(false);
   const [copiedCode, setCopiedCode] = useState(false);
-  const timerRef = useRef(null);
+  const [isLaunched, setIsLaunched] = useState(false);
   const hasAutoLaunchedRef = useRef(false);
 
   useEffect(() => {
     if (!open) {
-      setTimeLeft(COUNTDOWN_SECONDS);
       setIsLaunched(false);
       setCopiedCode(false);
       hasAutoLaunchedRef.current = false;
-      if (timerRef.current) clearInterval(timerRef.current);
       return undefined;
     }
 
-    setTimeLeft(COUNTDOWN_SECONDS);
-    setIsLaunched(false);
-    hasAutoLaunchedRef.current = false;
-
-    timerRef.current = window.setInterval(() => {
-      setTimeLeft((prev) => {
-        if (prev <= 1) {
-          if (timerRef.current) clearInterval(timerRef.current);
-          if (!hasAutoLaunchedRef.current) {
-            hasAutoLaunchedRef.current = true;
-            setIsLaunched(true);
-            onLaunchWhatsApp?.();
-          }
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
+    // Auto-launch WhatsApp immediately during the entrance animation (no blank page delay)
+    const launchTimer = window.setTimeout(() => {
+      if (!hasAutoLaunchedRef.current) {
+        hasAutoLaunchedRef.current = true;
+        setIsLaunched(true);
+        onLaunchWhatsApp?.();
+      }
+    }, 400);
 
     const handleKeyDown = (event) => {
       if (event.key === "Escape") {
@@ -67,7 +53,7 @@ export function OrderSuccessRedirectModal({
     window.addEventListener("keydown", handleKeyDown);
 
     return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
+      window.clearTimeout(launchTimer);
       window.removeEventListener("keydown", handleKeyDown);
     };
   }, [open, onLaunchWhatsApp, onClose]);
@@ -75,8 +61,6 @@ export function OrderSuccessRedirectModal({
   if (!open || !order) return null;
 
   const handleManualLaunch = () => {
-    if (timerRef.current) clearInterval(timerRef.current);
-    setTimeLeft(0);
     hasAutoLaunchedRef.current = true;
     setIsLaunched(true);
     onLaunchWhatsApp?.();
@@ -90,8 +74,6 @@ export function OrderSuccessRedirectModal({
       window.setTimeout(() => setCopiedCode(false), 2000);
     }
   };
-
-  const progressPercent = Math.max(0, Math.min(100, ((COUNTDOWN_SECONDS - timeLeft) / COUNTDOWN_SECONDS) * 100));
 
   return (
     <AnimatePresence>
@@ -140,7 +122,7 @@ export function OrderSuccessRedirectModal({
                 ¡ORDEN REGISTRADA!
               </span>
             </div>
-            <h3 className="order-success-title">Te estamos redirigiendo a WhatsApp</h3>
+            <h3 className="order-success-title">Conectando con WhatsApp</h3>
             <p className="order-success-subtitle">
               Para coordinar el pago y despacho inmediato de tus prendas.
             </p>
@@ -171,26 +153,11 @@ export function OrderSuccessRedirectModal({
             </div>
           </div>
 
-          {/* Countdown / Progress Section */}
-          {!isLaunched ? (
-            <div className="order-success-countdown-box">
-              <div className="order-success-countdown-label">
-                <span>Redirigiendo automáticamente en</span>
-                <strong className="order-success-seconds">{timeLeft}s</strong>
-              </div>
-              <div className="order-success-progress-track">
-                <div
-                  className="order-success-progress-fill"
-                  style={{ width: `${progressPercent}%` }}
-                />
-              </div>
-            </div>
-          ) : (
-            <div className="order-success-launched-note">
-              <CheckCircle2 size={16} />
-              <span>WhatsApp abierto en una pestaña segura</span>
-            </div>
-          )}
+          {/* Active Connection Note */}
+          <div className="order-success-launched-note">
+            <CheckCircle2 size={16} />
+            <span>Abriendo chat oficial de WhatsApp con tu orden...</span>
+          </div>
 
           {/* Critical Tip Callout */}
           <div className="order-success-tip-card">
@@ -213,7 +180,7 @@ export function OrderSuccessRedirectModal({
               onClick={handleManualLaunch}
             >
               <MessageCircle size={18} />
-              <span>{isLaunched ? "Volver a abrir WhatsApp" : "Abrir WhatsApp ahora"}</span>
+              <span>Abrir WhatsApp nuevamente</span>
               <ArrowRight size={16} />
             </button>
 
