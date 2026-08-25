@@ -6833,7 +6833,8 @@ export default function App() {
   };
 
   const handleColorFilesUpload = async (uid, event) => {
-    const files = Array.from(event.target.files || []);
+    const inputElement = event.target;
+    const files = Array.from(inputElement?.files || []);
     if (!files.length) return;
     try {
       const uploadedImages = await Promise.all(files.map((file) => fileToDataUrl(file)));
@@ -6855,12 +6856,14 @@ export default function App() {
       const message = error instanceof Error ? error.message : "No pudimos cargar una o mas imagenes.";
       setEditorError(message);
       showToastMessage(message, "error");
+    } finally {
+      if (inputElement) inputElement.value = "";
     }
-    event.target.value = "";
   };
 
   const handleStoreSlideImageUpload = async (slideId, event) => {
-    const file = event.target.files?.[0];
+    const inputElement = event.target;
+    const file = inputElement?.files?.[0];
     if (!file) return;
     try {
       const image = await fileToDataUrl(file);
@@ -6873,13 +6876,15 @@ export default function App() {
       const message = error instanceof Error ? error.message : "No pudimos subir la imagen del slide.";
       setEditorError(message);
       showToastMessage(message, "error");
+    } finally {
+      if (inputElement) inputElement.value = "";
     }
-    event.target.value = "";
   };
 
   const handleBankImageUpload = async (accountId, field, event) => {
     if (field !== "bankLogoImage" && field !== "bankQrImage") return;
-    const file = event.target.files?.[0];
+    const inputElement = event.target;
+    const file = inputElement?.files?.[0];
     if (!file) return;
     setBankQrUploadBusy(true);
     try {
@@ -6903,8 +6908,8 @@ export default function App() {
       showToastMessage(message, "error");
     } finally {
       setBankQrUploadBusy(false);
+      if (inputElement) inputElement.value = "";
     }
-    event.target.value = "";
   };
 
   const addHeroSlide = () => {

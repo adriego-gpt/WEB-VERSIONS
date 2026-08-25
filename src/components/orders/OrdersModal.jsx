@@ -223,7 +223,7 @@ export function OrdersModal({
                         {order.paymentBankAccount?.bankName ? <small>Banco elegido: {order.paymentBankAccount.bankName}</small> : null}
                         {order.paymentFeeAmount > 0 && <small>Incluye {order.paymentFeePercent}% de comisión por tarjeta.</small>}
                       </div>
-                      {(order.discountAmount > 0 || order.couponCode || order.paymentFeeAmount > 0) && (
+                      {(order.discountAmount > 0 || order.couponCode || order.paymentFeeAmount > 0 || order.shippingCost > 0 || order.deliveryType === "delivery") && (
                         <div className="order-money-block">
                           <div>
                             <span className="muted">Subtotal</span>
@@ -235,6 +235,17 @@ export function OrdersModal({
                               <strong>-{currency(order.discountAmount)}</strong>
                             </div>
                           )}
+                          {order.shippingCost > 0 ? (
+                            <div>
+                              <span className="muted">{order.shippingLabel || "Costo de envío"}</span>
+                              <strong>+{currency(order.shippingCost)}</strong>
+                            </div>
+                          ) : order.deliveryType === "delivery" ? (
+                            <div>
+                              <span className="muted">Envío</span>
+                              <strong style={{ color: "var(--success, #16a34a)" }}>GRATIS</strong>
+                            </div>
+                          ) : null}
                           {order.paymentFeeAmount > 0 && (
                             <div>
                               <span className="muted">Comisión tarjeta</span>

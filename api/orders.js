@@ -402,15 +402,23 @@ export default async function handler(req, res) {
 
   if (action === "delete") {
     let deleted = false;
+    let shouldBumpCatalog = false;
     const nextStore = await updateStore((draft) => {
       const previousOrders = Array.isArray(draft.orders) ? draft.orders : [];
-      draft.orders = previousOrders.filter((order) => {
-        const keep = String(order.id) !== orderId;
-        if (!keep) deleted = true;
-        return keep;
-      });
-      if (deleted) {
-        bumpRealtimeMeta(draft, ["orders"]);
+      const targetOrder = previousOrders.find((order) => String(order.id) === orderId);
+      if (targetOrder) {
+        const currentStatus = normalizeOrderStatus(targetOrder.status);
+        const fallbackReservationState = currentStatus === CANCELLED_STATUS ? "released" : "reserved";
+        const currentReservation = normalizeStockReservation(targetOrder.stockReservation, fallbackReservationState);
+        if (currentReservation.state !== "released") {
+          const syncResult = applyOrderStockSync(draft, targetOrder, "restore");
+          if (syncResult.touched) {
+            shouldBumpCatalog = true;
+          }
+        }
+        draft.orders = previousOrders.filter((order) => String(order.id) !== orderId);
+        deleted = true;
+        bumpRealtimeMeta(draft, shouldBumpCatalog ? ["orders", "catalog"] : ["orders"]);
       }
       return draft;
     });

@@ -1609,6 +1609,11 @@ export function AdminPanelModal({
                               <div className="order-money-block">
                                 <div><span className="muted">Subtotal</span><strong>{currency(order.subtotal)}</strong></div>
                                 {order.discountAmount > 0 && <div><span className="muted">Descuento</span><strong>-{currency(order.discountAmount)}</strong></div>}
+                                {order.shippingCost > 0 ? (
+                                  <div><span className="muted">{order.shippingLabel || "Costo de envío"}</span><strong>+{currency(order.shippingCost)}</strong></div>
+                                ) : isDeliveryOrder ? (
+                                  <div><span className="muted">Envío</span><strong style={{ color: "var(--success, #16a34a)" }}>GRATIS</strong></div>
+                                ) : null}
                                 {order.paymentFeeAmount > 0 && <div><span className="muted">Comisión tarjeta</span><strong>+{currency(order.paymentFeeAmount)}</strong></div>}
                                 <div><span className="muted">Total</span><strong>{currency(order.total || order.subtotal)}</strong></div>
                                 <div><span className="muted">Forma de pago</span><strong>{order.paymentMethodLabel || (order.paymentMethod === "card_link" ? "Tarjeta por enlace" : "Transferencia")}</strong></div>

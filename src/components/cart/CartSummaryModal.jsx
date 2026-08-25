@@ -134,7 +134,13 @@ export function CartSummaryModal({
   const accountCopyTimerRef = useRef(null);
 
   useEffect(() => {
-    if (!open) return undefined;
+    if (!open) {
+      setCheckoutStep(CHECKOUT_STEPS.summary);
+      setCheckoutFormError("");
+      setPaymentProofError("");
+      setProofAttention(false);
+      return undefined;
+    }
     const handleKeyDown = (event) => {
       if (event.key === "Escape" && !checkoutBusy) {
         onClose?.();
