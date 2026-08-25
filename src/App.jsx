@@ -188,6 +188,12 @@ import {
   normalizeUsername,
   buildAuthValidation,
 } from "./utils";
+import {
+  DEFAULT_SHIPPING_SETTINGS,
+  normalizeShippingSettings,
+  calculateShippingFee,
+  calculateFreeShippingProgress,
+} from "./domain/orders/shippingSettings.js";
 
 import { lazyWithRetry } from "./utils/lazyWithRetry.js";
 import { ErrorBoundary } from "./components/ui/ErrorBoundary.jsx";
@@ -562,6 +568,7 @@ const defaultStoreSettings = {
     abandonedCartDelayMinutes: 45,
     abandonedCartTemplate: "Hola {cliente}, tienes {items} producto(s) pendientes por {total}. Si quieres, te ayudo a cerrarlo ahora mismo.",
   },
+  shippingSettings: { ...DEFAULT_SHIPPING_SETTINGS },
   heroSlides: [
     {
       id: "slide-1",
@@ -996,6 +1003,11 @@ function mergeStoreSettings(rawSettings = {}) {
       rawSettings.automationSettings != null
         ? rawSettings.automationSettings
         : defaultStoreSettings.automationSettings,
+    ),
+    shippingSettings: normalizeShippingSettings(
+      rawSettings.shippingSettings != null
+        ? rawSettings.shippingSettings
+        : defaultStoreSettings.shippingSettings,
     ),
     heroSlides: incomingSlides.map((slide, index) => {
       const defaultSlide = defaultStoreSettings.heroSlides[index] || {
@@ -6328,7 +6340,7 @@ export default function App() {
   const duplicateProductForAdmin = (product) => {
     const form = createProductForm(product);
     form.id = null;
-    form.name = `${sanitizeLine(product?.name || "Producto")} copia`;
+    form.name = `${sanitizeLine(product?.name || "Producto")} (Copia)`;
     form.isPublic = false;
     form.featured = false;
     const emptyBaseline = createEmptyProductForm();
@@ -6342,6 +6354,7 @@ export default function App() {
     setCustomFilterTagInput("");
     setEditorMessage(`Copia de "${product?.name || "Producto"}" lista para revisar. Se mantendrá oculta hasta que decidas publicarla.`);
     setEditorError("");
+    showToastMessage(`Prenda "${product?.name || "Producto"}" duplicada. Ajusta los datos y guarda.`, "success");
     setSelectedProduct(null);
     setShowAdminPanel(true);
     setAdminTab("producto");
@@ -7564,6 +7577,7 @@ export default function App() {
               currentUser={currentUser}
               savedAddresses={currentUserAddressBook}
               contactSettings={publicContactSettings}
+              storeSettings={storeSettings}
             />
           </Suspense>
         </ErrorBoundary>

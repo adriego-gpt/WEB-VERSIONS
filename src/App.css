@@ -2852,21 +2852,48 @@ img {
   border: 1px solid #e7e4dd;
 }
 
-.customer-order-copy-guide-btn {
+.customer-order-guide-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.customer-order-copy-guide-btn,
+.customer-order-track-btn {
   min-height: 32px;
   padding: 5px 14px;
   font-size: 12px;
   font-weight: 600;
   border-radius: 9999px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  text-decoration: none;
+  transition: all var(--time-fast) var(--ease-standard);
+}
+
+.customer-order-copy-guide-btn {
   border-color: rgba(18, 21, 27, 0.18);
   color: #12151b;
   background: #ffffff;
-  transition: all var(--time-fast) var(--ease-standard);
 }
 
 .customer-order-copy-guide-btn:hover {
   background: #12151b;
   border-color: #12151b;
+  color: #ffffff;
+}
+
+.customer-order-track-btn {
+  background: #8c582c;
+  border-color: #8c582c;
+  color: #ffffff;
+}
+
+.customer-order-track-btn:hover {
+  background: #734520;
+  border-color: #734520;
   color: #ffffff;
 }
 
@@ -7361,6 +7388,79 @@ img {
 .cart-footer-meta-row.is-discount,
 .cart-footer-meta-row.is-discount strong {
   color: #166534;
+}
+
+.cart-footer-meta-row.is-shipping strong {
+  color: #0f172a;
+}
+
+.free-shipping-progress-banner {
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px;
+  margin-bottom: 14px;
+  background: linear-gradient(135deg, rgba(15, 23, 42, 0.03), rgba(15, 23, 42, 0.06));
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 12px;
+  transition: all 0.25s ease;
+}
+
+.free-shipping-progress-banner.is-unlocked {
+  background: linear-gradient(135deg, rgba(22, 101, 52, 0.08), rgba(34, 197, 94, 0.12));
+  border-color: rgba(34, 197, 94, 0.3);
+}
+
+.free-shipping-progress-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-main);
+}
+
+.free-shipping-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.06);
+  color: var(--text-main);
+  flex-shrink: 0;
+}
+
+.free-shipping-progress-banner.is-unlocked .free-shipping-icon {
+  background: #166534;
+  color: #fff;
+}
+
+.free-shipping-text {
+  flex: 1;
+  line-height: 1.35;
+}
+
+.free-shipping-progress-banner.is-unlocked .free-shipping-text {
+  color: #166534;
+}
+
+.free-shipping-progress-track {
+  width: 100%;
+  height: 6px;
+  background: rgba(15, 23, 42, 0.08);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.free-shipping-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #3b82f6, #10b981);
+  border-radius: 999px;
+  transition: width 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.free-shipping-progress-banner.is-unlocked .free-shipping-progress-fill {
+  background: #16a34a;
 }
 
 .cart-footer-total-row {

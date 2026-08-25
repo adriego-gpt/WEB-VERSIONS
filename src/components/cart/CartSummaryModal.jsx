@@ -47,6 +47,11 @@ import {
   getPreviousCheckoutStep,
 } from "../../domain/orders/checkoutFlow";
 import { getReadyBankAccounts } from "../../domain/contact/paymentSettings";
+import {
+  calculateFreeShippingProgress,
+  calculateShippingFee,
+  normalizeShippingSettings,
+} from "../../domain/orders/shippingSettings";
 import { ImageLightbox } from "../ui/ImageLightbox";
 
 export function CartSummaryModal({
@@ -78,6 +83,7 @@ export function CartSummaryModal({
   currentUser,
   savedAddresses = [],
   contactSettings,
+  storeSettings,
 }) {
   const normalizedSavedAddresses = useMemo(() => normalizeAddressBook(savedAddresses), [savedAddresses]);
   const defaultSavedAddress = normalizedSavedAddresses.find((entry) => entry.isDefault) || normalizedSavedAddresses[0] || null;
@@ -174,11 +180,40 @@ export function CartSummaryModal({
   const pickupNote = sanitizeParagraph(contactSettings?.locationNote || "");
   const pickupMapsLink = sanitizeLine(contactSettings?.mapsLink || "");
   const normalizedCouponCode = sanitizeLine(couponState?.code || couponDraftCode || "");
-  const paymentFeeAmount = calculatePaymentFee(finalTotal, selectedPaymentMethod, cardFeePercent);
-  const payableTotal = calculatePayableTotal(finalTotal, selectedPaymentMethod, cardFeePercent);
+
+  const shippingSettings = useMemo(
+    () => normalizeShippingSettings(storeSettings?.shippingSettings),
+    [storeSettings?.shippingSettings],
+  );
+
+  const freeShippingProgress = useMemo(
+    () => calculateFreeShippingProgress({ subtotal, shippingSettings }),
+    [subtotal, shippingSettings],
+  );
+
+  const shippingCalculation = useMemo(
+    () => calculateShippingFee({
+      subtotal: Math.max(0, subtotal - discountAmount),
+      deliveryType,
+      deliveryCity: deliveryDraft.city,
+      shippingSettings,
+    }),
+    [subtotal, discountAmount, deliveryType, deliveryDraft.city, shippingSettings],
+  );
+
+  const effectiveShippingCost = shippingCalculation.shippingCost;
+  const isDelivery = deliveryType === "delivery";
+  const baseTotalWithShipping = Math.max(
+    0,
+    Number((subtotal - discountAmount + (isDelivery ? effectiveShippingCost : 0)).toFixed(2)),
+  );
+  const paymentFeeAmount = calculatePaymentFee(baseTotalWithShipping, selectedPaymentMethod, cardFeePercent);
+  const payableTotal = calculatePayableTotal(baseTotalWithShipping, selectedPaymentMethod, cardFeePercent);
   const isCheckoutStep = checkoutStep !== CHECKOUT_STEPS.summary;
   const isPaymentStep = checkoutStep === CHECKOUT_STEPS.payment;
-  const displayedTotal = isPaymentStep ? payableTotal : finalTotal;
+  const displayedTotal = isPaymentStep
+    ? payableTotal
+    : (isCheckoutStep ? baseTotalWithShipping : Math.max(0, Number((subtotal - discountAmount).toFixed(2))));
   const couponQuickLabel = hasActiveCoupon
     ? `Cupón ${normalizedCouponCode || "aplicado"} activo`
     : "¿Tienes cupón? Aplícalo en el resumen";
@@ -398,6 +433,29 @@ export function CartSummaryModal({
 
           <div className={`cart-fullscreen-content ${isCheckoutStep ? "is-confirm-step" : ""}`}>
             <div className={`sheet-body cart-fullscreen-list ${isCheckoutStep ? "is-confirm-step" : ""}`}>
+              {cart.length > 0 && freeShippingProgress.eligible && (
+                <div className={`free-shipping-progress-banner ${freeShippingProgress.isFree ? "is-unlocked" : ""}`}>
+                  <div className="free-shipping-progress-head">
+                    <span className="free-shipping-icon">
+                      <Truck size={15} />
+                    </span>
+                    <span className="free-shipping-text">
+                      {freeShippingProgress.isFree ? (
+                        <strong>🎉 ¡Felicidades! Tienes Envío GRATIS en este pedido</strong>
+                      ) : (
+                        <span>Te faltan <strong>{currency(freeShippingProgress.remaining)}</strong> para tener <strong>Envío GRATIS</strong></span>
+                      )}
+                    </span>
+                  </div>
+                  <div className="free-shipping-progress-track">
+                    <div
+                      className="free-shipping-progress-fill"
+                      style={{ width: `${freeShippingProgress.progressPercent}%` }}
+                    />
+                  </div>
+                </div>
+              )}
+
               {cart.length === 0 ? (
                 <EmotionalEmptyState
                   icon={ShoppingBag}
@@ -983,6 +1041,18 @@ export function CartSummaryModal({
                   <div className="cart-footer-meta-row"><span>Subtotal</span><strong><AnimatedCurrencyValue value={subtotal} /></strong></div>
                   {discountAmount > 0 && (
                     <div className="cart-footer-meta-row is-discount"><span>Descuento</span><strong>-<AnimatedCurrencyValue value={discountAmount} /></strong></div>
+                  )}
+                  {isCheckoutStep && (
+                    <div className="cart-footer-meta-row is-shipping">
+                      <span>Envío ({deliveryType === "delivery" ? (effectiveShippingCost === 0 ? "Gratis" : (shippingCalculation.reason === "local" ? "Local" : "Nacional")) : "Retiro"})</span>
+                      <strong>
+                        {deliveryType !== "delivery" || effectiveShippingCost === 0 ? (
+                          <span className="badge badge-success" style={{ fontSize: "11px", padding: "2px 6px" }}>GRATIS</span>
+                        ) : (
+                          <span>+<AnimatedCurrencyValue value={effectiveShippingCost} /></span>
+                        )}
+                      </strong>
+                    </div>
                   )}
                   {isPaymentStep && paymentFeeAmount > 0 && <div className="cart-footer-fee-row"><span>Comisión tarjeta ({cardFeePercent}%)</span><strong>+<AnimatedCurrencyValue value={paymentFeeAmount} /></strong></div>}
                   <div className="cart-footer-total-row"><span>Total</span><strong><AnimatedCurrencyValue value={displayedTotal} /></strong></div>

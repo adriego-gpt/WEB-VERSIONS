@@ -1,7 +1,7 @@
 import { isValidEmail } from '../../utils';
 import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import { motion as Motion, AnimatePresence } from 'framer-motion';
-import { RotateCcw, Plus, Package, UserRound, Navigation, ShieldCheck, Search, PencilLine, Mail, Copy, Trash2, CheckCircle2, Star, Link, Eye, AlertCircle, AlertTriangle, Play, RefreshCw, Upload, Image as ImageIcon, MapPin, SearchX, Clock, CreditCard, Tag, Tags, X, Image, ChevronDown, SlidersHorizontal, ZoomIn, MessageCircle } from 'lucide-react';
+import { RotateCcw, Plus, Package, UserRound, Navigation, ShieldCheck, Search, PencilLine, Mail, Copy, Trash2, CheckCircle2, Star, Link, Eye, AlertCircle, AlertTriangle, Play, RefreshCw, Upload, Image as ImageIcon, MapPin, SearchX, Clock, CreditCard, Tag, Tags, X, Image, ChevronDown, SlidersHorizontal, ZoomIn, MessageCircle, ExternalLink } from 'lucide-react';
 import { ShowcaseProductCard } from "../catalog/ShowcaseProductCard";
 import { CatalogProductCard } from "../catalog/CatalogProductCard";
 import { ProductDraftPreview } from '../products/ProductDraftPreview';
@@ -26,7 +26,7 @@ import {
 import {
   sanitizeLine, currency,
   normalizeOfferDiscountMode, normalizeImageSource, formatAdminTimestamp,
-  normalizeSearchText
+  normalizeSearchText, getCourierTrackingUrl
 } from '../../utils';
 
 
@@ -1266,7 +1266,107 @@ export function AdminPanelModal({
                       </div>
                     </div>
 
-                    <div className="admin-full"><button className="btn btn-primary" onClick={saveStoreConfiguration}><ShieldCheck size={16} />Guardar portada y branding</button></div>
+                    <div className="admin-full" style={{ marginTop: 16 }}>
+                      <div className="card" style={{ padding: "16px", background: "rgba(0,0,0,0.02)", border: "1px solid rgba(0,0,0,0.06)", borderRadius: "12px" }}>
+                        <h5 style={{ margin: "0 0 4px", fontSize: 18, display: "flex", alignItems: "center", gap: "8px" }}>
+                          <Truck size={18} /> Tarifas de Envío y Despacho
+                        </h5>
+                        <p className="helper-text" style={{ margin: "0 0 14px" }}>Configura los costos de envío a domicilio y la meta para ofrecer Envío Gratis.</p>
+                        
+                        <div className="settings-grid">
+                          <label className="admin-live-toggle admin-full" style={{ margin: "4px 0 10px" }}>
+                            <input
+                              className="checkbox"
+                              type="checkbox"
+                              checked={storeDraft.shippingSettings?.shippingEnabled !== false}
+                              onChange={(event) => setStoreDraft((previous) => ({
+                                ...previous,
+                                shippingSettings: {
+                                  ...previous.shippingSettings,
+                                  shippingEnabled: event.target.checked,
+                                },
+                              }))}
+                            />
+                            <span>Cobrar costo de envío a domicilio</span>
+                          </label>
+
+                          <label className="entity-field">
+                            <span>Ciudad local de despacho</span>
+                            <input
+                              className="input"
+                              placeholder="Ej. Quito"
+                              value={storeDraft.shippingSettings?.localShippingCity || "Quito"}
+                              onChange={(event) => setStoreDraft((previous) => ({
+                                ...previous,
+                                shippingSettings: {
+                                  ...previous.shippingSettings,
+                                  localShippingCity: event.target.value,
+                                },
+                              }))}
+                            />
+                          </label>
+
+                          <label className="entity-field">
+                            <span>Costo de envío local ($)</span>
+                            <input
+                              className="input"
+                              type="number"
+                              step="0.25"
+                              min="0"
+                              placeholder="3.50"
+                              value={storeDraft.shippingSettings?.localShippingCost ?? 3.5}
+                              onChange={(event) => setStoreDraft((previous) => ({
+                                ...previous,
+                                shippingSettings: {
+                                  ...previous.shippingSettings,
+                                  localShippingCost: event.target.value,
+                                },
+                              }))}
+                            />
+                          </label>
+
+                          <label className="entity-field">
+                            <span>Costo de envío nacional ($)</span>
+                            <input
+                              className="input"
+                              type="number"
+                              step="0.25"
+                              min="0"
+                              placeholder="5.50"
+                              value={storeDraft.shippingSettings?.nationalShippingCost ?? 5.5}
+                              onChange={(event) => setStoreDraft((previous) => ({
+                                ...previous,
+                                shippingSettings: {
+                                  ...previous.shippingSettings,
+                                  nationalShippingCost: event.target.value,
+                                },
+                              }))}
+                            />
+                          </label>
+
+                          <label className="entity-field">
+                            <span>Monto mínimo para Envío Gratis ($)</span>
+                            <input
+                              className="input"
+                              type="number"
+                              step="1"
+                              min="0"
+                              placeholder="50.00"
+                              value={storeDraft.shippingSettings?.freeShippingThreshold ?? 50}
+                              onChange={(event) => setStoreDraft((previous) => ({
+                                ...previous,
+                                shippingSettings: {
+                                  ...previous.shippingSettings,
+                                  freeShippingThreshold: event.target.value,
+                                },
+                              }))}
+                            />
+                          </label>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="admin-full"><button className="btn btn-primary" onClick={saveStoreConfiguration}><ShieldCheck size={16} />Guardar ajustes y tarifas</button></div>
                   </div>
                 </div>
               </div>
@@ -1574,7 +1674,21 @@ export function AdminPanelModal({
                                   />
                                 </label>
                                 <label className="entity-field">
-                                  <span>Guía de rastreo</span>
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                    <span>Guía de rastreo</span>
+                                    {effectiveGuide && getCourierTrackingUrl(effectiveCourier, effectiveGuide) && (
+                                      <a
+                                        href={getCourierTrackingUrl(effectiveCourier, effectiveGuide)}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="admin-inline-track-link"
+                                        style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '0.8rem', color: 'var(--color-primary)' }}
+                                      >
+                                        <ExternalLink size={12} />
+                                        <span>Rastrear online</span>
+                                      </a>
+                                    )}
+                                  </div>
                                   <input
                                     className="input"
                                     placeholder="Número de guía"

@@ -303,6 +303,16 @@ function sanitizeStoreSettings(rawSettings = {}) {
       abandonedCartDelayMinutes: Math.floor(clampNumber(automationSource.abandonedCartDelayMinutes, 5, 1440, 45)),
       abandonedCartTemplate: sanitizeParagraph(automationSource.abandonedCartTemplate || DEFAULT_ABANDONED_CART_TEMPLATE).slice(0, 600) || DEFAULT_ABANDONED_CART_TEMPLATE,
     },
+    shippingSettings: (() => {
+      const src = rawSettings?.shippingSettings && typeof rawSettings.shippingSettings === "object" ? rawSettings.shippingSettings : {};
+      return {
+        shippingEnabled: src.shippingEnabled !== false,
+        freeShippingThreshold: clampNumber(src.freeShippingThreshold, 0, 10000, 50),
+        localShippingCost: clampNumber(src.localShippingCost, 0, 500, 3.5),
+        nationalShippingCost: clampNumber(src.nationalShippingCost, 0, 500, 5.5),
+        localShippingCity: normalizeLine(src.localShippingCity || "Quito").slice(0, 60) || "Quito",
+      };
+    })(),
     heroSlides,
   };
 }

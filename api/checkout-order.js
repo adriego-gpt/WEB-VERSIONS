@@ -35,6 +35,7 @@ import {
   normalizePaymentMethod,
 } from "../src/domain/orders/payment.js";
 import { getReadyBankAccounts } from "../src/domain/contact/paymentSettings.js";
+import { calculateShippingFee } from "../src/domain/orders/shippingSettings.js";
 
 const USER_COOKIE_NAME = "adriego_user_session";
 const CART_ITEM_LIMIT = 25;
@@ -245,6 +246,7 @@ function buildOrderText(order) {
     `• *Subtotal:* ${currency(order.subtotal)}`,
     order.discountAmount > 0 ? `• *Descuento:* -${currency(order.discountAmount)}` : "",
     order.couponCode ? `• *Cupón aplicado:* ${order.couponCode}` : "",
+    order.shippingCost > 0 ? `• *Costo de envío (${order.shippingLabel || "Envío"}):* +${currency(order.shippingCost)}` : (order.deliveryType === "delivery" ? `• *Envío:* GRATIS` : ""),
     `• *Forma de pago:* ${methodSummary}`,
     order.paymentFeeAmount > 0 ? `• *Comisión tarjeta (${order.paymentFeePercent}%):* +${currency(order.paymentFeeAmount)}` : "",
     order.paymentProof ? `• *Comprobante:* Adjuntado en la web` : "",
@@ -403,7 +405,18 @@ export default async function handler(req, res) {
 
     const subtotal = safeCart.reduce((total, item) => total + item.price * item.quantity, 0);
     const discountAmount = couponEvaluation.ok ? Number(couponEvaluation.discountAmount) || 0 : 0;
-    const paymentBaseTotal = couponEvaluation.ok ? Number(couponEvaluation.total) || subtotal : subtotal;
+    const discountedSubtotal = couponEvaluation.ok ? Number(couponEvaluation.total) || subtotal : subtotal;
+
+    const shippingSettings = draft.storeSettings?.shippingSettings || {};
+    const shippingCalculation = calculateShippingFee({
+      subtotal: discountedSubtotal,
+      deliveryType: deliveryState.delivery.deliveryType,
+      deliveryCity: deliveryState.delivery.deliveryCity,
+      shippingSettings,
+    });
+    const shippingCost = shippingCalculation.shippingCost;
+    const paymentBaseTotal = Number((discountedSubtotal + shippingCost).toFixed(2));
+
     const paymentSettings = draft.contactSettings?.paymentSettings || {};
     const readyBankAccounts = getReadyBankAccounts(paymentSettings);
     const transferReady = readyBankAccounts.length > 0;
@@ -454,6 +467,8 @@ export default async function handler(req, res) {
       createdAt: nowIso,
       subtotal,
       discountAmount,
+      shippingCost,
+      shippingLabel: shippingCost > 0 ? (shippingCalculation.reason === "local" ? "Envío local" : "Envío nacional") : (deliveryState.delivery.deliveryType === "delivery" ? "Envío gratis" : "Retiro en tienda"),
       total,
       paymentMethod,
       paymentMethodLabel: getPaymentMethodLabel(paymentMethod),

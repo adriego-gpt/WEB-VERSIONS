@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from "react";
-import { X, Copy, MessageCircle, Search, ZoomIn, Truck, MapPin, Check } from "lucide-react";
+import { X, Copy, MessageCircle, Search, ZoomIn, Truck, MapPin, Check, ExternalLink } from "lucide-react";
 import { motion as Motion, AnimatePresence } from "framer-motion";
 import { formatOrderDate, normalizeOrderStatusForOrder } from "../../domain/orders/status";
 import { currency } from "../../utils/currency";
 import { normalizeImageSource } from "../../utils/fileUpload";
+import { getCourierTrackingUrl } from "../../utils/courierTracking";
 import { FALLBACK_IMAGE } from "../../constants";
 import { OrderStatusProgress } from "./OrderStatusProgress";
 import { OrderReferenceStrip } from "./OrderReferenceStrip";
@@ -144,23 +145,36 @@ export function OrdersModal({
                               <strong className="customer-order-guide-code">{effectiveGuide}</strong>
                             </div>
                           </div>
-                          <button
-                            type="button"
-                            className="btn btn-outline customer-order-copy-guide-btn"
-                            onClick={() => handleCopyGuideNumber(order.id, effectiveGuide)}
-                          >
-                            {copiedGuideId === order.id ? (
-                              <>
-                                <Check size={13} />
-                                <span>¡Copiada!</span>
-                              </>
-                            ) : (
-                              <>
-                                <Copy size={13} />
-                                <span>Copiar guía</span>
-                              </>
+                          <div className="customer-order-guide-actions">
+                            <button
+                              type="button"
+                              className="btn btn-outline customer-order-copy-guide-btn"
+                              onClick={() => handleCopyGuideNumber(order.id, effectiveGuide)}
+                            >
+                              {copiedGuideId === order.id ? (
+                                <>
+                                  <Check size={13} />
+                                  <span>¡Copiada!</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Copy size={13} />
+                                  <span>Copiar</span>
+                                </>
+                              )}
+                            </button>
+                            {getCourierTrackingUrl(effectiveCourier, effectiveGuide) && (
+                              <a
+                                href={getCourierTrackingUrl(effectiveCourier, effectiveGuide)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="btn btn-primary customer-order-track-btn"
+                              >
+                                <ExternalLink size={13} />
+                                <span>Rastrear</span>
+                              </a>
                             )}
-                          </button>
+                          </div>
                         </div>
                       ) : (
                         <div className="customer-order-pending-guide-note">

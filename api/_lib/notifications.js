@@ -135,6 +135,11 @@ export function formatTelegramOrderMessage(order = {}) {
   if (Number(order.discountAmount || 0) > 0) {
     lines.push(`🎟️ *Descuento Aplicado:* -${currency(order.discountAmount)}${order.couponCode ? ` (Cupón: \`${escapeTelegramMarkdown(order.couponCode)}\`)` : ""}`);
   }
+  if (Number(order.shippingCost || 0) > 0) {
+    lines.push(`🚚 *Costo de Envío (${escapeTelegramMarkdown(order.shippingLabel || "Envío")}):* +${currency(order.shippingCost)}`);
+  } else if (order.deliveryType === "delivery") {
+    lines.push(`🚚 *Envío:* GRATIS`);
+  }
   if (Number(order.paymentFeeAmount || 0) > 0) {
     lines.push(`💳 *Comisión Tarjeta (${order.paymentFeePercent || 6}%):* +${currency(order.paymentFeeAmount)}`);
   }
