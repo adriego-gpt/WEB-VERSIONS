@@ -1,7 +1,7 @@
 import { isValidEmail } from '../../utils';
 import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import { motion as Motion, AnimatePresence } from 'framer-motion';
-import { RotateCcw, Plus, Package, UserRound, Navigation, ShieldCheck, Search, PencilLine, Mail, Copy, Trash2, CheckCircle2, Star, Link, Eye, AlertCircle, AlertTriangle, Play, RefreshCw, Upload, Image as ImageIcon, MapPin, SearchX, Clock, CreditCard, Tag, Tags, X, Image, ChevronDown, SlidersHorizontal, ZoomIn } from 'lucide-react';
+import { RotateCcw, Plus, Package, UserRound, Navigation, ShieldCheck, Search, PencilLine, Mail, Copy, Trash2, CheckCircle2, Star, Link, Eye, AlertCircle, AlertTriangle, Play, RefreshCw, Upload, Image as ImageIcon, MapPin, SearchX, Clock, CreditCard, Tag, Tags, X, Image, ChevronDown, SlidersHorizontal, ZoomIn, MessageCircle } from 'lucide-react';
 import { ShowcaseProductCard } from "../catalog/ShowcaseProductCard";
 import { CatalogProductCard } from "../catalog/CatalogProductCard";
 import { ProductDraftPreview } from '../products/ProductDraftPreview';
