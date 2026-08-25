@@ -56,6 +56,7 @@ export function buildAuthValidation(mode = "login", form = AUTH_FORM_DEFAULTS) {
   const password = String(form.password || "").slice(0, AUTH_FIELD_LIMITS.password);
   const confirmPassword = String(form.confirmPassword || "").slice(0, AUTH_FIELD_LIMITS.password);
   const resetToken = sanitizeLine(form.resetToken || "").slice(0, AUTH_FIELD_LIMITS.resetToken);
+  const termsAccepted = form.termsAccepted !== false;
   const passwordChecks = getPasswordChecks(password);
   const fieldErrors = {};
 
@@ -70,6 +71,9 @@ export function buildAuthValidation(mode = "login", form = AUTH_FORM_DEFAULTS) {
       fieldErrors.confirmPassword = "Confirma tu contrasena.";
     } else if (confirmPassword !== password) { // eslint-disable-line security/detect-possible-timing-attacks
       fieldErrors.confirmPassword = "Las contrasenas no coinciden.";
+    }
+    if (!termsAccepted) {
+      fieldErrors.termsAccepted = "Debes aceptar los términos y condiciones y políticas de privacidad.";
     }
   } else if (isForgot) {
     if (!isValidEmail(email)) fieldErrors.email = "Ingresa un correo electronico valido.";
@@ -95,10 +99,11 @@ export function buildAuthValidation(mode = "login", form = AUTH_FORM_DEFAULTS) {
     || fieldErrors.resetToken
     || fieldErrors.password
     || fieldErrors.confirmPassword
+    || fieldErrors.termsAccepted
     || "";
   const hasAnyFieldError = Object.keys(fieldErrors).length > 0;
   const hasBaseSubmitFields = isRegister
-    ? Boolean(name && email && password && confirmPassword)
+    ? Boolean(name && email && password && confirmPassword && termsAccepted)
     : isForgot
       ? Boolean(email)
       : isReset
@@ -122,6 +127,7 @@ export function buildAuthValidation(mode = "login", form = AUTH_FORM_DEFAULTS) {
       username,
       password,
       confirmPassword,
+      termsAccepted,
     },
     forgotPayload: {
       email,

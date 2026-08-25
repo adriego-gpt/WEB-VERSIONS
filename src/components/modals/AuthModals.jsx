@@ -17,6 +17,7 @@ export function UserAuthModal({
   onFieldChange,
   onTogglePasswordVisibility,
   onSubmit,
+  onOpenLegal,
 }) {
   const isRegister = mode === "register";
   const isForgot = mode === "forgot";
@@ -312,6 +313,49 @@ export function UserAuthModal({
                   {showConfirmPasswordError && <p id="auth-confirm-password-error" className="auth-field-error">{fieldErrors.confirmPassword}</p>}
                 </div>
               )}
+
+              {isRegister && (
+                <div className="auth-legal-consent-row">
+                  <label className="auth-legal-checkbox-label">
+                    <input
+                      type="checkbox"
+                      className="checkbox"
+                      checked={form.termsAccepted !== false}
+                      onChange={(event) => onFieldChange("termsAccepted", event.target.checked)}
+                      disabled={busy}
+                    />
+                    <span className="auth-legal-text">
+                      He leído y acepto los{" "}
+                      <button
+                        type="button"
+                        className="link-btn auth-legal-link"
+                        onClick={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          onOpenLegal?.("terms");
+                        }}
+                      >
+                        Términos y condiciones
+                      </button>{" "}
+                      y las{" "}
+                      <button
+                        type="button"
+                        className="link-btn auth-legal-link"
+                        onClick={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          onOpenLegal?.("privacy");
+                        }}
+                      >
+                        Políticas de privacidad y protección de datos
+                      </button>.
+                    </span>
+                  </label>
+                  {fieldErrors.termsAccepted && (
+                    <p className="auth-field-error" style={{ marginTop: 4 }}>{fieldErrors.termsAccepted}</p>
+                  )}
+                </div>
+              )}
             </div>
 
             {isLogin && (
@@ -342,6 +386,35 @@ export function UserAuthModal({
                   : (isRegister ? "Crear mi cuenta" : isForgot ? "Enviar enlace" : isReset ? "Guardar nueva contraseña" : "Entrar a mi cuenta")}
               </button>
             </div>
+
+            {isLogin && (
+              <p className="auth-login-legal-note">
+                Al iniciar sesión, aceptas nuestros{" "}
+                <button
+                  type="button"
+                  className="link-btn auth-legal-link"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    onOpenLegal?.("terms");
+                  }}
+                >
+                  Términos y condiciones
+                </button>{" "}
+                y las{" "}
+                <button
+                  type="button"
+                  className="link-btn auth-legal-link"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    onOpenLegal?.("privacy");
+                  }}
+                >
+                  Políticas de privacidad y protección de datos
+                </button>.
+              </p>
+            )}
 
             <div className="auth-secondary-row">
               <button

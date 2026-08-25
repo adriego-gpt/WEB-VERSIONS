@@ -35,7 +35,7 @@ export function LegalModal({
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
-        className="modal-backdrop"
+        className="modal-backdrop modal-backdrop-priority"
         onClick={onClose}
       >
         <Motion.div

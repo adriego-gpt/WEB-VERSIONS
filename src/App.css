@@ -6361,6 +6361,58 @@ img {
   text-decoration-thickness: 1px;
 }
 
+.auth-legal-consent-row {
+  margin-top: 4px;
+  display: grid;
+  gap: 4px;
+}
+
+.auth-legal-checkbox-label {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.auth-legal-checkbox-label .checkbox {
+  margin-top: 2.5px;
+  flex-shrink: 0;
+  accent-color: #111827;
+  cursor: pointer;
+  width: 16px;
+  height: 16px;
+}
+
+.auth-legal-text {
+  font-size: 12.5px;
+  line-height: 1.52;
+  color: #4b5563;
+}
+
+.auth-legal-link {
+  color: #111827;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2.5px;
+  display: inline;
+  font-size: inherit;
+  cursor: pointer;
+  transition: color var(--time-fast) var(--ease-standard);
+}
+
+.auth-legal-link:hover {
+  color: var(--brand-primary, #b8860b);
+}
+
+.auth-login-legal-note {
+  margin: 2px 0 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: #6b7280;
+  text-align: center;
+}
+
 .auth-token-note {
   margin: 0;
   padding: 10px 12px;

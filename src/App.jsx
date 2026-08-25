@@ -7585,6 +7585,7 @@ export default function App() {
               onFieldChange={handleAuthFieldChange}
               onTogglePasswordVisibility={() => setAuthPasswordVisible((previous) => !previous)}
               onSubmit={handleUserAuthSubmit}
+              onOpenLegal={(tab) => setLegalModalState({ open: true, tab: tab || "terms" })}
             />
           )}
 

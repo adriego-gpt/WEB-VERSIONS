@@ -10,6 +10,7 @@ export const AUTH_FORM_DEFAULTS = Object.freeze({
   password: "",
   confirmPassword: "",
   resetToken: "",
+  termsAccepted: true,
 });
 
 export const AUTH_FIELD_LIMITS = Object.freeze({
