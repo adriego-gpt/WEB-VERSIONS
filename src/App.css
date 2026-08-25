@@ -14513,6 +14513,45 @@ body,
   margin-bottom: 12px;
 }
 
+.order-success-instruction-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  background: #f0fdf4;
+  border: 1px solid rgba(22, 163, 74, 0.2);
+  border-radius: 16px;
+  padding: 12px 14px;
+  text-align: left;
+  margin-bottom: 16px;
+}
+
+.order-success-instruction-icon {
+  color: #16a34a;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.order-success-instruction-content strong {
+  display: block;
+  font-size: 13px;
+  color: #15803d;
+  margin-bottom: 2px;
+}
+
+.order-success-instruction-content p {
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: #166534;
+  margin: 0;
+}
+
+.order-success-instruction-content u {
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 2px;
+  font-weight: 600;
+}
+
+/* Keep old tip-card styles for backwards compatibility */
 .order-success-tip-card {
   display: flex;
   align-items: flex-start;
@@ -14556,24 +14595,32 @@ body,
   gap: 8px;
 }
 
+/* The WhatsApp button — works as both <button> and <a> */
 .order-success-wa-btn {
-  min-height: 48px;
+  min-height: 50px;
   background: #25d366;
   color: #ffffff;
   border: 0;
-  font-size: 14.5px;
+  font-size: 15px;
   font-weight: 700;
   border-radius: 16px;
   justify-content: center;
   gap: 8px;
   box-shadow: 0 10px 22px rgba(37, 211, 102, 0.32);
   transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+  display: flex;
+  align-items: center;
+  text-decoration: none;
+  cursor: pointer;
+  padding: 0 20px;
 }
 
 .order-success-wa-btn:hover {
   background: #1ebe5d;
   transform: translateY(-2px);
   box-shadow: 0 14px 28px rgba(37, 211, 102, 0.4);
+  color: #ffffff;
+  text-decoration: none;
 }
 
 .order-success-orders-btn {
@@ -14584,5 +14631,4 @@ body,
   gap: 7px;
   border-color: rgba(0, 0, 0, 0.12);
 }
-
 

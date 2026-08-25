@@ -175,8 +175,6 @@ import {
   buildWhatsAppLinkFromBase,
   launchExternalUrl,
   launchWhatsAppUrl,
-  preOpenExternalWindow,
-  closeExternalWindow,
   copyTextToClipboard,
   normalizeImageSource,
   fileToDataUrl,
@@ -2176,7 +2174,7 @@ export default function App() {
   const [authPasswordVisible, setAuthPasswordVisible] = useState(false);
   const [authResetEmailLocked, setAuthResetEmailLocked] = useState(false);
   const [legalModalState, setLegalModalState] = useState({ open: false, tab: "exchanges" });
-  const [orderSuccessModal, setOrderSuccessModal] = useState({ open: false, order: null, whatsappUrl: "", preferredWindow: null });
+  const [orderSuccessModal, setOrderSuccessModal] = useState({ open: false, order: null, whatsappUrl: "" });
   const [postAuthDestination, setPostAuthDestination] = useState(null);
   const [authForm, setAuthForm] = useState(() => ({ ...AUTH_FORM_DEFAULTS }));
   const [profileDraft, setProfileDraft] = useState({ name: "", lastName: "", idNumber: "", phone: "", email: "", shippingAddress: "", addressBook: [] });
@@ -7616,18 +7614,19 @@ export default function App() {
       </ErrorBoundary>
 
       {orderSuccessModal.open && orderSuccessModal.order && (
-        <ErrorBoundary onReset={() => setOrderSuccessModal({ open: false, order: null, whatsappUrl: "", preferredWindow: null })}>
+        <ErrorBoundary onReset={() => setOrderSuccessModal({ open: false, order: null, whatsappUrl: "" })}>
           <Suspense fallback={null}>
             <OrderSuccessRedirectModal
               open={orderSuccessModal.open}
               order={orderSuccessModal.order}
               whatsappUrl={orderSuccessModal.whatsappUrl}
+              isMobile={isMobileViewport}
               onClose={() => {
-                setOrderSuccessModal({ open: false, order: null, whatsappUrl: "", preferredWindow: null });
+                setOrderSuccessModal({ open: false, order: null, whatsappUrl: "" });
                 setShowOrdersModal(true);
               }}
               onOpenOrders={() => {
-                setOrderSuccessModal({ open: false, order: null, whatsappUrl: "", preferredWindow: null });
+                setOrderSuccessModal({ open: false, order: null, whatsappUrl: "" });
                 setShowOrdersModal(true);
               }}
               onLaunchWhatsApp={handleLaunchOrderSuccessWhatsApp}

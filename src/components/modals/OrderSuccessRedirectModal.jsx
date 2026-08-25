@@ -6,44 +6,45 @@ import {
   ArrowRight,
   Copy,
   Check,
-  PackageCheck,
   Sparkles,
   ExternalLink,
+  Send,
 } from "lucide-react";
 import { motion as Motion, AnimatePresence } from "framer-motion";
 import { currency } from "../../utils/currency";
 import { copyTextToClipboard } from "../../utils/clipboard";
 
-const COUNTDOWN_SECONDS = 3;
-
 export function OrderSuccessRedirectModal({
   open,
   order,
   whatsappUrl,
+  isMobile,
   onClose,
   onOpenOrders,
   onLaunchWhatsApp,
 }) {
   const [copiedCode, setCopiedCode] = useState(false);
-  const [isLaunched, setIsLaunched] = useState(false);
   const hasAutoLaunchedRef = useRef(false);
 
   useEffect(() => {
     if (!open) {
-      setIsLaunched(false);
       setCopiedCode(false);
       hasAutoLaunchedRef.current = false;
       return undefined;
     }
 
-    // Auto-launch WhatsApp immediately during the entrance animation (no blank page delay)
-    const launchTimer = window.setTimeout(() => {
-      if (!hasAutoLaunchedRef.current) {
-        hasAutoLaunchedRef.current = true;
-        setIsLaunched(true);
-        onLaunchWhatsApp?.();
-      }
-    }, 400);
+    // On DESKTOP only: auto-launch WhatsApp via window.open (works without blank pages on desktop).
+    // On MOBILE: do NOT auto-launch. The user taps the native <a href> button instead,
+    // which the browser handles natively without creating about:blank tabs.
+    if (!isMobile && !hasAutoLaunchedRef.current) {
+      const launchTimer = window.setTimeout(() => {
+        if (!hasAutoLaunchedRef.current) {
+          hasAutoLaunchedRef.current = true;
+          onLaunchWhatsApp?.();
+        }
+      }, 600);
+      return () => window.clearTimeout(launchTimer);
+    }
 
     const handleKeyDown = (event) => {
       if (event.key === "Escape") {
@@ -51,20 +52,10 @@ export function OrderSuccessRedirectModal({
       }
     };
     window.addEventListener("keydown", handleKeyDown);
-
-    return () => {
-      window.clearTimeout(launchTimer);
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [open, onLaunchWhatsApp, onClose]);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [open, isMobile, onLaunchWhatsApp, onClose]);
 
   if (!open || !order) return null;
-
-  const handleManualLaunch = () => {
-    hasAutoLaunchedRef.current = true;
-    setIsLaunched(true);
-    onLaunchWhatsApp?.();
-  };
 
   const handleCopyCode = async () => {
     if (!order.code) return;
@@ -73,6 +64,11 @@ export function OrderSuccessRedirectModal({
       setCopiedCode(true);
       window.setTimeout(() => setCopiedCode(false), 2000);
     }
+  };
+
+  const handleDesktopRelaunch = () => {
+    hasAutoLaunchedRef.current = true;
+    onLaunchWhatsApp?.();
   };
 
   return (
@@ -122,9 +118,9 @@ export function OrderSuccessRedirectModal({
                 ¡ORDEN REGISTRADA!
               </span>
             </div>
-            <h3 className="order-success-title">Conectando con WhatsApp</h3>
+            <h3 className="order-success-title">¡Pedido confirmado!</h3>
             <p className="order-success-subtitle">
-              Para coordinar el pago y despacho inmediato de tus prendas.
+              Tu pedido fue registrado exitosamente. Solo falta enviar el mensaje en WhatsApp para coordinarlo.
             </p>
           </div>
 
@@ -153,36 +149,46 @@ export function OrderSuccessRedirectModal({
             </div>
           </div>
 
-          {/* Active Connection Note */}
-          <div className="order-success-launched-note">
-            <CheckCircle2 size={16} />
-            <span>Abriendo chat oficial de WhatsApp con tu orden...</span>
-          </div>
-
-          {/* Critical Tip Callout */}
-          <div className="order-success-tip-card">
-            <div className="order-success-tip-icon">
-              <PackageCheck size={20} />
+          {/* Instruction Callout */}
+          <div className="order-success-instruction-card">
+            <div className="order-success-instruction-icon">
+              <Send size={18} />
             </div>
-            <div className="order-success-tip-content">
-              <strong>Paso final en WhatsApp:</strong>
+            <div className="order-success-instruction-content">
+              <strong>Último paso:</strong>
               <p>
-                Al abrirse el chat, <u>presiona el botón de enviar (flecha verde)</u> con el mensaje que ya dejamos preparado para ti.
+                Al abrir WhatsApp verás un mensaje listo. Solo presiona <u>Enviar</u> y listo, ¡nosotros nos encargamos del resto!
               </p>
             </div>
           </div>
 
           {/* Actions */}
           <div className="order-success-actions">
-            <button
-              type="button"
-              className="btn btn-primary order-success-wa-btn"
-              onClick={handleManualLaunch}
-            >
-              <MessageCircle size={18} />
-              <span>Abrir WhatsApp nuevamente</span>
-              <ArrowRight size={16} />
-            </button>
+            {isMobile ? (
+              /* MOBILE: Native <a> link — the browser opens WhatsApp natively 
+                 without creating a blank tab. The store tab stays intact. */
+              <a
+                href={whatsappUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="btn btn-primary order-success-wa-btn"
+              >
+                <CheckCircle2 size={18} />
+                <span>Entendido, ir a WhatsApp</span>
+                <ArrowRight size={16} />
+              </a>
+            ) : (
+              /* DESKTOP: Button that triggers window.open (works fine on desktop) */
+              <button
+                type="button"
+                className="btn btn-primary order-success-wa-btn"
+                onClick={handleDesktopRelaunch}
+              >
+                <CheckCircle2 size={18} />
+                <span>Abrir WhatsApp</span>
+                <ArrowRight size={16} />
+              </button>
+            )}
 
             <button
               type="button"
