@@ -319,7 +319,20 @@ function sanitizeOrderPatch(rawPatch = {}) {
   }
 
   if (rawPatch?.guideNumber != null) {
-    next.guideNumber = normalizeLine(rawPatch.guideNumber).slice(0, 80);
+    const rawGuide = normalizeLine(rawPatch.guideNumber).slice(0, 80);
+    if (rawGuide.includes(":") && !rawPatch?.courierName) {
+      const parts = rawGuide.split(":");
+      const extractedCourier = parts[0].trim().slice(0, 80);
+      const extractedGuide = parts.slice(1).join(":").trim().slice(0, 80);
+      if (extractedGuide) {
+        next.courierName = extractedCourier;
+        next.guideNumber = extractedGuide;
+      } else {
+        next.guideNumber = rawGuide;
+      }
+    } else {
+      next.guideNumber = rawGuide;
+    }
   }
 
   if (rawPatch?.courierName != null) {

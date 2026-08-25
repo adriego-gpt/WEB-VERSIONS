@@ -7344,10 +7344,31 @@ export default function App() {
 
   const updateOrderGuide = async (orderId, guideNumber) => {
     const safeGuideNumber = sanitizeLine(guideNumber);
-    setOrderHistory((previous) => previous.map((order) => (
-      order.id === orderId ? { ...order, guideNumber: safeGuideNumber } : order
-    )));
-    scheduleOrderPatchSync(orderId, { guideNumber: safeGuideNumber });
+    let safeCourierName = undefined;
+    let actualGuide = safeGuideNumber;
+
+    if (safeGuideNumber.includes(":")) {
+      const parts = safeGuideNumber.split(":");
+      const extractedCourier = sanitizeLine(parts[0]);
+      const extractedGuide = sanitizeLine(parts.slice(1).join(":"));
+      if (extractedGuide) {
+        safeCourierName = extractedCourier;
+        actualGuide = extractedGuide;
+      }
+    }
+
+    setOrderHistory((previous) => previous.map((order) => {
+      if (order.id !== orderId) return order;
+      return {
+        ...order,
+        guideNumber: actualGuide,
+        ...(safeCourierName ? { courierName: safeCourierName } : {}),
+      };
+    }));
+    scheduleOrderPatchSync(orderId, {
+      guideNumber: actualGuide,
+      ...(safeCourierName ? { courierName: safeCourierName } : {}),
+    });
   };
 
   const updateOrderCourier = async (orderId, courierName) => {

@@ -120,9 +120,22 @@ async function sendTelegramPhoto(token, chatId, photoSource, caption = "") {
 const PENDING_GUIDE_PROMPTS = new Map();
 
 async function applyOrderGuideRegistration(token, senderChatId, orderQuery, courierName, trackingNumber) {
-  const cleanNumber = String(trackingNumber || "").trim();
-  const cleanCourier = String(courierName || "Servientrega").trim();
-  const fullGuideDisplay = cleanCourier + ": " + cleanNumber;
+  let cleanNumber = String(trackingNumber || "").trim();
+  let cleanCourier = String(courierName || "").trim();
+
+  if (cleanNumber.includes(":")) {
+    const parts = cleanNumber.split(":");
+    const extractedCourier = parts[0].trim();
+    const extractedNumber = parts.slice(1).join(":").trim();
+    if (extractedNumber) {
+      cleanNumber = extractedNumber;
+      if (!cleanCourier || cleanCourier === "Servientrega") {
+        cleanCourier = extractedCourier;
+      }
+    }
+  }
+
+  if (!cleanCourier) cleanCourier = "Servientrega";
   let updatedOrder = null;
 
   try {
@@ -135,7 +148,8 @@ async function applyOrderGuideRegistration(token, senderChatId, orderQuery, cour
       if (targetIndex >= 0) {
         orders[targetIndex] = {
           ...orders[targetIndex],
-          guideNumber: fullGuideDisplay,
+          guideNumber: cleanNumber,
+          courierName: cleanCourier,
           courier: cleanCourier,
           status: "Enviado",
           updatedAt: new Date().toISOString(),

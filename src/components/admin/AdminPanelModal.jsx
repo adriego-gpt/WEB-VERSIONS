@@ -1418,6 +1418,14 @@ export function AdminPanelModal({
                       const stockReservationState = order?.stockReservation?.state === "released" ? "released" : "reserved";
                       const deliveryContactName = order.deliveryFullName || order.customerName || "Cliente";
                       const deliveryPhone = order.deliveryPhone || order.customerPhone || "";
+                      const rawGuide = String(order.guideNumber || "").trim();
+                      let effectiveCourier = order.courierName || order.courier || "";
+                      let effectiveGuide = rawGuide;
+                      if (rawGuide.includes(":") && !effectiveCourier) {
+                        const parts = rawGuide.split(":");
+                        effectiveCourier = parts[0].trim();
+                        effectiveGuide = parts.slice(1).join(":").trim();
+                      }
                       const isExpanded = expandedOrderId === order.id;
                       const detailsId = `admin-order-${order.id}-details`;
                       return (
@@ -1561,7 +1569,7 @@ export function AdminPanelModal({
                                   <input
                                     className="input"
                                     placeholder="Ej. Servientrega, LaarCourier, Cooperativa..."
-                                    value={order.courierName || ""}
+                                    value={effectiveCourier}
                                     onChange={(event) => updateOrderCourier?.(order.id, event.target.value)}
                                   />
                                 </label>
@@ -1570,7 +1578,7 @@ export function AdminPanelModal({
                                   <input
                                     className="input"
                                     placeholder="Número de guía"
-                                    value={order.guideNumber || ""}
+                                    value={effectiveGuide}
                                     onChange={(event) => updateOrderGuide(order.id, event.target.value)}
                                   />
                                 </label>

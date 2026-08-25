@@ -89,6 +89,14 @@ export function OrdersModal({
               const paymentMethodLabel = order.paymentMethodLabel
                 || (order.paymentMethod === "card_link" ? "Tarjeta mediante enlace de pago" : "Transferencia bancaria");
               const orderItems = Array.isArray(order.items) ? order.items : [];
+              const rawGuide = String(order.guideNumber || "").trim();
+              let effectiveCourier = order.courierName || order.courier || "";
+              let effectiveGuide = rawGuide;
+              if (rawGuide.includes(":") && !effectiveCourier) {
+                const parts = rawGuide.split(":");
+                effectiveCourier = parts[0].trim();
+                effectiveGuide = parts.slice(1).join(":").trim();
+              }
               return (
                 <div key={order.id} className="cart-item customer-order-card">
                   <div className="admin-toolbar customer-order-header">
@@ -117,7 +125,7 @@ export function OrdersModal({
                         </span>
                         <div className="customer-order-shipping-title-box">
                           <strong className="customer-order-shipping-title">
-                            {order.guideNumber ? "Información de despacho y guía" : "Entrega a domicilio"}
+                            {effectiveGuide ? "Información de despacho y guía" : "Entrega a domicilio"}
                           </strong>
                           <span className="customer-order-shipping-city">
                             {order.deliveryCity || "Envío nacional"}
@@ -125,21 +133,21 @@ export function OrdersModal({
                         </div>
                       </div>
 
-                      {order.guideNumber ? (
+                      {effectiveGuide ? (
                         <div className="customer-order-guide-box">
                           <div className="customer-order-guide-info">
                             <span className="customer-order-guide-courier">
-                              {order.courierName || "Courier de transporte"}
+                              {effectiveCourier || "Courier de transporte"}
                             </span>
                             <div className="customer-order-guide-number-row">
                               <span className="muted">Guía:</span>
-                              <strong className="customer-order-guide-code">{order.guideNumber}</strong>
+                              <strong className="customer-order-guide-code">{effectiveGuide}</strong>
                             </div>
                           </div>
                           <button
                             type="button"
                             className="btn btn-outline customer-order-copy-guide-btn"
-                            onClick={() => handleCopyGuideNumber(order.id, order.guideNumber)}
+                            onClick={() => handleCopyGuideNumber(order.id, effectiveGuide)}
                           >
                             {copiedGuideId === order.id ? (
                               <>
