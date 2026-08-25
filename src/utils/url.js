@@ -215,14 +215,22 @@ export function launchWhatsAppUrl(urlOrOptions = {}, launchOptions = {}) {
     }
   }
 
+  // Desktop: open in a named tab so repeated calls reuse the same tab.
+  // IMPORTANT: Do NOT pass "noopener" in the features string — many browsers
+  // return null when noopener is set, which would trigger the fallback path
+  // below and open the URL TWICE (once via window.open, once via location.assign).
   try {
-    const opened = window.open(safeUrl, "_blank", "noopener,noreferrer");
+    const opened = window.open(safeUrl, "adriego_whatsapp");
     if (opened) {
-      opened.opener = null;
+      try { opened.opener = null; } catch { /* cross-origin safe */ }
       return { launched: true, mode: "web-window", url: safeUrl };
     }
+    // window.open returned null but the tab was likely still created.
+    // Return success — do NOT fall through to location.assign.
+    return { launched: true, mode: "web-window", url: safeUrl };
   } catch {
-    // Continue with same-window fallback.
+    // window.open was blocked entirely (e.g. popup blocker).
+    // Only now fall back to same-window navigation.
   }
 
   try {
