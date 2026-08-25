@@ -35,6 +35,8 @@ export function CatalogProductCard({
   onEdit,
   onDelete,
 }) {
+  const [isSelectingSize, setIsSelectingSize] = useState(false);
+  const [justAddedSize, setJustAddedSize] = useState("");
   const [addedFeedback, setAddedFeedback] = useState(false);
   const resolvedSelection = getSelectionForColor(product, selection);
   const selectedColor = resolvedSelection.color;
@@ -63,6 +65,17 @@ export function CatalogProductCard({
     setTimeout(() => {
       setAddedFeedback(false);
     }, 1200);
+  };
+
+  const handleMainButtonClick = (event) => {
+    event.stopPropagation();
+    if (availableStock <= 0) return;
+    const isMobile = typeof window !== "undefined" && window.innerWidth <= 768;
+    if (isMobile) {
+      setIsSelectingSize(true);
+    } else {
+      handleAddToCart(event);
+    }
   };
 
   return (
@@ -153,7 +166,7 @@ export function CatalogProductCard({
               )}
             </div>
           </div>
-          <div className="product-card-variant-row">
+          <div className="product-card-variant-row mobile-hidden">
             <span className="product-card-variant-label">Talla <strong>{selectedSize}</strong></span>
             <div className="product-card-size-options" aria-label={`Tallas de ${product.name}`}>
               {visibleSizes.map((size) => {
@@ -184,41 +197,97 @@ export function CatalogProductCard({
               )}
             </div>
           </div>
-          <div className="product-card-stock-line">
+          <div className="product-card-stock-line mobile-hidden">
             <span className={`badge badge-${stockStatus.tone} ${isLowStock ? "badge-low-stock" : ""}`}>
               {isLowStock ? (availableStock === 1 ? "Última unidad" : `Últimas ${availableStock} unidades`) : stockStatus.label}
             </span>
           </div>
         </div>
 
-        <div className="product-card-actions">
-          <button
-            type="button"
-            className={`btn ${addedFeedback ? "btn-success" : "btn-primary"}`}
-            style={{
-              width: "100%",
-              opacity: availableStock <= 0 ? 0.6 : 1,
-              cursor: availableStock <= 0 ? "not-allowed" : (addedFeedback ? "default" : "pointer"),
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: "6px",
-              transition: "all 0.2s ease"
-            }}
-            onClick={handleAddToCart}
-            disabled={availableStock <= 0 || addedFeedback}
-          >
-            {availableStock <= 0 ? (
-              "Agotado"
-            ) : addedFeedback ? (
-              <>
-                <Check size={16} /> ¡Agregado!
-              </>
-            ) : (
-              "Agregar"
-            )}
-          </button>
-        </div>
+        {isSelectingSize ? (
+          <div className="quick-size-picker" onClick={(e) => e.stopPropagation()}>
+            <div className="quick-size-header">
+              <span className="quick-size-title">Talla para <strong>{selectedColor}</strong>:</span>
+              <button
+                type="button"
+                className="quick-size-close-btn"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setIsSelectingSize(false);
+                }}
+                aria-label="Cerrar selector de talla"
+              >
+                <X size={14} />
+              </button>
+            </div>
+            <div className="quick-size-chips">
+              {sizesForSelectedColor.map((size) => {
+                const sizeStock = getStockForVariant(product, selectedColor, size);
+                const isOutOfStock = sizeStock <= 0;
+                const isSelected = selectedSize === size;
+                const wasAdded = justAddedSize === size;
+                const isLocked = Boolean(justAddedSize);
+                return (
+                  <button
+                    key={size}
+                    type="button"
+                    className={`quick-size-chip${isSelected ? " selected" : ""}${isOutOfStock ? " out-of-stock" : ""}${wasAdded ? " added" : ""}`}
+                    disabled={isOutOfStock || isLocked}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      if (isOutOfStock || isLocked) return;
+                      setJustAddedSize(size);
+                      onChange(product.id, "size", size);
+                      onAddToCart(
+                        product,
+                        { sourceElement: event.currentTarget, image: currentImage },
+                        { color: selectedColor, size }
+                      );
+                      setTimeout(() => {
+                        setIsSelectingSize(false);
+                        setJustAddedSize("");
+                      }, 400);
+                    }}
+                    title={isOutOfStock ? `${size} (Agotado)` : `Agregar talla ${size}`}
+                    aria-label={`Seleccionar y agregar talla ${size}${isOutOfStock ? ", agotada" : ""}`}
+                  >
+                    {size}
+                    {wasAdded && <Check size={12} className="quick-size-check" />}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ) : (
+          <div className="product-card-actions">
+            <button
+              type="button"
+              className={`btn ${addedFeedback ? "btn-success" : "btn-primary"}`}
+              style={{
+                width: "100%",
+                opacity: availableStock <= 0 ? 0.6 : 1,
+                cursor: availableStock <= 0 ? "not-allowed" : (addedFeedback ? "default" : "pointer"),
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: "6px",
+                transition: "all 0.2s ease"
+              }}
+              onClick={handleMainButtonClick}
+              disabled={availableStock <= 0 || addedFeedback}
+            >
+              {availableStock <= 0 ? (
+                "Agotado"
+              ) : addedFeedback ? (
+                <>
+                  <Check size={16} /> ¡Agregado!
+                </>
+              ) : (
+                "Agregar"
+              )}
+            </button>
+          </div>
+        )}
       </div>
     </Motion.div>
   );
