@@ -3286,11 +3286,14 @@ export default function App() {
       window.history.replaceState({}, document.title, "/");
       setPathname("/");
     } else if (normalizedPathname === "/buscar") {
-      openCatalogSearch();
+      if (typeof openCatalogSearch === "function") {
+        openCatalogSearch();
+      }
       window.history.replaceState({}, document.title, "/");
       setPathname("/");
     }
-  }, [normalizedPathname, openCatalogSearch]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [normalizedPathname]);
 
   useEffect(() => {
     if (!catalogReady) return;
@@ -6832,7 +6835,7 @@ export default function App() {
   const ToastIcon = toastTone === "error"
     ? CircleX
     : (toastTone === "warning" ? Clock3 : (toastTone === "info" ? MessageCircle : BadgeCheck));
-  const knownDirectRoutes = new Set(["/", "/cuenta/restablecer", "/carrito", "/favoritos", "/pedidos", "/admin", "/buscar"]);
+  const knownDirectRoutes = new Set(["/", "/cuenta/restablecer", "/carrito", "/favoritos", "/pedidos", "/admin", "/buscar", "/error-preview"]);
   const routeNotFound = catalogReady
     && !knownDirectRoutes.has(normalizedPathname)
     && (!productRouteSlug || (catalogReady && !routedProduct));
@@ -6843,6 +6846,20 @@ export default function App() {
     }
     setPathname("/");
   };
+
+  if (normalizedPathname === "/error-preview") {
+    return (
+      <MotionConfig reducedMotion="user">
+        <ErrorBoundary onReset={returnHomeFromRoute}>
+          <div style={{ display: "none" }}>
+            {(() => {
+              throw new Error("Simulación controlada para previsualizar la pantalla Editorial Atelier.");
+            })()}
+          </div>
+        </ErrorBoundary>
+      </MotionConfig>
+    );
+  }
 
   if (routeNotFound) {
     return (
