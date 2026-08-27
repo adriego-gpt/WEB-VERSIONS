@@ -1177,6 +1177,12 @@ export function AdminPanelModal({
                     <input className="input" placeholder="Correo de contacto (opcional)" value={contactDraft.email || ""} onChange={(event) => setContactDraft((previous) => ({ ...previous, email: event.target.value }))} />
                     <input className="input" placeholder="Google Maps (maps.app.goo.gl/...)" value={contactDraft.mapsLink || ""} onChange={(event) => setContactDraft((previous) => ({ ...previous, mapsLink: event.target.value }))} />
                     <div className="admin-full">
+                      <input className="input" placeholder="URL de embed del mapa (Google Maps → Compartir → Incorporar → copiar src)" value={contactDraft.mapsEmbedUrl || ""} onChange={(event) => setContactDraft((previous) => ({ ...previous, mapsEmbedUrl: event.target.value }))} />
+                      <small className="muted" style={{ display: "block", marginTop: 4, fontSize: "0.78rem", lineHeight: 1.4 }}>
+                        Abre Google Maps → tu ubicación → Compartir → Incorporar un mapa → copia solo la URL del <code>src="..."</code>
+                      </small>
+                    </div>
+                    <div className="admin-full">
                       <textarea
                         className="textarea"
                         placeholder="Texto breve debajo de la ubicacion (como llegar)"

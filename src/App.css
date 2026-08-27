@@ -6816,6 +6816,13 @@ body,
   border: 1px solid rgba(255, 255, 255, 0.1);
 }
 
+.contact-map-card-nomap {
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  border-block: 1px solid rgba(255, 255, 255, 0.14);
+}
+
 .contact-map-embed {
   position: relative;
   width: 100%;

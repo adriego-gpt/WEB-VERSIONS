@@ -549,6 +549,7 @@ const defaultContactSettings = {
   phone: "",
   email: "",
   mapsLink: "",
+  mapsEmbedUrl: "",
   instagram: "https://instagram.com/adriegostore",
   facebook: "https://facebook.com/adriegostore",
   tiktok: "",
@@ -874,6 +875,25 @@ function normalizeProduct(rawProduct) {
   };
 }
 
+function normalizeMapsEmbedUrl(value = "") {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  try {
+    const parsed = new URL(raw);
+    // Only allow Google Maps embed domains for security
+    const isGoogleEmbed = (
+      (parsed.hostname === "www.google.com" || parsed.hostname === "google.com")
+      && parsed.pathname.startsWith("/maps/embed")
+    );
+    if (isGoogleEmbed && parsed.protocol === "https:") {
+      return parsed.toString();
+    }
+  } catch {
+    // invalid URL
+  }
+  return "";
+}
+
 function normalizeContactSettings(rawSettings = {}) {
   const rawPaymentSettings = rawSettings.paymentSettings && typeof rawSettings.paymentSettings === "object"
     ? rawSettings.paymentSettings
@@ -898,6 +918,7 @@ function normalizeContactSettings(rawSettings = {}) {
     phone: normalizePhoneNumber(rawSettings.phone != null ? rawSettings.phone : defaultContactSettings.phone),
     email: normalizeContactEmail(rawSettings.email != null ? rawSettings.email : defaultContactSettings.email),
     mapsLink: normalizeSafeUrl(rawSettings.mapsLink != null ? rawSettings.mapsLink : defaultContactSettings.mapsLink),
+    mapsEmbedUrl: normalizeMapsEmbedUrl(rawSettings.mapsEmbedUrl != null ? rawSettings.mapsEmbedUrl : defaultContactSettings.mapsEmbedUrl),
     instagram: normalizeSafeUrl(rawSettings.instagram != null ? rawSettings.instagram : defaultContactSettings.instagram),
     facebook: normalizeSafeUrl(rawSettings.facebook != null ? rawSettings.facebook : defaultContactSettings.facebook),
     tiktok: normalizeSafeUrl(rawSettings.tiktok != null ? rawSettings.tiktok : defaultContactSettings.tiktok),
@@ -921,6 +942,7 @@ function resolveContactSettingsWithServerFallback(serverSettings = {}, fallbackS
   return {
     ...normalizedServer,
     mapsLink: normalizedServer.mapsLink || normalizedFallback.mapsLink,
+    mapsEmbedUrl: normalizedServer.mapsEmbedUrl || normalizedFallback.mapsEmbedUrl,
   };
 }
 
@@ -6563,9 +6585,21 @@ export default function App() {
       });
       return;
     }
+    const rawEmbedUrl = sanitizeLine(contactDraft.mapsEmbedUrl || "");
+    const normalizedEmbedUrl = normalizeMapsEmbedUrl(rawEmbedUrl);
+    if (rawEmbedUrl && !normalizedEmbedUrl) {
+      setEditorError("La URL de embed del mapa no es válida. Debe ser una URL de Google Maps Embed (https://www.google.com/maps/embed?pb=...).");
+      setEditorMessage("");
+      setContactSyncFeedback({
+        tone: "error",
+        message: "No se pudo guardar: revisa la URL de embed del mapa.",
+      });
+      return;
+    }
     const nextContactSettings = normalizeContactSettings({
       ...contactDraft,
       mapsLink: normalizedMapsLink,
+      mapsEmbedUrl: normalizedEmbedUrl,
     });
     if (!nextContactSettings.whatsappNumber && !nextContactSettings.whatsappLink) {
       setEditorError("Configura al menos un numero o enlace de WhatsApp para permitir checkout.");
@@ -8172,12 +8206,12 @@ export default function App() {
               </div>
 
               {(publicContactSettings.address || publicContactSettings.mapsLink) && (
-                <div className="contact-map-card">
-                  {publicContactSettings.mapsLink && (
+                <div className={`contact-map-card${publicContactSettings.mapsEmbedUrl ? "" : " contact-map-card-nomap"}`}>
+                  {publicContactSettings.mapsEmbedUrl && (
                     <div className="contact-map-embed">
                       <iframe
                         title="Ubicación de la tienda"
-                        src={`https://www.google.com/maps?q=${encodeURIComponent(publicContactSettings.address || "Adriego Store")}&output=embed`}
+                        src={publicContactSettings.mapsEmbedUrl}
                         width="100%"
                         height="100%"
                         style={{ border: 0 }}

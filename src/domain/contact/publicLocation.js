@@ -13,5 +13,6 @@ export function resolvePublicLocation(contactSettings = {}, legacyPlaceholderAdd
     address: hasPublicAddress ? address : "",
     locationNote: hasLocation ? sanitizeParagraph(contactSettings.locationNote || "") : "",
     mapsLink,
+    mapsEmbedUrl: sanitizeLine(contactSettings.mapsEmbedUrl || ""),
   };
 }

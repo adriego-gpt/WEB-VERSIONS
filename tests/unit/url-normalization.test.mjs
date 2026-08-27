@@ -44,6 +44,7 @@ test("a configured map remains visible even without a public street address", ()
     {
       address: "",
       mapsLink: "https://maps.app.goo.gl/abc123",
+      mapsEmbedUrl: "",
       locationNote: "Atención con cita.",
     },
   );
