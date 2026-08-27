@@ -8172,18 +8172,34 @@ export default function App() {
               </div>
 
               {(publicContactSettings.address || publicContactSettings.mapsLink) && (
-                <div className="contact-location-panel">
-                  <span className="contact-location-icon" aria-hidden="true"><MapPin size={20} /></span>
-                  <div className="contact-location-copy">
-                    <strong>{publicContactSettings.address ? "Visítanos" : "Encuéntranos"}</strong>
-                    <p>{publicContactSettings.address || "Consulta nuestra ubicación en Google Maps."}</p>
-                  </div>
+                <div className="contact-map-card">
                   {publicContactSettings.mapsLink && (
-                    <a className="contact-location-link" href={publicContactSettings.mapsLink} target="_blank" rel="noopener noreferrer">
-                      Abrir mapa
-                      <ChevronRight size={17} />
-                    </a>
+                    <div className="contact-map-embed">
+                      <iframe
+                        title="Ubicación de la tienda"
+                        src={`https://www.google.com/maps?q=${encodeURIComponent(publicContactSettings.address || "Adriego Store")}&output=embed`}
+                        width="100%"
+                        height="100%"
+                        style={{ border: 0 }}
+                        allowFullScreen=""
+                        loading="lazy"
+                        referrerPolicy="no-referrer-when-downgrade"
+                      />
+                    </div>
                   )}
+                  <div className="contact-map-info">
+                    <span className="contact-location-icon" aria-hidden="true"><MapPin size={20} /></span>
+                    <div className="contact-location-copy">
+                      <strong>{publicContactSettings.address ? "Visítanos" : "Encuéntranos"}</strong>
+                      <p>{publicContactSettings.address || "Consulta nuestra ubicación en Google Maps."}</p>
+                    </div>
+                    {publicContactSettings.mapsLink && (
+                      <a className="contact-location-link" href={publicContactSettings.mapsLink} target="_blank" rel="noopener noreferrer">
+                        Abrir mapa
+                        <ChevronRight size={17} />
+                      </a>
+                    )}
+                  </div>
                 </div>
               )}
             </div>

@@ -6806,13 +6806,43 @@ body,
   }
 }
 
-.contact-location-panel {
+.contact-map-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  border-radius: 16px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.contact-map-embed {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.3);
+}
+
+.contact-map-embed iframe {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  filter: grayscale(0.35) brightness(0.85) contrast(1.05);
+  transition: filter 0.4s ease;
+}
+
+.contact-map-card:hover .contact-map-embed iframe {
+  filter: grayscale(0) brightness(0.95) contrast(1);
+}
+
+.contact-map-info {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 16px;
   align-items: center;
-  padding: 24px 0;
-  border-block: 1px solid rgba(255, 255, 255, 0.14);
+  padding: 20px 22px;
 }
 
 .contact-location-icon {
@@ -12922,8 +12952,13 @@ body,
       letter-spacing: 0.22em;
     }
 
-    .contact-location-panel {
+    .contact-map-embed {
+      aspect-ratio: 4 / 3;
+    }
+
+    .contact-map-info {
       grid-template-columns: auto minmax(0, 1fr);
+      padding: 16px 18px;
     }
 
     .contact-location-link {
