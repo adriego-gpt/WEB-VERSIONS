@@ -22,6 +22,26 @@ export function normalizeSafeUrl(value = "") {
   return "";
 }
 
+export function normalizeMapsEmbedUrl(value = "") {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const srcMatch = raw.match(/src=["']([^"']+)["']/i);
+  const candidate = srcMatch ? srcMatch[1].trim() : raw;
+  try {
+    const parsed = new URL(candidate);
+    const isGoogleEmbed = (
+      (parsed.hostname === "www.google.com" || parsed.hostname === "google.com" || parsed.hostname === "maps.google.com")
+      && (parsed.pathname.startsWith("/maps/embed") || parsed.pathname.startsWith("/maps"))
+    );
+    if (isGoogleEmbed && (parsed.protocol === "https:" || parsed.protocol === "http:")) {
+      return parsed.toString();
+    }
+  } catch {
+    // invalid URL
+  }
+  return "";
+}
+
 export function isValidEmail(value = "") {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || "").trim());
 }

@@ -548,8 +548,8 @@ const defaultContactSettings = {
   whatsappLink: "",
   phone: "",
   email: "",
-  mapsLink: "",
-  mapsEmbedUrl: "",
+  mapsLink: "https://www.google.com/maps/place/Adriego+Store/@-0.2158125,-78.5186374,17z",
+  mapsEmbedUrl: "https://www.google.com/maps/embed?pb=!1m18!1m12!1m3!1d3989.790017469228!2d-78.51863742526326!3d-0.2158124997820626!2m3!1f0!2f0!3f0!3m2!1i1024!2i768!4f13.1!3m3!1m2!1s0x91d59b000d5ae049%3A0x6c71bf0b3d7e79e6!2sAdriego%20Store!5e0!3m2!1ses!2sec!4v1787832725117!5m2!1ses!2sec",
   instagram: "https://instagram.com/adriegostore",
   facebook: "https://facebook.com/adriegostore",
   tiktok: "",
@@ -878,14 +878,16 @@ function normalizeProduct(rawProduct) {
 function normalizeMapsEmbedUrl(value = "") {
   const raw = String(value || "").trim();
   if (!raw) return "";
+  const srcMatch = raw.match(/src=["']([^"']+)["']/i);
+  const candidate = srcMatch ? srcMatch[1].trim() : raw;
   try {
-    const parsed = new URL(raw);
+    const parsed = new URL(candidate);
     // Only allow Google Maps embed domains for security
     const isGoogleEmbed = (
-      (parsed.hostname === "www.google.com" || parsed.hostname === "google.com")
-      && parsed.pathname.startsWith("/maps/embed")
+      (parsed.hostname === "www.google.com" || parsed.hostname === "google.com" || parsed.hostname === "maps.google.com")
+      && (parsed.pathname.startsWith("/maps/embed") || parsed.pathname.startsWith("/maps"))
     );
-    if (isGoogleEmbed && parsed.protocol === "https:") {
+    if (isGoogleEmbed && (parsed.protocol === "https:" || parsed.protocol === "http:")) {
       return parsed.toString();
     }
   } catch {

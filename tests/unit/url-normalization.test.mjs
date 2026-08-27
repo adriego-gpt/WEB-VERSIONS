@@ -8,8 +8,19 @@ import {
   buildWhatsAppLinkFromBase,
   launchWhatsAppUrl,
   normalizeSafeUrl,
+  normalizeMapsEmbedUrl,
 } from "../../src/utils/url.js";
 import { resolvePublicLocation } from "../../src/domain/contact/publicLocation.js";
+
+test("Google Maps embed normalizer extracts URL from raw string or full iframe snippet", () => {
+  const rawUrl = "https://www.google.com/maps/embed?pb=!1m18!1m12!1m3!1d3989.790017469228!2d-78.51863742526326!3d-0.2158124997820626!2m3!1f0!2f0!3f0!3m2!1i1024!2i768!4f13.1!3m3!1m2!1s0x91d59b000d5ae049%3A0x6c71bf0b3d7e79e6!2sAdriego%20Store!5e0!3m2!1ses!2sec!4v1787832725117!5m2!1ses!2sec";
+  const iframeSnippet = `<iframe src="${rawUrl}" width="400" height="300" style="border:0;" allowfullscreen="" loading="lazy" referrerpolicy="strict-origin-when-cross-origin"></iframe>`;
+
+  assert.equal(normalizeMapsEmbedUrl(rawUrl), rawUrl);
+  assert.equal(normalizeMapsEmbedUrl(iframeSnippet), rawUrl);
+  assert.equal(normalizeMapsEmbedUrl("https://evil.com/fake-map"), "");
+  assert.equal(normalizeMapsEmbedUrl("<iframe src='https://malicious.site/phish'></iframe>"), "");
+});
 
 test("Google Maps links without protocol are normalized to HTTPS", () => {
   assert.equal(

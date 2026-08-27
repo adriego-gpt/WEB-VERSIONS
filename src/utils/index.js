@@ -30,6 +30,7 @@ export {
 
 export {
   normalizeSafeUrl,
+  normalizeMapsEmbedUrl,
   isValidEmail,
   normalizeContactEmail,
   buildMailtoLink,
