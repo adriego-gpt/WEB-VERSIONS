@@ -9,22 +9,23 @@ Este documento describe la arquitectura de SEO estático y dinámico, metadatos 
 Configurada en `index.html` para la indexación óptima de la portada y la marca:
 
 - **Título:** `Adriego Store | Moda y ropa exclusiva`
-- **Meta Descripción:** `Descubre Adriego Store. Tienda web moderna de moda y ropa con atención personalizada.`
+- **Meta Descripción:** `Descubre Adriego Store: moda seleccionada, tendencias exclusivas y atención personalizada con pedidos directos por WhatsApp y envíos a todo el país.`
 - **Directiva de Rastreo:** `<meta name="robots" content="index, follow" />`
 - **Etiquetas Open Graph (Facebook, WhatsApp, LinkedIn):**
   - `og:type`: `website`
   - `og:title`: `Adriego Store | Moda y ropa exclusiva`
-  - `og:description`: `Descubre Adriego Store. Tienda web moderna de moda y ropa con atención personalizada.`
-  - `og:url`: `https://www.adriegostore.com/` *(marcador configurable)*
-  - `og:image`: `https://www.adriegostore.com/favicon.svg`
+  - `og:description`: `Descubre Adriego Store: moda seleccionada, tendencias exclusivas y atención personalizada con pedidos directos por WhatsApp.`
+  - `og:url`: `https://adriego.com/`
+  - `og:image`: `https://adriego.com/og-cover.jpg` (1200×630 raster)
   - `og:site_name`: `Adriego Store`
+  - `og:locale`: `es_CO`
 - **Twitter Cards:**
-  - `twitter:card`: `summary`
+  - `twitter:card`: `summary_large_image`
   - `twitter:title`: `Adriego Store | Moda y ropa exclusiva`
-  - `twitter:description`: `Descubre Adriego Store. Tienda web moderna de moda y ropa con atención personalizada.`
-  - `twitter:image`: `https://www.adriegostore.com/favicon.svg`
-- **Canonical URL:** `https://www.adriegostore.com/`
-- **Datos Estructurados JSON-LD:** Bloque `schema.org/ClothingStore` con nombre, logo, descripción y divisas aceptadas (USD).
+  - `twitter:description`: `Descubre Adriego Store: moda seleccionada, tendencias exclusivas y atención personalizada con pedidos directos por WhatsApp.`
+  - `twitter:image`: `https://adriego.com/og-cover.jpg`
+- **Canonical URL:** `https://adriego.com/`
+- **Datos Estructurados JSON-LD:** Bloque `schema.org/ClothingStore` y `schema.org/Product` dinámico con marca, condición, ofertas y vendedor.
 
 ---
 
@@ -52,4 +53,4 @@ En consonancia con `ROUTES.md`:
 - Se recomienda implementar una Edge Function o Middleware en Vercel que detecte User-Agents como `WhatsApp/`, `facebookexternalhit/`, `Twitterbot` y responda con el HTML pre-renderizado que contenga las etiquetas Open Graph del producto antes de redirigir al bundle SPA.
 
 ### 3.3. Configuración Final de Producción
-- Actualizar `https://www.adriegostore.com` con el dominio personalizado definitivo en Vercel en `index.html`, `robots.txt`, `sitemap.xml` y variables de entorno.
+- ✅ El dominio personalizado `https://adriego.com` ya está configurado en Vercel, `index.html`, `robots.txt`, `sitemap.xml` y variables de entorno.

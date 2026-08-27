@@ -1,6 +1,7 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App.jsx'
+import './index.css'
 import { ErrorBoundary } from './components/ui/ErrorBoundary.jsx'
 
 // Global recovery for stale chunks after new deployments
@@ -36,6 +37,13 @@ if (typeof window !== 'undefined') {
       }
     }
   });
+
+  // Reset stale reload token on fresh successful bootstrap
+  try {
+    window.sessionStorage.removeItem('adriego_chunk_reload');
+  } catch {
+    // Ignore storage access errors in restricted browser environments
+  }
 }
 
 ReactDOM.createRoot(document.getElementById('root')).render(

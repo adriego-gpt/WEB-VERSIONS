@@ -24,6 +24,7 @@ import {
   AlertCircle,
 } from "lucide-react";
 import { motion as Motion, AnimatePresence } from "framer-motion";
+import { ANIMATION } from "../../constants/animation";
 import { currency } from "../../utils/currency";
 import { normalizeAddressBook } from "../../domain/user/addressBook";
 import { sanitizeLine, sanitizeParagraph, normalizeEntityId, stripDangerousContent } from "../../utils/sanitizers";
@@ -35,6 +36,7 @@ import { EmotionalEmptyState } from "../ui/EmotionalEmptyState";
 import { AnimatedCurrencyValue } from "../ui/AnimatedCurrencyValue";
 import { fileToDataUrl, normalizeImageSource } from "../../utils/fileUpload";
 import { copyTextToClipboard } from "../../utils/clipboard";
+import { triggerHaptic } from "../../utils/haptics";
 import {
   PAYMENT_METHODS,
   calculatePayableTotal,
@@ -60,7 +62,7 @@ export function CartSummaryModal({
   cart = [],
   subtotal = 0,
   discountAmount = 0,
-  finalTotal = 0,
+  finalTotal: _finalTotal = 0,
   totalItems = 0,
   onUpdateQuantity,
   onRemoveItem,
@@ -416,12 +418,17 @@ export function CartSummaryModal({
   return (
     <>
     <AnimatePresence>
-      <Motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="modal-backdrop" onClick={onClose}>
+      <Motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1, transition: { duration: 0.2, ease: "easeOut" } }}
+        exit={{ opacity: 0, transition: { duration: 0.14, ease: "easeOut" } }}
+        className="modal-backdrop"
+        onClick={onClose}
+      >
         <Motion.div
-          initial={{ opacity: 0, y: 24, scale: 0.97 }}
-          animate={{ opacity: 1, y: 0, scale: 1 }}
-          exit={{ opacity: 0, y: 18, scale: 0.97 }}
-          transition={{ duration: 0.22 }}
+          initial={{ opacity: 0, y: 18, scale: 0.96 }}
+          animate={{ opacity: 1, y: 0, scale: 1, transition: { duration: 0.22, ease: ANIMATION.easeOut } }}
+          exit={{ opacity: 0, y: 10, scale: 0.97, transition: { duration: 0.14, ease: "easeOut" } }}
           className="sheet cart-fullscreen-sheet"
           role="dialog"
           aria-modal="true"
@@ -456,7 +463,7 @@ export function CartSummaryModal({
                   <div className="free-shipping-progress-track">
                     <div
                       className="free-shipping-progress-fill"
-                      style={{ width: `${freeShippingProgress.progressPercent}%` }}
+                      style={{ transform: `scaleX(${Math.min(1, (freeShippingProgress.progressPercent || 0) / 100)})` }}
                     />
                   </div>
                 </div>
@@ -484,7 +491,10 @@ export function CartSummaryModal({
                         <button type="button" onClick={() => onOpenItem(item)} className="sheet-product-title-button cart-line-main" aria-label={`Ver detalle de ${item.name}`}>
                           <p className="sheet-product-title cart-line-title">{item.name}</p>
                           <p className="muted sheet-product-meta-text cart-line-meta">{item.color} - {item.size}</p>
-                          <p className="muted sheet-product-meta-text sheet-stock-text cart-line-stock">{stockStatus.label}</p>
+                          <span className={`stock-badge stock-badge-${stockStatus.tone} stock-badge-compact`} style={{ marginTop: 4 }}>
+                            <span className="stock-dot" aria-hidden="true" />
+                            <span>{stockStatus.label}</span>
+                          </span>
                         </button>
 
                         <div className="cart-line-side">
@@ -493,14 +503,42 @@ export function CartSummaryModal({
                               <PencilLine size={13} />
                               Editar
                             </button>
-                            <button type="button" onClick={() => onRemoveItem(item.key)} className="sheet-remove-btn cart-line-remove-btn" aria-label="Quitar producto del carrito">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                triggerHaptic("medium");
+                                onRemoveItem(item.key);
+                              }}
+                              className="sheet-remove-btn cart-line-remove-btn"
+                              aria-label="Quitar producto del carrito"
+                            >
                               <Trash2 size={15} />
                             </button>
                           </div>
                           <div className="qty sheet-qty cart-line-qty">
-                            <button type="button" className="qty-control-btn" onClick={() => onUpdateQuantity(item.key, -1)} aria-label="Disminuir cantidad"><Minus size={14} /></button>
+                            <button
+                              type="button"
+                              className="qty-control-btn"
+                              onClick={() => {
+                                triggerHaptic("light");
+                                onUpdateQuantity(item.key, -1);
+                              }}
+                              aria-label="Disminuir cantidad"
+                            >
+                              <Minus size={14} />
+                            </button>
                             <span className="cart-line-qty-value">{item.quantity}</span>
-                            <button type="button" className="qty-control-btn" onClick={() => onUpdateQuantity(item.key, 1)} aria-label="Aumentar cantidad"><Plus size={14} /></button>
+                            <button
+                              type="button"
+                              className="qty-control-btn"
+                              onClick={() => {
+                                triggerHaptic("light");
+                                onUpdateQuantity(item.key, 1);
+                              }}
+                              aria-label="Aumentar cantidad"
+                            >
+                              <Plus size={14} />
+                            </button>
                           </div>
                           <p className="sheet-product-price cart-line-price">{currency(item.price * item.quantity)}</p>
                         </div>

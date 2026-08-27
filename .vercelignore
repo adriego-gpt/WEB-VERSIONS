@@ -1,0 +1,5 @@
+﻿.agents
+tests
+public/bocetos
+*.log
+.github

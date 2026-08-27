@@ -116,7 +116,7 @@ export function getSelectionForColor(product, preferredSelection = null) {
 
 export function getStockStatus(stock) {
   if (stock <= 0) return { label: "Agotado", tone: "danger" };
-  if (stock === 1) return { label: "Solo queda 1", tone: "dark" };
-  if (stock <= 3) return { label: `Quedan ${stock}`, tone: "warning" };
+  if (stock === 1) return { label: "Última unidad", tone: "urgent" };
+  if (stock <= 3) return { label: `Quedan ${stock} uds.`, tone: "warning" };
   return { label: "Disponible", tone: "success" };
 }

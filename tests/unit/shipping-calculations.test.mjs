@@ -81,4 +81,12 @@ test("Shipping Calculations & Free Shipping Progress", async (t) => {
     assert.equal(progress2.progressPercent, 100);
     assert.equal(progress2.isFree, true);
   });
+
+  await t.test("6. normalizeShippingSettings falls back to safe defaults on invalid payload", () => {
+    const normalized = normalizeShippingSettings(null);
+    assert.equal(typeof normalized.shippingEnabled, "boolean");
+    assert.equal(typeof normalized.freeShippingThreshold, "number");
+    assert.equal(typeof normalized.localShippingCost, "number");
+    assert.equal(typeof normalized.nationalShippingCost, "number");
+  });
 });

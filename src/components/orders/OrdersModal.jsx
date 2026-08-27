@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 import { X, Copy, MessageCircle, Search, ZoomIn, Truck, MapPin, Check, ExternalLink } from "lucide-react";
 import { motion as Motion, AnimatePresence } from "framer-motion";
 import { formatOrderDate, normalizeOrderStatusForOrder } from "../../domain/orders/status";
@@ -9,6 +9,7 @@ import { FALLBACK_IMAGE } from "../../constants";
 import { OrderStatusProgress } from "./OrderStatusProgress";
 import { OrderReferenceStrip } from "./OrderReferenceStrip";
 import { ImageLightbox } from "../ui/ImageLightbox";
+import { useModalA11y } from "../../hooks/useModalA11y";
 
 export function OrdersModal({
   open,
@@ -22,6 +23,7 @@ export function OrdersModal({
 }) {
   const [proofPreview, setProofPreview] = useState(null);
   const [copiedGuideId, setCopiedGuideId] = useState(null);
+  const containerRef = useModalA11y(open, onClose);
 
   const handleCopyGuideNumber = async (orderId, guideNumber) => {
     if (!guideNumber) return;
@@ -36,23 +38,13 @@ export function OrdersModal({
     }
   };
 
-  useEffect(() => {
-    if (!open) return undefined;
-    const handleKeyDown = (event) => {
-      if (event.key === "Escape") {
-        onClose?.();
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [open, onClose]);
-
   if (!open) return null;
   return (
     <>
     <AnimatePresence>
       <Motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="modal-backdrop" onClick={onClose}>
         <Motion.div
+          ref={containerRef}
           initial={{ opacity: 0, y: 24, scale: 0.97 }}
           animate={{ opacity: 1, y: 0, scale: 1 }}
           exit={{ opacity: 0, y: 18, scale: 0.97 }}
@@ -270,7 +262,7 @@ export function OrdersModal({
                             title: `Comprobante · ${order.code}`,
                           })}
                         >
-                          <img src={normalizeImageSource(order.paymentProof) || FALLBACK_IMAGE} alt="" className="preview-image" loading="lazy" decoding="async" />
+                          <img src={normalizeImageSource(order.paymentProof) || FALLBACK_IMAGE} alt={`Comprobante de pago del pedido ${order.code}`} className="preview-image" loading="lazy" decoding="async" />
                           <span><ZoomIn size={15} />Abrir comprobante</span>
                         </button>
                       ) : null}

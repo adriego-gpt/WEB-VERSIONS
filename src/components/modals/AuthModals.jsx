@@ -162,6 +162,7 @@ export function UserAuthModal({
                   <input
                     ref={firstInputRef}
                     className={`input${showNameError ? " input-invalid" : ""}`}
+                    aria-label="Nombre completo"
                     placeholder="Nombre completo"
                     value={form.name}
                     autoComplete="name"
@@ -180,6 +181,7 @@ export function UserAuthModal({
                   ref={!isRegister && !isResetEmailLocked ? firstInputRef : undefined}
                   className={`input${showEmailError ? " input-invalid" : ""}${isResetEmailLocked ? " input-readonly" : ""}`}
                   type={isLogin ? "text" : "email"}
+                  aria-label={isResetEmailLocked ? "Correo verificado" : (isLogin ? "Correo o usuario" : "Correo electrónico")}
                   placeholder={isResetEmailLocked ? "Correo verificado" : (isLogin ? "Correo o usuario" : "Correo electronico")}
                   value={form.email}
                   autoComplete={isLogin ? "username" : "email"}
@@ -202,6 +204,7 @@ export function UserAuthModal({
                 <div className="auth-field">
                   <input
                     className={`input${showPhoneError ? " input-invalid" : ""}`}
+                    aria-label="Teléfono móvil (10 dígitos)"
                     placeholder="Teléfono: 10 dígitos (opcional)"
                     value={form.phone}
                     inputMode="tel"
@@ -220,6 +223,7 @@ export function UserAuthModal({
                 <div className="auth-field">
                   <input
                     className={`input${showResetTokenError ? " input-invalid" : ""}`}
+                    aria-label="Código de recuperación"
                     placeholder="Código de recuperación"
                     value={form.resetToken || ""}
                     autoCapitalize="none"
@@ -241,6 +245,7 @@ export function UserAuthModal({
                     <input
                       className={`input password-input${showPasswordError ? " input-invalid" : ""}`}
                       type={passwordVisible ? "text" : "password"}
+                      aria-label={isReset ? "Nueva contraseña" : "Contraseña"}
                       placeholder={isReset ? "Nueva contraseña" : "Contraseña"}
                       autoComplete={isRegister || isReset ? "new-password" : "current-password"}
                       value={form.password}
@@ -289,6 +294,7 @@ export function UserAuthModal({
                     <input
                       className={`input password-input${showConfirmPasswordError ? " input-invalid" : ""}`}
                       type={passwordVisible ? "text" : "password"}
+                      aria-label={isReset ? "Confirmar nueva contraseña" : "Confirmar contraseña"}
                       placeholder={isReset ? "Confirmar nueva contraseña" : "Confirmar contraseña"}
                       autoComplete="new-password"
                       value={form.confirmPassword || ""}
@@ -531,11 +537,11 @@ export function ProfileModal({
                     <UserRound size={20} />
                   </div>
                   <div className="settings-grid" style={{ marginTop: 14 }}>
-                    <input className="input" placeholder="Nombre" value={profileDraft?.name || ""} onChange={(event) => onFieldChange("name", event.target.value)} />
-                    <input className="input" placeholder="Apellido" value={profileDraft?.lastName || ""} onChange={(event) => onFieldChange("lastName", event.target.value)} />
-                    <input className="input" placeholder="Cédula / RUC (solo números)" inputMode="numeric" maxLength={13} value={profileDraft?.idNumber || ""} onChange={(event) => onFieldChange("idNumber", event.target.value.replace(/\D/g, "").slice(0, 13))} />
-                    <input className="input" placeholder="Teléfono (10 dígitos)" inputMode="tel" maxLength={10} value={profileDraft?.phone || ""} onChange={(event) => onFieldChange("phone", event.target.value.replace(/\D/g, "").slice(0, 10))} />
-                    <input className="input" style={{ gridColumn: "1 / -1" }} placeholder="Correo" type="email" value={profileDraft?.email || ""} onChange={(event) => onFieldChange("email", event.target.value)} />
+                    <input className="input" placeholder="Nombre" aria-label="Nombre" value={profileDraft?.name || ""} onChange={(event) => onFieldChange("name", event.target.value)} />
+                    <input className="input" placeholder="Apellido" aria-label="Apellido" value={profileDraft?.lastName || ""} onChange={(event) => onFieldChange("lastName", event.target.value)} />
+                    <input className="input" placeholder="Cédula / RUC (solo números)" aria-label="Cédula o RUC" inputMode="numeric" maxLength={13} value={profileDraft?.idNumber || ""} onChange={(event) => onFieldChange("idNumber", event.target.value.replace(/\D/g, "").slice(0, 13))} />
+                    <input className="input" placeholder="Teléfono (10 dígitos)" aria-label="Teléfono móvil" inputMode="tel" maxLength={10} value={profileDraft?.phone || ""} onChange={(event) => onFieldChange("phone", event.target.value.replace(/\D/g, "").slice(0, 10))} />
+                    <input className="input" style={{ gridColumn: "1 / -1" }} placeholder="Correo" aria-label="Correo electrónico" type="email" value={profileDraft?.email || ""} onChange={(event) => onFieldChange("email", event.target.value)} />
                   </div>
                   {profileFeedback?.message && (
                     <div className={`status-message ${profileFeedback.tone === "error" ? "status-error" : "status-success"}`} style={{ marginTop: 14 }}>

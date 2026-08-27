@@ -37,27 +37,27 @@ export function OrderSuccessRedirectModal({
 }) {
   const [copiedCode, setCopiedCode] = useState(false);
   const [step, setStep] = useState("initial"); // "initial" | "confirm"
+  const [prevOpen, setPrevOpen] = useState(open);
   const launchGuardRef = useRef(false);
 
   // Reset state when modal opens/closes
-  const prevOpenRef = useRef(open);
-  if (open !== prevOpenRef.current) {
-    prevOpenRef.current = open;
+  if (open !== prevOpen) {
+    setPrevOpen(open);
     if (open) {
       setStep("initial");
       setCopiedCode(false);
-      launchGuardRef.current = false;
     }
   }
 
   const handleCopyCode = useCallback(async () => {
-    if (!order?.code) return;
-    const ok = await copyTextToClipboard(order.code);
+    const orderCode = order?.code;
+    if (!orderCode) return;
+    const ok = await copyTextToClipboard(orderCode);
     if (ok) {
       setCopiedCode(true);
       window.setTimeout(() => setCopiedCode(false), 2200);
     }
-  }, [order?.code]);
+  }, [order]);
 
   // Step 1 → open WA once, then transition to step 2
   const handleOpenWhatsApp = useCallback(() => {

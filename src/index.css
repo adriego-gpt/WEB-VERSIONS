@@ -41,7 +41,7 @@ textarea,
 
   /* Prevent bottom nav from covering content */
   #root {
-    padding-bottom: 90px;
+    padding-bottom: calc(90px + env(safe-area-inset-bottom, 0px));
   }
 }
 

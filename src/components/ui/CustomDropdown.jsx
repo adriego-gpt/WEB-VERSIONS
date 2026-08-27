@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from "react";
 import { ChevronDown, Check } from "lucide-react";
 import { motion as Motion, AnimatePresence } from "framer-motion";
+import { ANIMATION } from "../../constants/animation";
 
 export function CustomDropdown({
   options = [],
@@ -90,10 +91,11 @@ export function CustomDropdown({
       <AnimatePresence>
         {isOpen && (
           <Motion.div
-            initial={{ opacity: 0, y: -4, scale: 0.98 }}
+            initial={{ opacity: 0, y: -4, scale: 0.97 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -4, scale: 0.98 }}
-            transition={{ duration: 0.15 }}
+            exit={{ opacity: 0, y: -4, scale: 0.97 }}
+            transition={{ duration: 0.16, ease: ANIMATION.easeOut }}
+            style={{ transformOrigin: "top center" }}
             className="custom-dropdown-menu"
             role="listbox"
           >

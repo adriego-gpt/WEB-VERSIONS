@@ -8,8 +8,8 @@ Este documento define la arquitectura técnica de rutas, metadatos SEO, datos es
 
 | Ruta | Tipo | Propósito | Indexabilidad | Canonical |
 |---|---|---|:---:|---|
-| `/` | Estática | Portada, Showcase destacado y Catálogo interactivo con filtros | `index, follow` | `https://www.adriegostore.com/` |
-| `/producto/:slug` | Dinámica | Ficha dedicada de producto con selección de variantes y compra | `index, follow` | `https://www.adriegostore.com/producto/:slug` |
+| `/` | Estática | Portada, Showcase destacado y Catálogo interactivo con filtros | `index, follow` | `https://adriego.com/` |
+| `/producto/:slug` | Dinámica | Ficha dedicada de producto con selección de variantes y compra | `index, follow` | `https://adriego.com/producto/:slug` |
 | `/cuenta/restablecer` | Funcional | Formulario seguro para restablecimiento de contraseña de cliente/admin | `noindex, nofollow` | Auto-referencia / Ninguno |
 | `/*` (404) | Catch-all | Vista de error amigable cuando la URL o producto no existe | `noindex, nofollow` | Ninguno |
 
@@ -30,8 +30,8 @@ Este documento define la arquitectura técnica de rutas, metadatos SEO, datos es
     "@context": "https://schema.org",
     "@type": "ClothingStore",
     "name": "Adriego Store",
-    "url": "https://www.adriegostore.com/",
-    "logo": "https://www.adriegostore.com/favicon.svg",
+    "url": "https://adriego.com/",
+    "logo": "https://adriego.com/favicon.svg",
     "description": "Descubre Adriego Store. Tienda web moderna de moda y ropa con atención personalizada.",
     "priceRange": "$$",
     "currenciesAccepted": "USD"
@@ -46,7 +46,7 @@ Este documento define la arquitectura técnica de rutas, metadatos SEO, datos es
 - **Metadatos SEO (Dinámicos por Producto):**
   - **Title:** `[Nombre del Producto] | Adriego Store`
   - **Meta Description:** `Compra [Nombre] en Adriego Store por $[Precio]. [Descripción corta]. Pedidos directos por WhatsApp.`
-  - **Canonical:** `https://www.adriegostore.com/producto/:slug`
+  - **Canonical:** `https://adriego.com/producto/:slug`
   - **Open Graph:**
     - `og:type=product`
     - `og:title=[Nombre del Producto] | Adriego Store`
@@ -72,7 +72,7 @@ Este documento define la arquitectura técnica de rutas, metadatos SEO, datos es
     "sku": "prod_101",
     "offers": {
       "@type": "Offer",
-      "url": "https://www.adriegostore.com/producto/camisa-lino-premium",
+      "url": "https://adriego.com/producto/camisa-lino-premium",
       "priceCurrency": "USD",
       "price": "45.00",
       "availability": "https://schema.org/InStock",

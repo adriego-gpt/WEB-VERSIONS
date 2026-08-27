@@ -45,8 +45,11 @@ export function hydrateRemoteUserState({
       })()
     : normalizedRemoteCart;
 
+  const hasProducts = productsById.size > 0;
+
   const cart = cartSource
     .filter((entry) => {
+      if (!hasProducts) return true;
       const product = productsById.get(normalizeEntityId(entry.id));
       return Boolean(product) && product.isPublic !== false;
     })
@@ -55,9 +58,9 @@ export function hydrateRemoteUserState({
       const product = productsById.get(normalizeEntityId(entry.id));
       return {
         ...entry,
-        name: sanitizeLine(product?.name || previousLine?.name || "Producto"),
-        price: Number(product?.price || previousLine?.price || 0) || 0,
-        image: normalizeImageSource(getImageForProduct(product, entry.color) || previousLine?.image || FALLBACK_IMAGE) || FALLBACK_IMAGE,
+        name: sanitizeLine(product?.name || previousLine?.name || entry?.name || "Producto"),
+        price: Number(product?.price || previousLine?.price || entry?.price || 0) || 0,
+        image: normalizeImageSource(getImageForProduct(product, entry.color) || previousLine?.image || entry?.image || FALLBACK_IMAGE) || FALLBACK_IMAGE,
       };
     });
 
@@ -65,6 +68,7 @@ export function hydrateRemoteUserState({
     ? normalizeFavorites([...normalizeFavorites(remoteFavorites), ...normalizeFavorites(localFavorites)])
     : normalizeFavorites(remoteFavorites);
   const favorites = favoriteSource.filter((favoriteId) => {
+    if (!hasProducts) return true;
     const product = productsById.get(normalizeEntityId(favoriteId));
     return Boolean(product) && product.isPublic !== false;
   });

@@ -3,6 +3,7 @@ import { Heart, PencilLine, Trash2, X, Check } from "lucide-react";
 import { motion as Motion, AnimatePresence } from "framer-motion";
 import { currency, discountPercent } from "../../utils/currency";
 import { getProductColorSwatch } from "../../utils/productColor";
+import { triggerHaptic } from "../../utils/haptics";
 import { ANIMATION } from "../../constants/animation";
 import { FALLBACK_IMAGE } from "../../constants/product";
 import {
@@ -56,6 +57,7 @@ export function CatalogProductCard({
   const handleAddToCart = (event) => {
     event.stopPropagation();
     if (availableStock <= 0 || addedFeedback) return;
+    triggerHaptic("medium");
     setAddedFeedback(true);
     onAddToCart(
       product,
@@ -72,6 +74,7 @@ export function CatalogProductCard({
     if (availableStock <= 0) return;
     const isMobile = typeof window !== "undefined" && window.innerWidth <= 768;
     if (isMobile) {
+      triggerHaptic("selection");
       setIsSelectingSize(true);
     } else {
       handleAddToCart(event);
@@ -79,9 +82,17 @@ export function CatalogProductCard({
   };
 
   return (
-    <Motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: ANIMATION.base }} className="card product-card">
+    <Motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: ANIMATION.base, ease: ANIMATION.easeOut }} className="card product-card">
       <div className="product-img-wrap">
-        <button type="button" onClick={() => onOpenDetail(product, { color: selectedColor, size: selectedSize })} className="product-image-main-btn" aria-label={`Ver detalle de ${product.name}`}>
+        <a
+          href={`/producto/${product.slug || product.id}`}
+          onClick={(event) => {
+            event.preventDefault();
+            onOpenDetail(product, { color: selectedColor, size: selectedSize });
+          }}
+          className="product-image-main-btn"
+          aria-label={`Ver detalle de ${product.name}`}
+        >
           <AnimatePresence mode="wait">
             <Motion.img
               key={`${product.id}-${selectedColor}-${currentImage}`}
@@ -92,7 +103,7 @@ export function CatalogProductCard({
               initial={{ opacity: 0, scale: 1.02 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.99 }}
-              transition={{ duration: ANIMATION.fast }}
+              transition={{ duration: ANIMATION.fast, ease: ANIMATION.easeOut }}
               className="product-img"
               onError={(event) => {
                 if (event.currentTarget.src !== FALLBACK_IMAGE) {
@@ -101,7 +112,7 @@ export function CatalogProductCard({
               }}
             />
           </AnimatePresence>
-        </button>
+        </a>
         <div className="product-card-badges" style={{ position: "absolute", left: 10, top: 10, display: "flex", flexWrap: "wrap", gap: 6, pointerEvents: "none" }}>
           {(() => {
             const visibleBadges = [];
@@ -112,7 +123,17 @@ export function CatalogProductCard({
           })()}
         </div>
         <div className="product-card-floating-actions">
-          <button type="button" className="icon-btn" onClick={() => onToggleFavorite(product.id)} aria-label="Guardar en favoritos"><Heart size={16} fill={isFavorite ? "currentColor" : "none"} /></button>
+          <button
+            type="button"
+            className="icon-btn"
+            onClick={() => {
+              triggerHaptic("light");
+              onToggleFavorite(product.id);
+            }}
+            aria-label="Guardar en favoritos"
+          >
+            <Heart size={16} fill={isFavorite ? "currentColor" : "none"} />
+          </button>
         </div>
         {isAdmin && (
           <div style={{ position: "absolute", left: 10, bottom: 10, display: "flex", gap: 8 }}>
@@ -126,9 +147,16 @@ export function CatalogProductCard({
         <div className="product-card-overview">
           <div className="product-card-identity">
             <p className="product-card-category">{product.category}</p>
-            <button type="button" className="product-card-title-button" onClick={() => onOpenDetail(product, { color: selectedColor, size: selectedSize })}>
+            <a
+              href={`/producto/${product.slug || product.id}`}
+              className="product-card-title-button"
+              onClick={(event) => {
+                event.preventDefault();
+                onOpenDetail(product, { color: selectedColor, size: selectedSize });
+              }}
+            >
               <h4 className="product-card-title">{product.name}</h4>
-            </button>
+            </a>
           </div>
           <div className="product-card-price-group">
             {product.offerEnabled && discount > 0 && <p className="offer-price-callout">AHORA -{discount}%</p>}
@@ -198,8 +226,11 @@ export function CatalogProductCard({
             </div>
           </div>
           <div className="product-card-stock-line mobile-hidden">
-            <span className={`badge badge-${stockStatus.tone} ${isLowStock ? "badge-low-stock" : ""}`}>
-              {isLowStock ? (availableStock === 1 ? "Última unidad" : `Últimas ${availableStock} unidades`) : stockStatus.label}
+            <span className={`stock-badge stock-badge-${stockStatus.tone} ${isLowStock ? "stock-badge-low" : ""}`}>
+              <span className="stock-dot" aria-hidden="true" />
+              <span>
+                {isLowStock ? (availableStock === 1 ? "Última unidad" : `Quedan ${availableStock} uds.`) : stockStatus.label}
+              </span>
             </span>
           </div>
         </div>
@@ -236,6 +267,7 @@ export function CatalogProductCard({
                     onClick={(event) => {
                       event.stopPropagation();
                       if (isOutOfStock || isLocked) return;
+                      triggerHaptic("medium");
                       setJustAddedSize(size);
                       onChange(product.id, "size", size);
                       onAddToCart(

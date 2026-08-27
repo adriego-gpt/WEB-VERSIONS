@@ -73,6 +73,8 @@ export function LegalModal({
                   key={item.id}
                   type="button"
                   role="tab"
+                  id={`legal-tab-${item.id}`}
+                  aria-controls={`legal-tabpanel-${item.id}`}
                   aria-selected={isActive}
                   className={`legal-tab-btn${isActive ? " active" : ""}`}
                   onClick={() => onTabChange?.(item.id)}
@@ -84,7 +86,7 @@ export function LegalModal({
             })}
           </div>
 
-          <div className="legal-sheet-content">
+          <div className="legal-sheet-content" role="tabpanel" id={`legal-tabpanel-${tab}`} aria-labelledby={`legal-tab-${tab}`}>
             {tab === "exchanges" && (
               <div className="legal-body-section" tabIndex={0}>
                 <div className="legal-alert-box warning">

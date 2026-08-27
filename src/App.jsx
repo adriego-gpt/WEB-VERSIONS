@@ -15,6 +15,7 @@ import {
   Truck,
   RotateCcw,
   X,
+  Sparkles,
   Tag,
   Tags,
   PencilLine,
@@ -34,6 +35,7 @@ import {
   Mail,
   MapPin,
   Send,
+  ArrowUpRight,
 } from "lucide-react";
 import { motion as Motion, AnimatePresence, MotionConfig } from "framer-motion";
 import {
@@ -189,8 +191,6 @@ import {
 import {
   DEFAULT_SHIPPING_SETTINGS,
   normalizeShippingSettings,
-  calculateShippingFee,
-  calculateFreeShippingProgress,
 } from "./domain/orders/shippingSettings.js";
 
 import { lazyWithRetry } from "./utils/lazyWithRetry.js";
@@ -1236,13 +1236,6 @@ function groupVariantsByColor(variants = [], imagesByColor = {}) {
   }));
 }
 
-function getStockStatus(stock) {
-  if (stock <= 0) return { label: "Agotado", tone: "danger" };
-  if (stock === 1) return { label: "Solo queda 1", tone: "dark" };
-  if (stock <= 3) return { label: `Quedan ${stock}`, tone: "warning" };
-  return { label: "Disponible", tone: "success" };
-}
-
 function createSeededRandom(seedText = "") {
   let seed = 0;
   const value = String(seedText || "seed");
@@ -1535,592 +1528,13 @@ function buildProductFromForm(form) {
 
 
 
-function ShowcaseProductCard({ product, onOpenDetail, onAddToCart }) {
-  const [addedFeedback, setAddedFeedback] = useState(false);
-  const fallbackSelection = getFallbackSelection(product);
-  const selectedColor = fallbackSelection.color;
-  const selectedSize = fallbackSelection.size;
-  const hasStock = fallbackSelection.availableStock > 0;
-  const discount = discountPercent(product.price, product.oldPrice);
-  const previewImage = getCurrentImageForProduct(product, selectedColor);
 
-  const handleAddToCart = (event) => {
-    event.stopPropagation();
-    if (!hasStock || addedFeedback) return;
-    setAddedFeedback(true);
-    onAddToCart(
-      product,
-      { sourceElement: event.currentTarget, image: previewImage },
-      { color: selectedColor, size: selectedSize }
-    );
-    setTimeout(() => {
-      setAddedFeedback(false);
-    }, 1200);
-  };
 
-  return (
-    <Motion.div whileHover={{ y: -4 }} className="card product-card">
-      <div className="product-img-wrap">
-        <button type="button" onClick={() => onOpenDetail(product, fallbackSelection)} className="product-image-main-btn" aria-label={`Ver detalle de ${product.name}`}>
-          <img src={previewImage} alt={product.name} className="product-img" loading="lazy" decoding="async" />
-        </button>
-      </div>
-      <div className="product-card-body">
-        <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
-          <div>
-            <p className="muted" style={{ margin: 0, fontSize: 14 }}>{product.category}</p>
-            <button onClick={() => onOpenDetail(product, fallbackSelection)} style={{ border: 0, background: "transparent", padding: 0, cursor: "pointer", textAlign: "left" }}>
-              <h4 className="product-card-title">{product.name}</h4>
-            </button>
-          </div>
-          <span className="muted" style={{ fontSize: 14, display: "inline-flex", alignItems: "center", gap: 4 }}>
-            <Star size={13} fill="currentColor" />
-            {product.rating}
-          </span>
-        </div>
 
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <span style={{ fontWeight: 600 }}>{currency(product.price)}</span>
-          {product.oldPrice > product.price && <span className="muted" style={{ textDecoration: "line-through", fontSize: 14 }}>{currency(product.oldPrice)}</span>}
-          {discount > 0 && <span className="badge badge-light">-{discount}%</span>}
-        </div>
 
-        {!!product.filterTags?.length && (
-          <div className="product-card-tags">
-            {product.filterTags.slice(0, 2).map((tag) => <span key={tag} className="badge badge-light">{tag}</span>)}
-          </div>
-        )}
 
-        <div className="product-card-actions">
-          <button
-            type="button"
-            className={`btn ${addedFeedback ? "btn-success" : "btn-primary"}`}
-            style={{
-              width: "100%",
-              opacity: !hasStock ? 0.6 : 1,
-              cursor: !hasStock ? "not-allowed" : (addedFeedback ? "default" : "pointer"),
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: "6px",
-              transition: "all 0.2s ease"
-            }}
-            onClick={handleAddToCart}
-            disabled={!hasStock || addedFeedback}
-          >
-            {!hasStock ? (
-              "Agotado"
-            ) : addedFeedback ? (
-              <>
-                <Check size={16} /> ¡Agregado!
-              </>
-            ) : (
-              "Agregar"
-            )}
-          </button>
-          <button type="button" className="btn btn-outline product-detail-btn" onClick={() => onOpenDetail(product, fallbackSelection)}>Detalle</button>
-        </div>
-      </div>
-    </Motion.div>
-  );
-}
 
-function CatalogProductCard({
-  product,
-  selection,
-  onChange,
-  onOpenDetail,
-  onAddToCart,
-  onToggleFavorite,
-  isFavorite,
-  isAdmin,
-  onEdit,
-  onDelete,
-}) {
-  const [addedFeedback, setAddedFeedback] = useState(false);
-  const resolvedSelection = getSelectionForColor(product, selection);
-  const selectedColor = resolvedSelection.color;
-  const selectedSize = resolvedSelection.size;
-  const currentImages = getImagesForColor(product, selectedColor);
-  const currentImage = currentImages[0] || FALLBACK_IMAGE;
-  const discount = discountPercent(product.price, product.oldPrice);
-  const sizesForSelectedColor = getSizesForColor(product, selectedColor);
-  const availableStock = resolvedSelection.availableStock;
-  const stockStatus = getStockStatus(availableStock);
-  const isLowStock = availableStock > 0 && availableStock <= 2;
 
-  const handleAddToCart = (event) => {
-    event.stopPropagation();
-    if (availableStock <= 0 || addedFeedback) return;
-    setAddedFeedback(true);
-    onAddToCart(
-      product,
-      { sourceElement: event.currentTarget, image: currentImage },
-      { color: selectedColor, size: selectedSize }
-    );
-    setTimeout(() => {
-      setAddedFeedback(false);
-    }, 1200);
-  };
-
-  return (
-    <Motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: ANIMATION.base }} className="card product-card">
-      <div className="product-img-wrap">
-        <button type="button" onClick={() => onOpenDetail(product, { color: selectedColor, size: selectedSize })} className="product-image-main-btn" aria-label={`Ver detalle de ${product.name}`}>
-          <AnimatePresence mode="wait">
-            <Motion.img
-              key={`${product.id}-${selectedColor}-${currentImage}`}
-              src={currentImage}
-              alt={product.name}
-              loading="lazy"
-              decoding="async"
-              initial={{ opacity: 0, scale: 1.02 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.99 }}
-              transition={{ duration: ANIMATION.fast }}
-              className="product-img"
-            />
-          </AnimatePresence>
-        </button>
-        <div style={{ position: "absolute", left: 10, top: 10, display: "flex", flexWrap: "wrap", gap: 6, pointerEvents: "none" }}>
-          {product.offerEnabled && discount > 0 && <span className="badge badge-offer">Oferta -{discount}%</span>}
-          {product.newArrival && <span className="badge badge-light">Nuevo</span>}
-          {product.featured && <span className="badge badge-dark">Destacado</span>}
-        </div>
-        <div className="product-card-floating-actions">
-          <button className="icon-btn" onClick={() => onToggleFavorite(product.id)} aria-label="Guardar en favoritos"><Heart size={16} fill={isFavorite ? "currentColor" : "none"} /></button>
-        </div>
-        {isAdmin && (
-          <div style={{ position: "absolute", left: 10, bottom: 10, display: "flex", gap: 8 }}>
-            <button className="icon-btn" onClick={() => onEdit(product)} title="Editar producto"><PencilLine size={16} /></button>
-            <button className="icon-btn" onClick={() => onDelete(product.id)} title="Eliminar producto"><Trash2 size={16} /></button>
-          </div>
-        )}
-      </div>
-
-      <div className="product-card-body">
-        <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-          <div>
-            <p className="muted" style={{ margin: 0, fontSize: 13 }}>{product.category}</p>
-            <button onClick={() => onOpenDetail(product, { color: selectedColor, size: selectedSize })} style={{ border: 0, background: "transparent", padding: 0, cursor: "pointer", textAlign: "left" }}>
-              <h4 className="product-card-title">{product.name}</h4>
-            </button>
-            <p className="muted" style={{ margin: "6px 0 0", fontSize: 12 }}>{product.productType || "General"}</p>
-          </div>
-          <div style={{ textAlign: "right" }}>
-            {product.offerEnabled && discount > 0 && <p className="offer-price-callout">AHORA -{discount}%</p>}
-            <p style={{ margin: 0, fontWeight: 600 }}>{currency(product.price)}</p>
-            {product.oldPrice > product.price && <p className="muted" style={{ margin: "4px 0 0", fontSize: 12, textDecoration: "line-through" }}>{currency(product.oldPrice)}</p>}
-          </div>
-        </div>
-
-        <p className="muted product-card-description">{product.description}</p>
-
-        {!!product.filterTags?.length && (
-          <div className="product-card-tags">
-            {product.filterTags.slice(0, 3).map((tag) => <span key={tag} className="badge badge-light">{tag}</span>)}
-          </div>
-        )}
-
-        <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
-          <Star size={14} fill="currentColor" /> {product.rating}
-          {discount > 0 && <><span className="muted">|</span><span className="muted">-{discount}%</span></>}
-        </div>
-
-        <div className="product-card-variant-block">
-          <div>
-            <label className="muted" style={{ display: "block", marginBottom: 8, fontSize: 13 }}>Color</label>
-            <div className="chip-row">
-              {product.colors.map((color) => (
-                <button key={color} className={`chip ${selectedColor === color ? "active" : ""}`} onClick={() => onChange(product.id, "color", color)}>{color}</button>
-              ))}
-            </div>
-          </div>
-          <div>
-            <label className="muted" style={{ display: "block", marginBottom: 8, fontSize: 13 }}>Talla</label>
-            <div className="chip-row">
-              {sizesForSelectedColor.map((size) => {
-                const sizeStock = getStockForVariant(product, selectedColor, size);
-                return (
-                  <button key={size} className={`chip ${selectedSize === size ? "active" : ""}`} onClick={() => sizeStock > 0 && onChange(product.id, "size", size)} disabled={sizeStock <= 0} style={{ opacity: sizeStock <= 0 ? 0.45 : 1, cursor: sizeStock <= 0 ? "not-allowed" : "pointer" }}>
-                    {size}
-                  </button>
-                );
-              })}
-            </div>
-            <div style={{ marginTop: 10 }}>
-              <span className={`badge badge-${stockStatus.tone} ${isLowStock ? "badge-low-stock" : ""}`}>
-                {isLowStock ? (availableStock === 1 ? "Última unidad" : `Últimas ${availableStock} unidades`) : stockStatus.label}
-              </span>
-            </div>
-          </div>
-        </div>
-
-        <div className="product-card-actions">
-          <button
-            type="button"
-            className={`btn ${addedFeedback ? "btn-success" : "btn-primary"}`}
-            onClick={handleAddToCart}
-            disabled={availableStock <= 0 || addedFeedback}
-            style={{
-              opacity: availableStock <= 0 ? 0.6 : 1,
-              cursor: availableStock <= 0 ? "not-allowed" : (addedFeedback ? "default" : "pointer"),
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: "6px",
-              transition: "all 0.2s ease"
-            }}
-          >
-            {availableStock <= 0 ? (
-              "Agotado"
-            ) : addedFeedback ? (
-              <>
-                <Check size={16} /> ¡Agregado!
-              </>
-            ) : (
-              "Agregar"
-            )}
-          </button>
-          <button type="button" className="btn btn-outline product-detail-btn" onClick={() => onOpenDetail(product, { color: selectedColor, size: selectedSize })}>Detalle</button>
-        </div>
-      </div>
-    </Motion.div>
-  );
-}
-
-function CatalogSkeletonCard() {
-  return (
-    <div className="card product-card skeleton-card" aria-hidden="true">
-      <div className="skeleton-block skeleton-image" />
-      <div className="product-card-body">
-        <div className="skeleton-line skeleton-line-sm" />
-        <div className="skeleton-line" />
-        <div className="skeleton-line skeleton-line-sm" />
-        <div className="skeleton-chip-row">
-          <span className="skeleton-chip" />
-          <span className="skeleton-chip" />
-          <span className="skeleton-chip" />
-        </div>
-        <div className="skeleton-actions">
-          <span className="skeleton-pill" />
-          <span className="skeleton-pill skeleton-pill-light" />
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function CatalogPagination({
-  currentPage,
-  totalPages,
-  pageWindow,
-  onPageChange,
-}) {
-  if (totalPages <= 1) return null;
-
-  return (
-    <div className="catalog-pagination" aria-label="Paginacion del catalogo">
-      <button
-        type="button"
-        className="btn btn-outline catalog-page-btn"
-        onClick={() => onPageChange(Math.max(1, currentPage - 1))}
-        disabled={currentPage === 1}
-      >
-        <ChevronLeft size={16} />
-        Anterior
-      </button>
-
-      <div className="catalog-page-numbers">
-        {pageWindow[0] > 1 && <span className="catalog-page-ellipsis">...</span>}
-        {pageWindow.map((pageNumber) => (
-          <button
-            key={pageNumber}
-            type="button"
-            className={`catalog-page-number ${pageNumber === currentPage ? "active" : ""}`}
-            onClick={() => onPageChange(pageNumber)}
-            aria-current={pageNumber === currentPage ? "page" : undefined}
-          >
-            {pageNumber}
-          </button>
-        ))}
-        {pageWindow[pageWindow.length - 1] < totalPages && <span className="catalog-page-ellipsis">...</span>}
-      </div>
-
-      <button
-        type="button"
-        className="btn btn-outline catalog-page-btn"
-        onClick={() => onPageChange(Math.min(totalPages, currentPage + 1))}
-        disabled={currentPage === totalPages}
-      >
-        Siguiente
-        <ChevronRight size={16} />
-      </button>
-    </div>
-  );
-}
-
-function ManagedEntitiesEditor(props) {
-  const {
-    title,
-    description,
-    icon,
-    records,
-    products,
-    entityType,
-    addInput,
-    setAddInput,
-    onAdd,
-    onDraftChange,
-    onSave,
-    onDelete,
-    onToggleActive,
-  } = props;
-  const Icon = icon;
-  const [replacementMap, setReplacementMap] = useState({});
-  const isType = entityType === "productType";
-
-  const getAssociationCount = (record) => products.filter((product) => (
-    isType
-      ? normalizeOptionLabel(product.productType || "").toLowerCase() === record.name.toLowerCase()
-      : (product.filterTags || []).some((tag) => normalizeOptionLabel(tag).toLowerCase() === record.name.toLowerCase())
-  )).length;
-
-  const alternativesFor = (record) => records
-    .filter((other) => other.id !== record.id)
-    .sort((left, right) => {
-      if (left.active === right.active) return left.name.localeCompare(right.name, "es", { sensitivity: "base" });
-      return left.active ? -1 : 1;
-    });
-
-  return (
-    <div className="card" style={{ padding: 22 }}>
-      <div className="admin-toolbar">
-        <div>
-          <p className="muted" style={{ textTransform: "uppercase", letterSpacing: ".25em", fontSize: 13 }}>{title}</p>
-          <h4 style={{ margin: "6px 0 0", fontSize: 28, display: "flex", alignItems: "center", gap: 10 }}><Icon size={22} /> {title}</h4>
-          <p className="muted" style={{ marginBottom: 0, lineHeight: 1.8 }}>{description}</p>
-        </div>
-      </div>
-
-      <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: 10, marginTop: 18 }}>
-        <input className="input" placeholder={isType ? "Agregar tipo de producto" : "Agregar filtro/tag"} value={addInput} onChange={(event) => setAddInput(event.target.value)} />
-        <button className="btn btn-outline" type="button" onClick={onAdd}><Plus size={16} />Agregar</button>
-      </div>
-
-      <div className="entity-grid" style={{ marginTop: 18 }}>
-        {records.length === 0 ? (
-          <div className="empty-admin-note">Todava no hay elementos registrados en esta seccin.</div>
-        ) : records.map((record) => {
-          const associationCount = getAssociationCount(record);
-          const replacement = replacementMap[record.id] || (associationCount > 0 ? alternativesFor(record)[0]?.name || "" : "");
-          return (
-            <div key={record.id} className="entity-row">
-              <div className="entity-row-head">
-                <div>
-                  <h5 style={{ margin: 0, fontSize: 20 }}>{record.name}</h5>
-                  <div className="entity-row-meta" style={{ marginTop: 10 }}>
-                    <span className="badge badge-light">slug: {record.slug || slugify(record.name)}</span>
-                    <span className={`badge ${record.active ? "badge-success" : "badge-light"}`}>{record.active ? "Activo" : "Oculto"}</span>
-                    <span className="badge badge-light">{associationCount} {isType ? "producto(s)" : "asociacion(es)"}</span>
-                  </div>
-                </div>
-                <div className="entity-actions">
-                  <button className="btn btn-outline" type="button" onClick={() => onToggleActive(record.id)}>{record.active ? "Ocultar" : "Activar"}</button>
-                </div>
-              </div>
-
-              <div className="entity-edit-grid">
-                <input className="input" placeholder="Nombre" value={record.draftName ?? record.name} onChange={(event) => onDraftChange(record.id, "draftName", event.target.value)} />
-                <input className="input" placeholder="Slug" value={record.draftSlug ?? record.slug} onChange={(event) => onDraftChange(record.id, "draftSlug", event.target.value)} />
-                <button className="btn btn-soft" type="button" onClick={() => onSave(record.id)}><PencilLine size={16} />Guardar</button>
-                <button className="btn btn-danger" type="button" onClick={() => onDelete(record.id, replacement)}><Trash2 size={16} />Eliminar</button>
-              </div>
-
-              {associationCount > 0 && (
-                <div className="entity-assignment">
-                  <select className="select" value={replacement} onChange={(event) => setReplacementMap((previous) => ({ ...previous, [record.id]: event.target.value }))}>
-                    <option value="">{isType ? "Selecciona una reasignacion" : "Eliminar sin reemplazo"}</option>
-                    {alternativesFor(record).map((item) => <option key={item.id} value={item.name}>{item.name}{item.active ? "" : " (oculto)"}</option>)}
-                  </select>
-                  <p className="helper-text" style={{ margin: 0 }}>
-                    {isType
-                      ? "Si este tipo esta asignado a productos, debes escoger a cual se moveran antes de eliminarlo."
-                      : "Puedes reemplazar el filtro por otro o eliminarlo de todos los productos asociados."}
-                  </p>
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-function CouponManagerPanel({
-  coupons,
-  couponDraft,
-  couponEditorMessage,
-  couponEditorError,
-  products,
-  productTypeOptions,
-  onCouponDraftFieldChange,
-  onToggleCouponDraftProduct,
-  onToggleCouponDraftProductType,
-  onSaveCoupon,
-  onResetCouponDraft,
-  onEditCoupon,
-  onToggleCouponActive,
-  onDeleteCoupon,
-}) {
-  const selectedExcludedTypes = new Set(
-    splitFilterTagsText(couponDraft.excludedProductTypesText || "").map((item) => item.toLowerCase()),
-  );
-
-  return (
-    <div className="admin-tab-panel">
-      <div className="card" style={{ padding: 22 }}>
-        <div className="admin-toolbar">
-          <div>
-            <p className="muted" style={{ textTransform: "uppercase", letterSpacing: ".25em", fontSize: 13 }}>Descuentos</p>
-            <h4 style={{ margin: "6px 0 0", fontSize: 28 }}>{couponDraft.id ? "Editar cupon" : "Crear cupon"}</h4>
-          </div>
-          <div className="admin-actions">
-            {couponDraft.id && <button className="btn btn-outline" onClick={onResetCouponDraft}><X size={16} />Cancelar</button>}
-            <button className="btn btn-primary" onClick={onSaveCoupon}><ShieldCheck size={16} />Guardar cupon</button>
-          </div>
-        </div>
-
-        {(couponEditorMessage || couponEditorError) && (
-          <div style={{ marginTop: 14 }}>
-            {couponEditorMessage && <div className="status-message status-success">{couponEditorMessage}</div>}
-            {couponEditorError && <div className="status-message status-error" style={{ marginTop: couponEditorMessage ? 10 : 0 }}>{couponEditorError}</div>}
-          </div>
-        )}
-
-        <div className="settings-grid" style={{ marginTop: 18 }}>
-          <input className="input" placeholder="Codigo (ej: VIP20)" value={couponDraft.code} onChange={(event) => onCouponDraftFieldChange("code", event.target.value)} />
-          <select className="select" value={couponDraft.discountType} onChange={(event) => onCouponDraftFieldChange("discountType", event.target.value)}>
-            <option value="percentage">Porcentaje (%)</option>
-            <option value="fixed">Monto fijo ($)</option>
-          </select>
-          <input className="input" type="number" min="0" placeholder="Valor del descuento" value={couponDraft.discountValue} onChange={(event) => onCouponDraftFieldChange("discountValue", event.target.value)} />
-          <input className="input" type="number" min="0" placeholder="Minimo de compra" value={couponDraft.minPurchase} onChange={(event) => onCouponDraftFieldChange("minPurchase", event.target.value)} />
-          <input className="input" type="number" min="0" placeholder="Limite por usuario (0 = sin lmite)" value={couponDraft.limitPerUser} onChange={(event) => onCouponDraftFieldChange("limitPerUser", event.target.value)} />
-          <input className="input" type="number" min="0" placeholder="Limite global (0 = sin lmite)" value={couponDraft.limitGlobal} onChange={(event) => onCouponDraftFieldChange("limitGlobal", event.target.value)} />
-          <div className="admin-full">
-            <label className="helper-text" style={{ display: "block", marginBottom: 8 }}>Activo desde (opcional)</label>
-            <input className="input" type="datetime-local" value={couponDraft.startsAt || ""} onChange={(event) => onCouponDraftFieldChange("startsAt", event.target.value)} />
-          </div>
-          <div className="admin-full">
-            <label className="helper-text" style={{ display: "block", marginBottom: 8 }}>Expira el (opcional)</label>
-            <input className="input" type="datetime-local" value={couponDraft.expiresAt} onChange={(event) => onCouponDraftFieldChange("expiresAt", event.target.value)} />
-          </div>
-          <input className="input" type="time" value={couponDraft.activeHourStart || ""} onChange={(event) => onCouponDraftFieldChange("activeHourStart", event.target.value)} placeholder="Hora inicio" />
-          <input className="input" type="time" value={couponDraft.activeHourEnd || ""} onChange={(event) => onCouponDraftFieldChange("activeHourEnd", event.target.value)} placeholder="Hora fin" />
-          <div className="admin-full">
-            <label className="helper-text" style={{ display: "block", marginBottom: 8 }}>Categorias permitidas (opcional)</label>
-            <input className="input" placeholder="Ej: mujer, hombre, premium" value={couponDraft.allowedCategoriesText || ""} onChange={(event) => onCouponDraftFieldChange("allowedCategoriesText", event.target.value)} />
-            <p className="helper-text" style={{ margin: "8px 0 0" }}>
-              Si dejas vacio, aplica a cualquier categoria elegible.
-            </p>
-          </div>
-          <div className="admin-full">
-            <label style={{ display: "inline-flex", alignItems: "center", gap: 10, fontWeight: 600 }}>
-              <input className="checkbox" type="checkbox" checked={couponDraft.active !== false} onChange={(event) => onCouponDraftFieldChange("active", event.target.checked)} />
-              Cupon activo
-            </label>
-          </div>
-          <div className="admin-full">
-            <label className="helper-text" style={{ display: "block", marginBottom: 8 }}>Tipos/categorias excluidas</label>
-            <div className="chip-row coupon-type-chip-row">
-              {productTypeOptions.map((productType) => {
-                const normalizedType = normalizeOptionLabel(productType);
-                if (!normalizedType) return null;
-                const selected = selectedExcludedTypes.has(normalizedType.toLowerCase());
-                return (
-                  <button
-                    key={normalizedType}
-                    type="button"
-                    className={`chip ${selected ? "active" : ""}`}
-                    onClick={() => onToggleCouponDraftProductType(normalizedType)}
-                  >
-                    {normalizedType}
-                  </button>
-                );
-              })}
-            </div>
-            <label className="helper-text" style={{ display: "block", margin: "10px 0 8px" }}>Tambien puedes escribirlos manualmente separados por coma</label>
-            <input className="input" placeholder={`Ej: licras, ${productTypeOptions[0] || "blazers"}`} value={couponDraft.excludedProductTypesText} onChange={(event) => onCouponDraftFieldChange("excludedProductTypesText", event.target.value)} />
-          </div>
-          <div className="admin-full">
-            <p className="helper-text" style={{ marginTop: 0 }}>Productos excluidos del descuento</p>
-            <div className="coupon-products-grid">
-              {products.map((product) => {
-                const productId = String(product.id);
-                const selected = (couponDraft.excludedProductIds || []).map((entry) => String(entry)).includes(productId);
-                return (
-                  <button
-                    key={productId}
-                    type="button"
-                    className={`coupon-product-pill ${selected ? "selected" : ""}`}
-                    onClick={() => onToggleCouponDraftProduct(productId)}
-                  >
-                    <input type="checkbox" checked={selected} readOnly />
-                    <span>{product.name}</span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div className="card" style={{ padding: 22 }}>
-        <div className="admin-toolbar">
-          <div>
-            <p className="muted" style={{ textTransform: "uppercase", letterSpacing: ".25em", fontSize: 13 }}>Listado</p>
-            <h4 style={{ margin: "6px 0 0", fontSize: 28 }}>Cupones registrados</h4>
-          </div>
-          <span className="badge badge-light">{coupons.length} cupon(es)</span>
-        </div>
-        <div className="stack" style={{ marginTop: 16 }}>
-          {coupons.length === 0 ? (
-            <div className="empty-admin-note">Aun no hay cupones creados.</div>
-          ) : coupons.map((coupon) => (
-            <div key={coupon.id} className="coupon-row-card">
-              <div className="admin-toolbar">
-                <div>
-                  <strong>{coupon.code}</strong>
-                  <p className="muted" style={{ margin: "6px 0 0", fontSize: 13 }}>
-                    {coupon.discountType === "percentage" ? `${coupon.discountValue}%` : currency(coupon.discountValue)} - minimo {currency(coupon.minPurchase || 0)}
-                  </p>
-                </div>
-                <div className="admin-actions">
-                  <span className={`badge ${coupon.active ? "badge-success" : "badge-light"}`}>{coupon.active ? "Activo" : "Inactivo"}</span>
-                  <button className="btn btn-soft" onClick={() => onEditCoupon(coupon)}><PencilLine size={16} />Editar</button>
-                  <button className="btn btn-outline" onClick={() => onToggleCouponActive(coupon.id)}>{coupon.active ? "Desactivar" : "Activar"}</button>
-                  <button className="btn btn-danger" onClick={() => onDeleteCoupon(coupon.id)}><Trash2 size={16} />Eliminar</button>
-                </div>
-              </div>
-              <div className="chip-row" style={{ marginTop: 10 }}>
-                <span className="badge badge-light">Usos: {coupon.usageTotal}</span>
-                {coupon.limitGlobal > 0 && <span className="badge badge-light">Limite global: {coupon.limitGlobal}</span>}
-                {coupon.limitPerUser > 0 && <span className="badge badge-light">Limite por usuario: {coupon.limitPerUser}</span>}
-                {coupon.startsAt && <span className="badge badge-light">Desde: {new Date(coupon.startsAt).toLocaleString("es-EC")}</span>}
-                {coupon.expiresAt && <span className="badge badge-light">Expira: {new Date(coupon.expiresAt).toLocaleString("es-EC")}</span>}
-                {(coupon.activeHourStart && coupon.activeHourEnd) && <span className="badge badge-light">Horario: {coupon.activeHourStart} - {coupon.activeHourEnd}</span>}
-                {!!coupon.allowedCategories?.length && <span className="badge badge-light">Categorias: {coupon.allowedCategories.join(", ")}</span>}
-                {!!coupon.excludedProductIds?.length && <span className="badge badge-warning">{coupon.excludedProductIds.length} producto(s) excluidos</span>}
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
 
 export default function App() {
   const [products, setProducts] = useState(() => getStoredProducts());
@@ -2481,8 +1895,11 @@ export default function App() {
     upsertRouteMeta('meta[property="og:description"]', ["property", "og:description"], description);
     upsertRouteMeta('meta[property="og:type"]', ["property", "og:type"], routedProduct ? "product" : "website");
     upsertRouteMeta('meta[property="og:url"]', ["property", "og:url"], `${origin}${normalizedPathname}`);
+    upsertRouteMeta('meta[property="og:image"]', ["property", "og:image"], routedProduct ? productImage : `${origin}/og-cover.jpg`);
+    upsertRouteMeta('meta[name="twitter:card"]', ["name", "twitter:card"], "summary_large_image");
     upsertRouteMeta('meta[name="twitter:title"]', ["name", "twitter:title"], title);
     upsertRouteMeta('meta[name="twitter:description"]', ["name", "twitter:description"], description);
+    upsertRouteMeta('meta[name="twitter:image"]', ["name", "twitter:image"], routedProduct ? productImage : `${origin}/og-cover.jpg`);
 
     let canonical = document.querySelector('link[rel="canonical"]');
     if (!canonical) {
@@ -2507,14 +1924,23 @@ export default function App() {
       image: [productImage],
       description: productDescription,
       sku: String(routedProduct.id || productRouteSlug),
+      brand: {
+        "@type": "Brand",
+        name: "Adriego",
+      },
       offers: {
         "@type": "Offer",
         priceCurrency: "USD",
         price: Number(routedProduct.price || 0).toFixed(2),
+        itemCondition: "https://schema.org/NewCondition",
         availability: hasProductAvailableStock(routedProduct)
           ? "https://schema.org/InStock"
           : "https://schema.org/OutOfStock",
         url: `${origin}${normalizedPathname}`,
+        seller: {
+          "@type": "Organization",
+          name: "Adriego Store",
+        },
       },
     });
     if (!existingSchema) document.head.appendChild(schema);
@@ -3609,6 +3035,11 @@ export default function App() {
     });
   }, [catalogReady, productsById]);
 
+  const handleClearRecentlyViewed = useCallback(() => {
+    setRecentlyViewedProductIds([]);
+    saveStorage(STORAGE_KEYS.recentlyViewedProducts, []);
+  }, []);
+
   useEffect(() => {
     if (!catalogFiltersInitializedRef.current) {
       catalogFiltersInitializedRef.current = true;
@@ -3859,7 +3290,7 @@ export default function App() {
       window.history.replaceState({}, document.title, "/");
       setPathname("/");
     }
-  }, [normalizedPathname]);
+  }, [normalizedPathname, openCatalogSearch]);
 
   useEffect(() => {
     if (!catalogReady) return;
@@ -7457,6 +6888,7 @@ export default function App() {
         {flyToCartFx && (
           <Motion.img
             key={flyToCartFx.id}
+            aria-hidden="true"
             src={flyToCartFx.image}
             alt=""
             className="fly-to-cart-thumb"
@@ -7469,7 +6901,7 @@ export default function App() {
               rotate: 10,
             }}
             exit={{ opacity: 0 }}
-            transition={{ duration: 0.64, ease: [0.2, 0.8, 0.2, 1] }}
+            transition={{ duration: 0.34, ease: [0.16, 1, 0.3, 1] }}
             style={{ left: flyToCartFx.startX, top: flyToCartFx.startY }}
           />
         )}
@@ -7882,10 +7314,10 @@ export default function App() {
         {toast && (
           <Motion.div
             className={`toast-stack ${toast.tone || "success"} ${toast.kind ? `toast-kind-${toast.kind}` : ""}`}
-            initial={{ opacity: 0, y: 24, scale: 0.94 }}
+            initial={{ opacity: 0, y: 16, scale: 0.96 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: 10, scale: 0.97 }}
-            transition={{ type: "spring", stiffness: 360, damping: 30, mass: 0.7 }}
+            exit={{ opacity: 0, y: 8, scale: 0.97 }}
+            transition={ANIMATION.springSnappy}
             role="status"
             aria-live="polite"
           >
@@ -8028,8 +7460,8 @@ export default function App() {
           <Motion.div
             className="mobile-nav-backdrop"
             initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
+            animate={{ opacity: 1, transition: { duration: 0.2, ease: "easeOut" } }}
+            exit={{ opacity: 0, transition: { duration: 0.16, ease: "easeOut" } }}
             onClick={() => setShowMobileNav(false)}
           >
             <Motion.nav
@@ -8037,7 +7469,7 @@ export default function App() {
               initial={{ x: "100%" }}
               animate={{ x: 0 }}
               exit={{ x: "100%" }}
-              transition={{ duration: ANIMATION.base }}
+              transition={{ duration: 0.28, ease: ANIMATION.easeDrawer }}
               onClick={(event) => event.stopPropagation()}
             >
               <div className="mobile-nav-head">
@@ -8235,10 +7667,15 @@ export default function App() {
             </p>
             <div className="hero-actions" style={{ marginTop: 20 }}>
               <a href="#coleccion" className="btn btn-primary">{storeSettings.primaryCtaText}</a>
-              <button className="btn btn-outline" onClick={() => setShowCartSummary(true)}>
-                <ShoppingBag size={16} />
-                Ver carrito
-              </button>
+              <a
+                href="#coleccion"
+                className="btn btn-outline"
+                onClick={() => setCategory(OFFER_TAB_VALUE)}
+                aria-label="Ver ofertas especiales de la colección"
+              >
+                <Sparkles size={16} />
+                Ver ofertas
+              </a>
             </div>
             <div className="trust-badges-row">
               <span className="trust-badge-pill">
@@ -8295,12 +7732,14 @@ export default function App() {
 
             <div className="hero-slide-meta">
               <div>
-                <p className="hero-caption-title" style={{ margin: 0, fontSize: 18, fontWeight: 600 }}>{activeHeroSlide?.title || "Nueva colección"}</p>
+                <p className="hero-caption-title" style={{ margin: 0, fontSize: 13, fontWeight: 600, letterSpacing: "0.04em", textTransform: "uppercase", color: "rgba(255, 255, 255, 0.92)" }}>
+                  {activeHeroSlide?.subtitle ? activeHeroSlide.subtitle : (heroSlideHasAction ? "Prenda destacada" : "Edición exclusiva")}
+                </p>
               </div>
               {heroSlideHasAction && (
                 <span className="hero-slide-link-hint">
                   Ver detalle
-                  <ChevronRight size={18} />
+                  <ChevronRight size={16} />
                 </span>
               )}
             </div>
@@ -8313,6 +7752,7 @@ export default function App() {
                     type="button"
                     className={`hero-slide-dot ${index === heroIndex ? "active" : ""}`}
                     aria-label={`Ir a la imagen ${index + 1}`}
+                    aria-current={index === heroIndex ? "true" : undefined}
                     onClick={() => setHeroIndex(index)}
                   />
                 ))}
@@ -8486,50 +7926,68 @@ export default function App() {
           </section>
 
           <Motion.section
-            className="section-shell"
+            className="purchase-process-section section-shell"
             initial={{ opacity: 0, y: 24 }}
             whileInView={{ opacity: 1, y: 0 }}
             viewport={{ once: true, amount: 0.2 }}
             transition={{ duration: ANIMATION.medium }}
+            aria-labelledby="purchase-process-heading"
           >
-            <div className="purchase-process">
-              <div className="purchase-process-intro">
-                <h3>{storeSettings.saleTitle}</h3>
-                <p>{storeSettings.saleDescription}</p>
-              </div>
-              <ol className="purchase-process-steps" aria-label="Cómo comprar en Adriego Store">
-                <li className="purchase-process-step">
-                  <span className="purchase-process-icon" aria-hidden="true"><ShoppingBag size={19} /></span>
-                  <div className="purchase-process-step-copy">
-                    <span className="purchase-process-step-number" aria-hidden="true">01</span>
-                    <div>
-                      <h4>Elige tu prenda</h4>
-                      <p>Escoge talla, color y cantidad.</p>
-                    </div>
-                  </div>
-                </li>
-                <li className="purchase-process-step">
-                  <span className="purchase-process-icon" aria-hidden="true"><Package size={19} /></span>
-                  <div className="purchase-process-step-copy">
-                    <span className="purchase-process-step-number" aria-hidden="true">02</span>
-                    <div>
-                      <h4>Revisa tus datos</h4>
-                      <p>Confirma contacto y entrega.</p>
-                    </div>
-                  </div>
-                </li>
-                <li className="purchase-process-step">
-                  <span className="purchase-process-icon purchase-process-icon-final" aria-hidden="true"><Send size={18} /></span>
-                  <div className="purchase-process-step-copy">
-                    <span className="purchase-process-step-number" aria-hidden="true">03</span>
-                    <div>
-                      <h4>Envía por WhatsApp</h4>
-                      <p>Recibe confirmación personalizada.</p>
-                    </div>
-                  </div>
-                </li>
-              </ol>
+            <div className="purchase-process-header">
+              <span className="purchase-process-eyebrow">EXPERIENCIA ADRIEGO · EN 3 PASOS</span>
+              <h3 id="purchase-process-heading" className="purchase-process-title">{storeSettings.saleTitle}</h3>
+              <p className="purchase-process-subtitle">{storeSettings.saleDescription}</p>
             </div>
+
+            <ol className="purchase-process-grid" aria-label="Cómo comprar en Adriego Store">
+              <li className="purchase-process-card">
+                <div className="purchase-process-card-top">
+                  <span className="purchase-process-card-num" aria-hidden="true">01</span>
+                  <div className="purchase-process-card-icon-wrap" aria-hidden="true">
+                    <ShoppingBag size={22} />
+                  </div>
+                </div>
+                <div className="purchase-process-card-body">
+                  <h4>Elige tu prenda</h4>
+                  <p>Explora nuestras colecciones exclusivas, escoge tu talla, color y agrega a tu selección.</p>
+                </div>
+                <div className="purchase-process-card-footer">
+                  <span className="purchase-process-card-tag">Paso 01 · Catálogo</span>
+                </div>
+              </li>
+
+              <li className="purchase-process-card">
+                <div className="purchase-process-card-top">
+                  <span className="purchase-process-card-num" aria-hidden="true">02</span>
+                  <div className="purchase-process-card-icon-wrap" aria-hidden="true">
+                    <Package size={22} />
+                  </div>
+                </div>
+                <div className="purchase-process-card-body">
+                  <h4>Revisa tus datos</h4>
+                  <p>Confirma tu dirección de entrega y método de pago preferido para procesar tu orden.</p>
+                </div>
+                <div className="purchase-process-card-footer">
+                  <span className="purchase-process-card-tag">Paso 02 · Confirmación</span>
+                </div>
+              </li>
+
+              <li className="purchase-process-card">
+                <div className="purchase-process-card-top">
+                  <span className="purchase-process-card-num" aria-hidden="true">03</span>
+                  <div className="purchase-process-card-icon-wrap" aria-hidden="true">
+                    <MessageCircle size={22} />
+                  </div>
+                </div>
+                <div className="purchase-process-card-body">
+                  <h4>Ordena por WhatsApp</h4>
+                  <p>Conecta directamente por WhatsApp para confirmación personalizada y despacho inmediato.</p>
+                </div>
+                <div className="purchase-process-card-footer">
+                  <span className="purchase-process-card-tag">Paso 03 · Despacho directo</span>
+                </div>
+              </li>
+            </ol>
           </Motion.section>
 
         </div>
@@ -8537,7 +7995,7 @@ export default function App() {
 
       {recentlyViewedProducts.length > 0 && (
         <Motion.section
-          className="recently-viewed-section section-shell"
+          className="haute-viewed-section section-shell"
           initial={{ opacity: 0, y: 18 }}
           whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true, amount: 0.2 }}
@@ -8545,29 +8003,87 @@ export default function App() {
           aria-labelledby="recently-viewed-title"
         >
           <div className="container">
-            <div className="recently-viewed-rail">
-              <h3 id="recently-viewed-title">Visto recientemente</h3>
-              <div className="recently-viewed-images">
-                {recentlyViewedProducts.map((product) => (
-                  <button
+            <div className="haute-viewed-header">
+              <h3 id="recently-viewed-title" className="haute-viewed-heading">
+                Visto recientemente
+              </h3>
+              <button
+                type="button"
+                className="haute-viewed-clear-btn"
+                onClick={handleClearRecentlyViewed}
+                aria-label="Limpiar historial de productos vistos recientemente"
+              >
+                <Trash2 size={13} />
+                <span>Limpiar historial</span>
+              </button>
+            </div>
+
+            <div className="haute-viewed-rail" role="region" aria-label="Prendas vistas recientemente">
+              {recentlyViewedProducts.map((product, index) => {
+                const currentImage = getCurrentImageForProduct(product, selections[product.id]?.color);
+                const effectivePrice = product.offerEnabled && product.offerPrice ? product.offerPrice : product.price;
+                const hasDiscount = product.offerEnabled && product.offerPrice && product.offerPrice < product.price;
+                const discountVal = hasDiscount ? discountPercent(product.price, product.offerPrice) : 0;
+                const itemCode = `#${String(index + 1).padStart(2, "0")}`;
+
+                return (
+                  <Motion.article
                     key={product.id}
-                    type="button"
-                    className="recently-viewed-item"
-                    onClick={() => openProductDetail(product, null, { source: "recently_viewed" })}
-                    aria-label={`Volver a ver ${product.name}`}
+                    className="haute-glass-card"
+                    initial={{ opacity: 0, scale: 0.96 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.95 }}
+                    transition={{ duration: 0.22, ease: ANIMATION.easeOut }}
                   >
-                    <img
-                      src={getCurrentImageForProduct(product, selections[product.id]?.color)}
-                      alt={product.name}
-                      loading="lazy"
-                      decoding="async"
-                      onError={(event) => {
-                        if (event.currentTarget.src !== FALLBACK_IMAGE) event.currentTarget.src = FALLBACK_IMAGE;
-                      }}
-                    />
-                  </button>
-                ))}
-              </div>
+                    <button
+                      type="button"
+                      className="haute-glass-card-trigger"
+                      onClick={() => openProductDetail(product, null, { source: "recently_viewed" })}
+                      aria-label={`Ver prenda ${product.name}`}
+                    >
+                      <div className="haute-glass-img-wrap">
+                        <img
+                          src={currentImage}
+                          alt={product.name}
+                          loading="lazy"
+                          decoding="async"
+                          className="haute-glass-img"
+                          onError={(event) => {
+                            if (event.currentTarget.src !== FALLBACK_IMAGE) event.currentTarget.src = FALLBACK_IMAGE;
+                          }}
+                        />
+                        <div className="haute-glass-overlay-gradient" />
+                        
+                        <div className="haute-glass-top-badge">
+                          {hasDiscount ? (
+                            <span className="haute-pill-discount">-{discountVal}%</span>
+                          ) : product.newArrival ? (
+                            <span className="haute-pill-new">Nuevo</span>
+                          ) : (
+                            <span className="haute-pill-code">{itemCode}</span>
+                          )}
+                        </div>
+
+                        {/* Floating Frosted Glass Lens */}
+                        <div className="haute-glass-lens">
+                          <span className="haute-lens-price">
+                            {currency(effectivePrice)}
+                            {hasDiscount && (
+                              <span className="haute-lens-old-price">{currency(product.price)}</span>
+                            )}
+                          </span>
+                          <span className="haute-lens-title" title={product.name}>
+                            {product.name}
+                          </span>
+                          <span className="haute-lens-cta">
+                            Ver prenda <ArrowUpRight size={13} />
+                          </span>
+                        </div>
+                      </div>
+                    </button>
+                  </Motion.article>
+                );
+              })}
             </div>
           </div>
         </Motion.section>

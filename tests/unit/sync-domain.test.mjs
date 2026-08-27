@@ -9,7 +9,7 @@ import {
 } from '../../src/domain/sync/syncCalculations.js';
 
 describe('Realtime Sync Domain Calculations (src/domain/sync/syncCalculations.js)', () => {
-  test('1. computePollingDelay: selects 3500ms for visible tab and 10000ms for hidden tab', () => {
+  test('1. computePollingDelay: selects VISIBLE_MS for visible tab and BACKGROUND_MS for hidden tab', () => {
     assert.equal(computePollingDelay('visible'), SYNC_INTERVALS.VISIBLE_MS);
     assert.equal(computePollingDelay(''), SYNC_INTERVALS.VISIBLE_MS);
     assert.equal(computePollingDelay(undefined), SYNC_INTERVALS.VISIBLE_MS);

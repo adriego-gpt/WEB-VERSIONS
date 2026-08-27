@@ -16,6 +16,7 @@ import { ImageLightbox } from '../ui/ImageLightbox';
 import { OrderStatusProgress } from '../orders/OrderStatusProgress';
 import { normalizeOrderStatusForOrder, formatOrderDate, getOrderStatusOptions } from '../../domain/orders/status';
 import { getImagesForColor } from '../../domain/products/variants';
+import { useModalA11y } from '../../hooks/useModalA11y';
 import {
   ANIMATION, STORAGE_KEYS, PASSWORD_SECURITY, AUTH_FORM_DEFAULTS,
   AUTH_FIELD_LIMITS, FILE_SECURITY, PRODUCT_FORM_LIMITS, FALLBACK_IMAGE,
@@ -203,6 +204,7 @@ export function AdminPanelModal({
   copyAdminUserResetLink,
   requestDestructiveConfirmation,
 }) {
+  const containerRef = useModalA11y(open, onClose);
   const [offerDraftById, setOfferDraftById] = useState({});
   const [offerDirtyById, setOfferDirtyById] = useState({});
   const [editingUserId, setEditingUserId] = useState("");
@@ -544,7 +546,18 @@ export function AdminPanelModal({
     <>
     <AnimatePresence>
       <Motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="modal-backdrop" onClick={onClose}>
-        <Motion.div initial={{ opacity: 0, y: 24, scale: 0.98 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 18, scale: 0.98 }} transition={{ duration: ANIMATION.base }} className="admin-modal-shell" onClick={(event) => event.stopPropagation()}>
+        <Motion.div
+          ref={containerRef}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Panel de administración"
+          initial={{ opacity: 0, y: 24, scale: 0.98 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          exit={{ opacity: 0, y: 18, scale: 0.98 }}
+          transition={{ duration: ANIMATION.base }}
+          className="admin-modal-shell"
+          onClick={(event) => event.stopPropagation()}
+        >
           <button type="button" className="icon-btn admin-modal-close-top" onClick={onClose} aria-label="Cerrar panel admin">
             <X size={18} />
           </button>

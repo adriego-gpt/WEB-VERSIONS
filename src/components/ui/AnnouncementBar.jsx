@@ -40,8 +40,11 @@ export function AnnouncementBar() {
       className="announcement-bar"
       onMouseEnter={() => setIsPaused(true)}
       onMouseLeave={() => setIsPaused(false)}
+      onFocusCapture={() => setIsPaused(true)}
+      onBlurCapture={() => setIsPaused(false)}
       role="region"
       aria-label="Anuncios de la tienda"
+      aria-live="polite"
     >
       <div className="container announcement-bar-container">
         <div className="announcement-content">

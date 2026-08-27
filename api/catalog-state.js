@@ -98,6 +98,9 @@ export default async function handler(req, res) {
     if (isAdmin) {
       payload.coupons = sanitizedCatalog.coupons;
       payload.orderHistory = sanitizeArray(store.orders);
+      res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+    } else {
+      res.setHeader("Cache-Control", "public, s-maxage=60, stale-while-revalidate=300");
     }
 
     res.status(200).json({ ok: true, data: payload });

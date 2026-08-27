@@ -26,7 +26,7 @@ export function isValidEmail(value = "") {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || "").trim());
 }
 
-export function normalizeContactEmail(value = "", fallback = "soporte@adriegostore.com") {
+export function normalizeContactEmail(value = "", fallback = "soporte@adriego.com") {
   const clean = normalizeEmail(value);
   return isValidEmail(clean) ? clean : fallback;
 }

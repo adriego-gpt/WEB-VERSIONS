@@ -1,9 +1,10 @@
-import React, { useEffect } from "react";
-import { Heart, X, ArrowUpRight, Eye } from "lucide-react";
+import React from "react";
+import { Heart, X, ArrowUpRight } from "lucide-react";
 import { motion as Motion, AnimatePresence } from "framer-motion";
 import { currency } from "../../utils/currency";
 import { getCurrentImageForProduct } from "../../domain/products/variants";
 import { EmotionalEmptyState } from "../ui/EmotionalEmptyState";
+import { useModalA11y } from "../../hooks/useModalA11y";
 
 export function FavoritesModal({
   open,
@@ -14,16 +15,7 @@ export function FavoritesModal({
   onToggleFavorite,
   onBrowseCatalog,
 }) {
-  useEffect(() => {
-    if (!open) return undefined;
-    const handleKeyDown = (event) => {
-      if (event.key === "Escape") {
-        onClose?.();
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [open, onClose]);
+  const containerRef = useModalA11y(open, onClose);
 
   if (!open) return null;
 
@@ -41,6 +33,7 @@ export function FavoritesModal({
         onClick={onClose}
       >
         <Motion.div
+          ref={containerRef}
           initial={{ opacity: 0, y: 24, scale: 0.97 }}
           animate={{ opacity: 1, y: 0, scale: 1 }}
           exit={{ opacity: 0, y: 18, scale: 0.97 }}
