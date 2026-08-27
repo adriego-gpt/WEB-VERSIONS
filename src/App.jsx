@@ -1860,6 +1860,34 @@ export default function App() {
     ))
     : null;
 
+  const openCatalogSearch = useCallback(() => {
+    if (typeof document === "undefined") return;
+    if (selectedProduct) {
+      setSelectedProduct(null);
+    }
+    if (productRouteSlug && typeof window !== "undefined") {
+      window.history.replaceState({}, document.title, "/");
+      setPathname("/");
+    }
+    setShowCartSummary(false);
+    setShowFavoritesPanel(false);
+    setShowMobileNav(false);
+    setShowOrdersModal(false);
+    setShowUserAuth(false);
+    setActiveMobileSection("catalogo");
+    const focusSearchField = () => {
+      catalogSearchInputRef.current?.focus();
+      catalogSearchInputRef.current?.select?.();
+    };
+    focusSearchField();
+    document.getElementById("coleccion")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    searchFocusTimersRef.current.forEach(clearTimeout);
+    searchFocusTimersRef.current = [
+      window.setTimeout(focusSearchField, 240),
+      window.setTimeout(focusSearchField, 420),
+    ];
+  }, [selectedProduct, productRouteSlug]);
+
   useEffect(() => {
     if (typeof window === "undefined") return undefined;
     const handlePopState = () => {
@@ -5200,36 +5228,6 @@ export default function App() {
     setCouponBusy(false);
     pendingCouponCelebrationRef.current = "";
   };
-
-  const openCatalogSearch = useCallback(() => {
-    if (typeof document === "undefined") return;
-    if (selectedProduct) {
-      setSelectedProduct(null);
-    }
-    if (productRouteSlug && typeof window !== "undefined") {
-      window.history.replaceState({}, document.title, "/");
-      setPathname("/");
-    }
-    setShowCartSummary(false);
-    setShowFavoritesPanel(false);
-    setShowMobileNav(false);
-    setShowOrdersModal(false);
-    setShowUserAuth(false);
-    setActiveMobileSection("catalogo");
-    const focusSearchField = () => {
-      catalogSearchInputRef.current?.focus();
-      catalogSearchInputRef.current?.select?.();
-    };
-    focusSearchField();
-    document.getElementById("coleccion")?.scrollIntoView({ behavior: "smooth", block: "start" });
-    // Clear any previously queued focus timers before scheduling new ones (#4)
-    searchFocusTimersRef.current.forEach(clearTimeout);
-    searchFocusTimersRef.current = [
-      window.setTimeout(focusSearchField, 240),
-      window.setTimeout(focusSearchField, 420),
-    ];
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedProduct, productRouteSlug]);
 
   const handleGoHome = useCallback(() => {
     setActiveMobileSection("inicio");
