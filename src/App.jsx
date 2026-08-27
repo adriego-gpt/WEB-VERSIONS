@@ -3907,6 +3907,8 @@ export default function App() {
     || showUserAuth
     || showProfileModal
     || referenceOrder
+    || legalModalState.open
+    || destructiveConfirmation
     || (showMobileNav && isMobileViewport)
     || (showAdminPanel && isAdmin)
   );

@@ -2,9 +2,11 @@ import React, { useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 import { FALLBACK_IMAGE } from "../../constants/product";
+import { useBodyScrollLock } from "../../hooks/useBodyScrollLock";
 
 export function ImageLightbox({ open, src, alt = "Imagen ampliada", title = "Vista completa", onClose }) {
   const closeButtonRef = useRef(null);
+  useBodyScrollLock(open);
 
   useEffect(() => {
     if (!open || typeof document === "undefined") return undefined;
