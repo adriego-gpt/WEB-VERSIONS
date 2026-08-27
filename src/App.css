@@ -6496,6 +6496,294 @@ body,
   border-color: #09090b;
 }
 
+/* ═══════════════════════════════════════════════════════════════
+   ATELIER EDITORIAL ERROR & CONTINGENCY SCREEN (BOCETO 2)
+   ═══════════════════════════════════════════════════════════════ */
+.atelier-error-wrapper {
+  min-height: max(70vh, 520px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: clamp(24px, 5vw, 60px) 16px;
+  background: radial-gradient(ellipse at 50% 30%, rgba(212, 175, 55, 0.05) 0%, #faf9f6 70%);
+  width: 100%;
+}
+
+.atelier-error-card {
+  width: 100%;
+  max-width: 580px;
+  background: #ffffff;
+  border: 1px solid #e8e5de;
+  border-radius: 28px;
+  padding: clamp(28px, 4vw, 44px) clamp(20px, 3.5vw, 36px);
+  box-shadow: 
+    0 24px 60px -12px rgba(24, 24, 27, 0.08),
+    0 4px 16px -2px rgba(24, 24, 27, 0.03);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  position: relative;
+  overflow: hidden;
+}
+
+.atelier-error-brand {
+  margin-bottom: 20px;
+}
+
+.atelier-error-brand-text {
+  font-family: "Manrope", sans-serif;
+  font-size: 11.5px;
+  font-weight: 800;
+  letter-spacing: 0.26em;
+  text-transform: uppercase;
+  color: #18181b;
+  display: inline-block;
+  padding-bottom: 4px;
+  border-bottom: 1px solid rgba(212, 175, 55, 0.4);
+}
+
+/* 🖼️ Framed Artwork Gallery Card */
+.atelier-illustration-frame {
+  width: 100%;
+  max-width: 260px;
+  background: #faf8f5;
+  border: 1px solid #e8e4db;
+  border-radius: 18px;
+  padding: 18px 14px 14px;
+  box-shadow: 
+    0 10px 25px -4px rgba(0, 0, 0, 0.04),
+    inset 0 1px 0 #ffffff;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-bottom: 24px;
+  transition: transform 300ms var(--ease-out);
+}
+
+.atelier-illustration-frame:hover {
+  transform: translateY(-2px);
+}
+
+.atelier-illustration-canvas {
+  width: 100%;
+  max-width: 160px;
+  height: auto;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.atelier-silhouette-svg {
+  width: 100%;
+  height: auto;
+  max-height: 200px;
+  filter: drop-shadow(0 8px 16px rgba(0, 0, 0, 0.06));
+}
+
+.atelier-illustration-quote {
+  margin: 12px 0 0;
+  padding-top: 10px;
+  border-top: 1px solid #ebe7df;
+  font-family: "Cormorant Garamond", Georgia, serif;
+  font-size: 13.5px;
+  font-style: italic;
+  color: #52525b;
+  line-height: 1.45;
+  text-align: center;
+}
+
+.atelier-illustration-quote p {
+  margin: 0;
+}
+
+.atelier-illustration-quote cite {
+  display: block;
+  font-family: "Manrope", sans-serif;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: #8c827a;
+  margin-top: 4px;
+  text-transform: uppercase;
+}
+
+/* ✒️ Content */
+.atelier-error-content {
+  margin-bottom: 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.atelier-error-title {
+  margin: 0 0 10px;
+  font-family: "Cormorant Garamond", Georgia, serif;
+  font-size: clamp(26px, 3.5vw, 36px);
+  font-weight: 600;
+  color: #09090b;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+}
+
+.atelier-error-description {
+  margin: 0 0 14px;
+  font-size: 13.5px;
+  color: #52525b;
+  line-height: 1.6;
+  max-width: 440px;
+}
+
+.atelier-error-safety-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(34, 197, 94, 0.08);
+  border: 1px solid rgba(34, 197, 94, 0.2);
+  color: #15803d;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 4px 12px;
+  border-radius: 9999px;
+  letter-spacing: 0.01em;
+}
+
+.atelier-safety-icon {
+  color: #16a34a;
+}
+
+/* 🔘 Action Buttons */
+.atelier-error-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: center;
+  width: 100%;
+  margin-bottom: 20px;
+}
+
+.atelier-btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: #09090b;
+  color: #ffffff;
+  border: 1px solid #09090b;
+  border-radius: 9999px;
+  padding: 12px 24px;
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(9, 9, 11, 0.16);
+  transition: transform 160ms var(--ease-out), background-color 160ms var(--ease-out), box-shadow 160ms var(--ease-out);
+}
+
+.atelier-btn-primary:hover {
+  transform: translateY(-2px);
+  background: #18181b;
+  box-shadow: 0 8px 20px rgba(9, 9, 11, 0.22);
+}
+
+.atelier-btn-primary:active {
+  transform: translateY(0);
+}
+
+.atelier-btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: #ffffff;
+  color: #18181b;
+  border: 1px solid #d4d0c8;
+  border-radius: 9999px;
+  padding: 12px 24px;
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.03);
+  transition: transform 160ms var(--ease-out), background-color 160ms var(--ease-out), border-color 160ms var(--ease-out);
+}
+
+.atelier-btn-secondary:hover {
+  transform: translateY(-2px);
+  background: #faf8f5;
+  border-color: #18181b;
+}
+
+.atelier-btn-secondary:active {
+  transform: translateY(0);
+}
+
+/* 💬 Footer & Debug */
+.atelier-error-footer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding-top: 14px;
+  border-top: 1px solid #f1eee7;
+}
+
+.atelier-error-contact-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #71717a;
+  text-decoration: none;
+  transition: color 160ms var(--ease-out);
+}
+
+.atelier-error-contact-link:hover {
+  color: #18181b;
+  text-decoration: underline;
+}
+
+.atelier-error-debug-section {
+  width: 100%;
+  margin-top: 6px;
+}
+
+.atelier-error-debug-toggle {
+  background: transparent;
+  border: none;
+  font-size: 11px;
+  font-weight: 600;
+  color: #a1a1aa;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  transition: color 160ms var(--ease-out);
+}
+
+.atelier-error-debug-toggle:hover {
+  color: #71717a;
+}
+
+.atelier-error-debug-pre {
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  background: #f4f4f5;
+  border-radius: 8px;
+  font-family: monospace;
+  font-size: 11px;
+  color: #e11d48;
+  text-align: left;
+  max-height: 140px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .contact-location-panel {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
