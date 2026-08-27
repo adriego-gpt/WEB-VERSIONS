@@ -143,7 +143,7 @@ export class ErrorBoundary extends Component {
       }
 
       return (
-        <main className="atelier-error-wrapper" role="alert" aria-live="assertive">
+        <main className="atelier-error-wrapper">
           <div className="atelier-error-card">
             {/* ⚜️ Haute Couture Brand Header */}
             <header className="atelier-error-brand">
@@ -154,12 +154,12 @@ export class ErrorBoundary extends Component {
             <AtelierFashionIllustration />
 
             {/* ✒️ Editorial Heading & Reassurance */}
-            <div className="atelier-error-content">
+            <div className="atelier-error-content" role="alert" aria-live="assertive">
               <h1 className="atelier-error-title">
-                {this.props.title || "Un Momento, por favor"}
+                {String(this.props.title || "Un Momento, por favor")}
               </h1>
               <p className="atelier-error-description">
-                {this.props.message || "Estamos restaurando la conexión con la colección. Tu selección de prendas y favoritos están protegidos en tu dispositivo."}
+                {String(this.props.message || "Estamos restaurando la conexión con la colección. Tu selección de prendas y favoritos están protegidos en tu dispositivo.")}
               </p>
 
               <div className="atelier-error-safety-badge">
@@ -215,21 +215,22 @@ export class ErrorBoundary extends Component {
                 <span>Asistencia personalizada por WhatsApp</span>
               </a>
 
-              {/* 🛠️ Discreet Technical Details Accordion */}
-              {this.state.error && (
+              {/* 🛠️ Discreet Technical Details Accordion (DEV only) */}
+              {import.meta.env.DEV && this.state.error && (
                 <div className="atelier-error-debug-section">
                   <button
                     type="button"
                     className="atelier-error-debug-toggle"
                     onClick={this.toggleDetails}
                     aria-expanded={this.state.showDetails}
+                    aria-controls="atelier-debug-panel"
                   >
                     <span>Detalles técnicos</span>
                     {this.state.showDetails ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
                   </button>
 
                   {this.state.showDetails && (
-                    <pre className="atelier-error-debug-pre">
+                    <pre id="atelier-debug-panel" className="atelier-error-debug-pre">
                       {String(this.state.error?.stack || this.state.error?.message || this.state.error)}
                     </pre>
                   )}

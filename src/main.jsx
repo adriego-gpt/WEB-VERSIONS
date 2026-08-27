@@ -5,7 +5,10 @@ import './index.css'
 import { ErrorBoundary } from './components/ui/ErrorBoundary.jsx'
 
 // Global recovery for stale chunks after new deployments
-if (typeof window !== 'undefined') {
+// Guarded with a flag to prevent duplicate listeners during Vite HMR (#12)
+if (typeof window !== 'undefined' && !window.__adriegoChunkListenersAdded) {
+  window.__adriegoChunkListenersAdded = true;
+
   window.addEventListener('error', (event) => {
     const isChunkError = (
       event?.error?.name === 'ChunkLoadError'

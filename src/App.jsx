@@ -211,6 +211,23 @@ const OrderReferenceModal = lazyWithRetry(() => import("./components/orders/Orde
 const LegalModal = lazyWithRetry(() => import("./components/modals/LegalModal").then((module) => ({ default: module.LegalModal })));
 const OrderSuccessRedirectModal = lazyWithRetry(() => import("./components/modals/OrderSuccessRedirectModal").then((module) => ({ default: module.OrderSuccessRedirectModal || module.default })));
 
+/** Module-level route set — avoids re-instantiation on every render (#11). */
+const KNOWN_DIRECT_ROUTES = new Set(["/", "/cuenta/restablecer", "/carrito", "/favoritos", "/pedidos", "/admin", "/buscar", "/error-preview"]);
+
+/**
+ * Safe error thrower for /error-preview route (#5).
+ * Throws in componentDidMount instead of render to avoid React concurrent mode
+ * re-render loops and the development error overlay.
+ */
+class ErrorPreviewThrower extends React.Component {
+  componentDidMount() {
+    throw new Error("Simulación controlada para previsualizar la pantalla Editorial Atelier.");
+  }
+  render() {
+    return null;
+  }
+}
+
 const CATALOG_SORT_OPTIONS = new Set(["destacados", "nuevos", "mejor-valorados", "precio-asc", "precio-desc"]);
 
 function readCatalogRouteState() {
@@ -1668,6 +1685,7 @@ export default function App() {
   const productFormSignature = useMemo(() => getProductFormSignature(productForm), [productForm]);
   const hasUnsavedProductChanges = productFormSignature !== productFormBaseline;
   const catalogSearchInputRef = useRef(null);
+  const searchFocusTimersRef = useRef([]);
   const productsRef = useRef(products);
   const couponsRef = useRef(coupons);
   const cartRef = useRef(cart);
@@ -3292,8 +3310,7 @@ export default function App() {
       window.history.replaceState({}, document.title, "/");
       setPathname("/");
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [normalizedPathname]);
+  }, [normalizedPathname, openCatalogSearch]);
 
   useEffect(() => {
     if (!catalogReady) return;
@@ -5184,7 +5201,7 @@ export default function App() {
     pendingCouponCelebrationRef.current = "";
   };
 
-  const openCatalogSearch = () => {
+  const openCatalogSearch = useCallback(() => {
     if (typeof document === "undefined") return;
     if (selectedProduct) {
       setSelectedProduct(null);
@@ -5205,9 +5222,14 @@ export default function App() {
     };
     focusSearchField();
     document.getElementById("coleccion")?.scrollIntoView({ behavior: "smooth", block: "start" });
-    window.setTimeout(focusSearchField, 240);
-    window.setTimeout(focusSearchField, 420);
-  };
+    // Clear any previously queued focus timers before scheduling new ones (#4)
+    searchFocusTimersRef.current.forEach(clearTimeout);
+    searchFocusTimersRef.current = [
+      window.setTimeout(focusSearchField, 240),
+      window.setTimeout(focusSearchField, 420),
+    ];
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedProduct, productRouteSlug]);
 
   const handleGoHome = useCallback(() => {
     setActiveMobileSection("inicio");
@@ -6835,9 +6857,8 @@ export default function App() {
   const ToastIcon = toastTone === "error"
     ? CircleX
     : (toastTone === "warning" ? Clock3 : (toastTone === "info" ? MessageCircle : BadgeCheck));
-  const knownDirectRoutes = new Set(["/", "/cuenta/restablecer", "/carrito", "/favoritos", "/pedidos", "/admin", "/buscar", "/error-preview"]);
   const routeNotFound = catalogReady
-    && !knownDirectRoutes.has(normalizedPathname)
+    && !KNOWN_DIRECT_ROUTES.has(normalizedPathname)
     && (!productRouteSlug || (catalogReady && !routedProduct));
 
   const returnHomeFromRoute = () => {
@@ -6851,11 +6872,7 @@ export default function App() {
     return (
       <MotionConfig reducedMotion="user">
         <ErrorBoundary onReset={returnHomeFromRoute}>
-          <div style={{ display: "none" }}>
-            {(() => {
-              throw new Error("Simulación controlada para previsualizar la pantalla Editorial Atelier.");
-            })()}
-          </div>
+          <ErrorPreviewThrower />
         </ErrorBoundary>
       </MotionConfig>
     );

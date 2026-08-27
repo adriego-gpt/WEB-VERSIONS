@@ -118,6 +118,11 @@ function localApiPlugin() {
 }
 
 export default defineConfig(({ mode }) => {
+  // Load ALL env vars so the local dev API plugin (serverless function emulation)
+  // can read backend secrets (TELEGRAM_BOT_TOKEN, KV_REST_API_TOKEN, etc.).
+  // SECURITY: These are injected ONLY into Node's process.env for the dev server
+  // middleware. Vite does NOT expose process.env to the client bundle — only
+  // variables explicitly defined via `define:` or prefixed with VITE_ are bundled.
   const localEnv = loadEnv(mode, process.cwd(), "");
   Object.entries(localEnv).forEach(([key, value]) => {
     if (process.env[key] === undefined) {

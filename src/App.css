@@ -6615,6 +6615,8 @@ body,
   display: flex;
   flex-direction: column;
   align-items: center;
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
 
 .atelier-error-title {
@@ -6782,6 +6784,26 @@ body,
   overflow: auto;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* ♿ Reduced motion: disable expensive GPU effects (#15) */
+@media (prefers-reduced-motion: reduce) {
+  .atelier-illustration-frame,
+  .atelier-btn-primary,
+  .atelier-btn-secondary,
+  .atelier-error-contact-link,
+  .atelier-error-debug-toggle {
+    transition: none !important;
+    transform: none !important;
+  }
+
+  .atelier-error-card {
+    box-shadow: 0 2px 8px rgba(24, 24, 27, 0.06);
+  }
+
+  .atelier-silhouette-svg {
+    filter: none;
+  }
 }
 
 .contact-location-panel {
