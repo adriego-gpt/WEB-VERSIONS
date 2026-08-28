@@ -75,7 +75,7 @@ export function FeaturedProductMarquee({ products = [], catalogReady, onOpenDeta
       return undefined;
     }
 
-    const speed = 0.55; // Pixels per frame at 60fps (smooth elegant flow)
+    const speed = 1.05; // Pixels per frame at 60fps (livelier and smooth motion)
 
     const tick = (time) => {
       if (!lastTimeRef.current) lastTimeRef.current = time;
