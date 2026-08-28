@@ -3801,8 +3801,8 @@ body,
 
 .product-modal-option-legend {
   display: flex;
-  justify-content: space-between;
   align-items: center;
+  gap: 8px;
   width: 100%;
   margin: 0;
   padding: 0;
@@ -3818,8 +3818,9 @@ body,
 
 .product-modal-size-legend {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-start;
   align-items: center;
+  gap: 8px;
   width: 100%;
 }
 
