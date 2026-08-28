@@ -7800,20 +7800,6 @@ export default function App() {
               </div>
             </button>
 
-            <div className="hero-slide-meta">
-              <div>
-                <p className="hero-caption-title" style={{ margin: 0, fontSize: 13, fontWeight: 600, letterSpacing: "0.04em", textTransform: "uppercase", color: "#1a1a1a" }}>
-                  {activeHeroSlide?.subtitle ? activeHeroSlide.subtitle : (heroSlideHasAction ? "Prenda destacada" : "Edición exclusiva")}
-                </p>
-              </div>
-              {heroSlideHasAction && (
-                <span className="hero-slide-link-hint">
-                  Ver detalle
-                  <ChevronRight size={16} />
-                </span>
-              )}
-            </div>
-
             {heroSlides.length > 1 && (
               <div className="hero-slide-indicators" aria-label="Imágenes de portada">
                 {heroSlides.map((slide, index) => (

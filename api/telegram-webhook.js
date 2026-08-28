@@ -13,7 +13,6 @@ import {
   formatTelegramOrderMessage,
 } from "./_lib/notifications.js";
 
-const DEFAULT_TELEGRAM_BOT_TOKEN = "8838650681:AAHQigrGo6TcX4VrFkGqtZ7P_HUlV6aOhJA";
 const ENDPOINT_NAME = "telegram-webhook";
 
 function currency(value) {
@@ -226,7 +225,11 @@ export default async function handler(req, res) {
     return;
   }
 
-  const token = process.env.TELEGRAM_BOT_TOKEN || DEFAULT_TELEGRAM_BOT_TOKEN;
+  const token = String(process.env.TELEGRAM_BOT_TOKEN || "").trim();
+  if (!token) {
+    res.status(503).json({ ok: false, message: "Telegram bot no configurado." });
+    return;
+  }
 
   // 1. Handle Callback Query (Buttons clicked in Telegram messages)
   if (update.callback_query) {

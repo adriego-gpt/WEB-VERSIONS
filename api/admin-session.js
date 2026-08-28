@@ -86,9 +86,9 @@ function clearFailures(ip) {
 
 function readEnvConfig() {
   return {
-    username: normalizeLine(process.env.ADMIN_USERNAME || "adriego-admin"),
-    email: normalizeEmail(process.env.ADMIN_EMAIL || "soporte@adriego.store"),
-    passwordAlgorithm: normalizeLine(process.env.ADMIN_PASSWORD_ALGORITHM || "sha256"),
+    username: normalizeLine(process.env.ADMIN_USERNAME || ""),
+    email: normalizeEmail(process.env.ADMIN_EMAIL || ""),
+    passwordAlgorithm: normalizeLine(process.env.ADMIN_PASSWORD_ALGORITHM || "scrypt"),
     passwordSalt: String(process.env.ADMIN_PASSWORD_SALT || "").trim(),
     passwordHash: String(process.env.ADMIN_PASSWORD_HASH || "").trim(),
     sessionSecret: String(process.env.ADMIN_SESSION_SECRET || "").trim(),
@@ -116,7 +116,7 @@ export default async function handler(req, res) {
   }
 
   const { username, email, passwordAlgorithm, passwordSalt, passwordHash, sessionSecret } = readEnvConfig();
-  if (!passwordSalt || !passwordHash || !sessionSecret) {
+  if (!username || !email || !passwordSalt || !passwordHash || !sessionSecret) {
     res.status(500).json({ ok: false, message: "Admin auth no configurado" });
     return;
   }

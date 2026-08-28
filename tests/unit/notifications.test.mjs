@@ -69,10 +69,17 @@ test('Order Notifications Engine (Telegram & n8n)', async (t) => {
   });
 
   await t.test('3. Strict Authorization: verifies admin Chat ID and rejects strangers', () => {
-    assert.equal(isAuthorizedAdminChatId('1037173906'), true);
-    assert.equal(isAuthorizedAdminChatId('9999999999'), false);
-    assert.equal(isAuthorizedAdminChatId(''), false);
-    assert.equal(isAuthorizedAdminChatId(null), false);
+    const prev = process.env.TELEGRAM_ADMIN_CHAT_ID;
+    process.env.TELEGRAM_ADMIN_CHAT_ID = '1037173906';
+    try {
+      assert.equal(isAuthorizedAdminChatId('1037173906'), true);
+      assert.equal(isAuthorizedAdminChatId('9999999999'), false);
+      assert.equal(isAuthorizedAdminChatId(''), false);
+      assert.equal(isAuthorizedAdminChatId(null), false);
+    } finally {
+      if (prev) process.env.TELEGRAM_ADMIN_CHAT_ID = prev;
+      else delete process.env.TELEGRAM_ADMIN_CHAT_ID;
+    }
   });
 
   await t.test('4. Markdown escaping safely neutralizes special characters', () => {
@@ -84,19 +91,37 @@ test('Order Notifications Engine (Telegram & n8n)', async (t) => {
   });
 
   await t.test('5. sendTelegramNotification strictly blocks sending to unauthorized chat IDs', async () => {
-    const unauthorizedResult = await sendTelegramNotification(sampleOrder, { chatId: '9999999999' });
-    assert.equal(unauthorizedResult.ok, false);
-    assert.equal(unauthorizedResult.message, 'Unauthorized recipient');
+    const prevChat = process.env.TELEGRAM_ADMIN_CHAT_ID;
+    const prevToken = process.env.TELEGRAM_BOT_TOKEN;
+    process.env.TELEGRAM_ADMIN_CHAT_ID = '1037173906';
+    process.env.TELEGRAM_BOT_TOKEN = 'test-token-123';
+    try {
+      const unauthorizedResult = await sendTelegramNotification(sampleOrder, { chatId: '9999999999' });
+      assert.equal(unauthorizedResult.ok, false);
+      assert.equal(unauthorizedResult.message, 'Unauthorized recipient');
+    } finally {
+      if (prevChat) process.env.TELEGRAM_ADMIN_CHAT_ID = prevChat;
+      else delete process.env.TELEGRAM_ADMIN_CHAT_ID;
+      if (prevToken) process.env.TELEGRAM_BOT_TOKEN = prevToken;
+      else delete process.env.TELEGRAM_BOT_TOKEN;
+    }
   });
 
   await t.test('6. sendN8nWebhook includes cryptographic HMAC signature header when dispatched', async () => {
-    const original = process.env.N8N_ORDER_WEBHOOK_URL;
+    const originalUrl = process.env.N8N_ORDER_WEBHOOK_URL;
+    const originalSecret = process.env.N8N_WEBHOOK_SECRET;
     process.env.N8N_ORDER_WEBHOOK_URL = 'http://127.0.0.1:59999/fake-n8n';
-    const result = await sendN8nWebhook(sampleOrder);
-    // Network error expected since port is closed, but logic executed
-    assert.equal(result.ok, false);
-    if (original) process.env.N8N_ORDER_WEBHOOK_URL = original;
-    else delete process.env.N8N_ORDER_WEBHOOK_URL;
+    process.env.N8N_WEBHOOK_SECRET = 'test-n8n-secret';
+    try {
+      const result = await sendN8nWebhook(sampleOrder);
+      // Network error expected since port is closed, but logic executed
+      assert.equal(result.ok, false);
+    } finally {
+      if (originalUrl) process.env.N8N_ORDER_WEBHOOK_URL = originalUrl;
+      else delete process.env.N8N_ORDER_WEBHOOK_URL;
+      if (originalSecret) process.env.N8N_WEBHOOK_SECRET = originalSecret;
+      else delete process.env.N8N_WEBHOOK_SECRET;
+    }
   });
 
   await t.test('7. dispatchOrderNotifications resolves safely with Promise.allSettled', async () => {

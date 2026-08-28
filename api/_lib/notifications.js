@@ -1,16 +1,15 @@
 import crypto from "node:crypto";
 
-const DEFAULT_TELEGRAM_BOT_TOKEN = "8838650681:AAHQigrGo6TcX4VrFkGqtZ7P_HUlV6aOhJA";
-const DEFAULT_TELEGRAM_CHAT_ID = "1037173906";
-const DEFAULT_WEBHOOK_SECRET = "adriego_secure_n8n_secret_key_1969";
-
-export const ALLOWED_ADMIN_CHAT_IDS = new Set([
-  String(process.env.TELEGRAM_ADMIN_CHAT_ID || DEFAULT_TELEGRAM_CHAT_ID).trim(),
-]);
+export function getAllowedAdminChatIds() {
+  const configured = String(process.env.TELEGRAM_ADMIN_CHAT_ID || "").trim();
+  if (!configured) return new Set();
+  return new Set(configured.split(",").map((s) => s.trim()).filter(Boolean));
+}
 
 export function isAuthorizedAdminChatId(chatId) {
   if (!chatId) return false;
-  return ALLOWED_ADMIN_CHAT_IDS.has(String(chatId).trim());
+  const allowed = getAllowedAdminChatIds();
+  return allowed.size > 0 && allowed.has(String(chatId).trim());
 }
 
 export function escapeTelegramMarkdown(text = "") {
@@ -182,16 +181,16 @@ export function formatTelegramStockAlert(alert = {}) {
 }
 
 export async function sendTelegramNotification(order = {}, options = {}) {
-  const token = options.token || process.env.TELEGRAM_BOT_TOKEN || DEFAULT_TELEGRAM_BOT_TOKEN;
-  const chatId = options.chatId || process.env.TELEGRAM_ADMIN_CHAT_ID || DEFAULT_TELEGRAM_CHAT_ID;
+  const token = String(options.token || process.env.TELEGRAM_BOT_TOKEN || "").trim();
+  const chatId = String(options.chatId || process.env.TELEGRAM_ADMIN_CHAT_ID || "").trim();
+
+  if (!token || !chatId) {
+    return { ok: false, skipped: true, message: "Missing Telegram credentials" };
+  }
 
   if (!isAuthorizedAdminChatId(chatId)) {
     console.warn(`[security-alert] Unauthorized Telegram notification attempt blocked for Chat ID: ${chatId}`);
     return { ok: false, message: "Unauthorized recipient" };
-  }
-
-  if (!token) {
-    return { ok: false, message: "Missing Telegram credentials" };
   }
 
   const messageText = formatTelegramOrderMessage(order);
@@ -219,11 +218,11 @@ export async function sendTelegramNotification(order = {}, options = {}) {
 }
 
 export async function sendTelegramStockAlert(alert = {}, options = {}) {
-  const token = options.token || process.env.TELEGRAM_BOT_TOKEN || DEFAULT_TELEGRAM_BOT_TOKEN;
-  const chatId = options.chatId || process.env.TELEGRAM_ADMIN_CHAT_ID || DEFAULT_TELEGRAM_CHAT_ID;
+  const token = String(options.token || process.env.TELEGRAM_BOT_TOKEN || "").trim();
+  const chatId = String(options.chatId || process.env.TELEGRAM_ADMIN_CHAT_ID || "").trim();
 
-  if (!isAuthorizedAdminChatId(chatId) || !token) {
-    return { ok: false, message: "Unauthorized" };
+  if (!token || !chatId || !isAuthorizedAdminChatId(chatId)) {
+    return { ok: false, skipped: true, message: "Unauthorized or unconfigured" };
   }
 
   const text = formatTelegramStockAlert(alert);
@@ -256,7 +255,12 @@ export async function sendN8nWebhook(order = {}) {
   const webhookUrl = process.env.N8N_ORDER_WEBHOOK_URL;
   if (!webhookUrl) return { ok: false, skipped: true };
 
-  const secret = process.env.N8N_WEBHOOK_SECRET || DEFAULT_WEBHOOK_SECRET;
+  const secret = String(process.env.N8N_WEBHOOK_SECRET || "").trim();
+  if (!secret) {
+    console.warn("[n8n-webhook-skipped] N8N_WEBHOOK_SECRET is not configured.");
+    return { ok: false, skipped: true, message: "Missing webhook secret" };
+  }
+
   const timestamp = new Date().toISOString();
   const payloadString = JSON.stringify({
     event: "order.created",

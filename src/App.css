@@ -1215,7 +1215,7 @@ img {
 
 @media (max-width: 760px) {
   .featured-runway-section {
-    --featured-runway-duration: 25s;
+    --featured-runway-duration: 22s;
     padding-block: 34px 54px;
   }
 
@@ -1230,38 +1230,6 @@ img {
   .featured-runway-header p {
     margin-top: 7px;
     font-size: 0.78rem;
-  }
-
-  .featured-marquee {
-    overflow-x: auto;
-    overscroll-behavior-inline: contain;
-    mask-image: linear-gradient(90deg, transparent 0, #000 2.5%, #000 97.5%, transparent 100%);
-    scrollbar-width: none;
-    touch-action: pan-x pan-y;
-    cursor: grab;
-    scroll-snap-type: x mandatory;
-  }
-
-  .featured-marquee::-webkit-scrollbar {
-    display: none;
-  }
-
-  .featured-marquee:active {
-    cursor: grabbing;
-  }
-
-  .featured-marquee-track {
-    animation: none;
-    transform: none;
-    will-change: auto;
-  }
-
-  .featured-marquee-group[aria-hidden="true"] {
-    display: none;
-  }
-
-  .featured-product-card {
-    scroll-snap-align: start;
   }
 
   .featured-product-card {
