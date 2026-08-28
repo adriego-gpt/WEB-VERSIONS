@@ -27,16 +27,22 @@ export function CustomDropdown({
       }
     };
     const handleKeyDown = (event) => {
+      // Never swallow keys that belong to a text input / textarea
+      const tag = document.activeElement?.tagName;
+      const isTyping =
+        tag === "INPUT" || tag === "TEXTAREA" || document.activeElement?.isContentEditable;
+
       if (event.key === "Escape") {
         setIsOpen(false);
         triggerRef.current?.focus?.();
       } else if (event.key === "ArrowDown") {
-        event.preventDefault();
+        if (!isTyping) event.preventDefault();
         setHighlightedIndex((prev) => (prev < options.length - 1 ? prev + 1 : 0));
       } else if (event.key === "ArrowUp") {
-        event.preventDefault();
+        if (!isTyping) event.preventDefault();
         setHighlightedIndex((prev) => (prev > 0 ? prev - 1 : options.length - 1));
       } else if (event.key === "Enter" || event.key === " ") {
+        if (isTyping) return;          // ← let the space / enter reach the input
         event.preventDefault();
         if (highlightedIndex >= 0 && highlightedIndex < options.length) {
           onChange(options[highlightedIndex].value);
@@ -44,10 +50,10 @@ export function CustomDropdown({
           triggerRef.current?.focus?.();
         }
       } else if (event.key === "Home") {
-        event.preventDefault();
+        if (!isTyping) event.preventDefault();
         setHighlightedIndex(0);
       } else if (event.key === "End") {
-        event.preventDefault();
+        if (!isTyping) event.preventDefault();
         setHighlightedIndex(options.length - 1);
       }
     };

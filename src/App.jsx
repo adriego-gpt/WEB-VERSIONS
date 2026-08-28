@@ -5985,7 +5985,7 @@ export default function App() {
     setProductTypeRecords((previous) => previous.map((record) => {
       if (record.id !== recordId) return record;
       if (field === "draftName") {
-        const nextName = normalizeOptionLabel(value);
+        const nextName = stripDangerousContent(value).replace(/[\r\n\t]+/g, " ");
         return {
           ...record,
           draftName: nextName,
@@ -6113,7 +6113,7 @@ export default function App() {
     setFilterTagRecords((previous) => previous.map((record) => {
       if (record.id !== recordId) return record;
       if (field === "draftName") {
-        const nextName = normalizeOptionLabel(value);
+        const nextName = stripDangerousContent(value).replace(/[\r\n\t]+/g, " ");
         return {
           ...record,
           draftName: nextName,
@@ -6204,7 +6204,10 @@ export default function App() {
   const handleColorFieldChange = (uid, field, value) => {
     setProductForm((previous) => ({
       ...previous,
-      colorsData: previous.colorsData.map((color) => color.uid === uid ? { ...color, [field]: field === "name" ? normalizeOptionLabel(value) : value } : color),
+      colorsData: previous.colorsData.map((color) => color.uid === uid ? {
+        ...color,
+        [field]: field === "name" ? stripDangerousContent(value).replace(/[\r\n\t]+/g, " ") : value,
+      } : color),
     }));
   };
 
@@ -6238,7 +6241,7 @@ export default function App() {
         ...color,
         sizes: (color.sizes || []).map((entry) => entry.uid === sizeUid ? {
           ...entry,
-          [field]: field === "size" ? normalizeOptionLabel(value) : value,
+          [field]: field === "size" ? stripDangerousContent(value).replace(/[\r\n\t]+/g, " ") : value,
         } : entry),
       } : color),
     }));

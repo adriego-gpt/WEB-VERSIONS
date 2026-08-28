@@ -31,6 +31,9 @@ export function ConfirmModal({
   const titleId = useId();
   const descriptionId = useId();
 
+  const onCancelRef = useRef(onCancel);
+  onCancelRef.current = onCancel;
+
   useEffect(() => {
     if (!open) return undefined;
     previousFocusRef.current = document.activeElement;
@@ -38,7 +41,7 @@ export function ConfirmModal({
     const handleKeyDown = (event) => {
       if (event.key === "Escape") {
         event.preventDefault();
-        onCancel?.();
+        onCancelRef.current?.();
         return;
       }
       if (event.key !== "Tab") return;
@@ -63,7 +66,7 @@ export function ConfirmModal({
       document.removeEventListener("keydown", handleKeyDown);
       previousFocusRef.current?.focus?.();
     };
-  }, [open, onCancel]);
+  }, [open]);
 
   return (
     <AnimatePresence>
