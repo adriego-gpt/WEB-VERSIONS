@@ -1049,29 +1049,40 @@ img {
 
 .featured-marquee {
   width: 100%;
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  -webkit-overflow-scrolling: touch;
+  cursor: grab;
+  touch-action: pan-x pan-y;
+  user-select: none;
   mask-image: linear-gradient(90deg, transparent 0, #000 2.5%, #000 97.5%, transparent 100%);
+}
+
+.featured-marquee::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+.featured-marquee.is-dragging {
+  cursor: grabbing;
 }
 
 .featured-marquee-track {
   width: max-content;
   display: flex;
   transform: translate3d(0, 0, 0);
-  animation: featured-runway-flow var(--featured-runway-duration) linear infinite;
   will-change: transform;
-}
-
-.featured-marquee[data-paused="true"] .featured-marquee-track,
-.featured-marquee:hover .featured-marquee-track,
-.featured-marquee:has(.featured-product-link:focus-visible) .featured-marquee-track {
-  animation-play-state: paused;
-  will-change: auto;
 }
 
 .featured-marquee-group {
   display: flex;
   gap: var(--featured-card-gap);
   padding-right: var(--featured-card-gap);
+  flex-shrink: 0;
 }
 
 .featured-product-card {
