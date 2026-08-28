@@ -19,18 +19,22 @@ export function FeaturedProductMarquee({ products = [], catalogReady, onOpenDeta
   const lastTimeRef = useRef(0);
   const suppressClickRef = useRef(false);
 
+  // IntersectionObserver to pause auto-scroll when far off-screen
   useEffect(() => {
     const section = sectionRef.current;
     if (!section || typeof IntersectionObserver === "undefined") return undefined;
 
     const observer = new IntersectionObserver(
-      ([entry]) => setIsInView(entry.isIntersecting),
-      { rootMargin: "120px 0px", threshold: 0.01 },
+      ([entry]) => {
+        setIsInView(entry ? entry.isIntersecting : true);
+      },
+      { rootMargin: "300px 0px", threshold: 0 },
     );
     observer.observe(section);
     return () => observer.disconnect();
   }, []);
 
+  // Pause when browser tab is hidden
   useEffect(() => {
     const handleVisibilityChange = () => setIsDocumentVisible(!document.hidden);
     document.addEventListener("visibilitychange", handleVisibilityChange);
@@ -39,14 +43,21 @@ export function FeaturedProductMarquee({ products = [], catalogReady, onOpenDeta
 
   const hasProducts = products.length > 0;
 
-  // Initialize scroll position to the middle group once products load
+  // Initialize scroll position to the middle group once products load or container mounts
   useEffect(() => {
     const el = scrollRef.current;
     if (!el || !hasProducts) return;
-    const singleWidth = el.scrollWidth / 3;
-    if (singleWidth > 0 && el.scrollLeft === 0) {
-      el.scrollLeft = singleWidth;
-    }
+
+    const alignMiddleGroup = () => {
+      const singleWidth = el.scrollWidth / 3;
+      if (singleWidth > 0 && (el.scrollLeft === 0 || el.scrollLeft < 10)) {
+        el.scrollLeft = singleWidth;
+      }
+    };
+
+    alignMiddleGroup();
+    const timerId = setTimeout(alignMiddleGroup, 100);
+    return () => clearTimeout(timerId);
   }, [hasProducts, products.length]);
 
   // Infinite seamless wrap calculation
@@ -75,7 +86,7 @@ export function FeaturedProductMarquee({ products = [], catalogReady, onOpenDeta
       return undefined;
     }
 
-    const speed = 1.05; // Pixels per frame at 60fps (livelier and smooth motion)
+    const speed = 1.15; // Pixels per frame at 60fps (smooth, dynamic movement)
 
     const tick = (time) => {
       if (!lastTimeRef.current) lastTimeRef.current = time;
@@ -107,38 +118,39 @@ export function FeaturedProductMarquee({ products = [], catalogReady, onOpenDeta
     if (resumeTimerRef.current) clearTimeout(resumeTimerRef.current);
     resumeTimerRef.current = setTimeout(() => {
       setIsInteracting(false);
-    }, 1400);
+      setIsDragging(false);
+    }, 1100);
   }, []);
 
-  // Touch handlers
-  const onTouchStart = () => {
-    if (resumeTimerRef.current) clearTimeout(resumeTimerRef.current);
-    setIsInteracting(true);
-  };
-
-  const onTouchEnd = () => {
-    scheduleResume();
-  };
-
-  // Pointer / Mouse drag handlers
+  // Pointer / Mouse / Touch drag handlers with Pointer Capture
   const onPointerDown = (event) => {
     const el = scrollRef.current;
     if (!el) return;
-    if (event.button !== 0) return;
+    if (event.button !== 0 && event.pointerType === "mouse") return;
+
     if (resumeTimerRef.current) clearTimeout(resumeTimerRef.current);
+    setIsHovered(false);
     setIsInteracting(true);
     setIsDragging(true);
+
     dragStartRef.current = {
       x: event.clientX,
       scrollLeft: el.scrollLeft,
       hasMoved: false,
     };
+
+    try {
+      event.target.setPointerCapture?.(event.pointerId);
+    } catch {
+      // Fallback if pointer capture is not supported on target
+    }
   };
 
   const onPointerMove = (event) => {
     if (!isDragging) return;
     const el = scrollRef.current;
     if (!el) return;
+
     const dx = event.clientX - dragStartRef.current.x;
     if (Math.abs(dx) > 4) {
       dragStartRef.current.hasMoved = true;
@@ -148,22 +160,45 @@ export function FeaturedProductMarquee({ products = [], catalogReady, onOpenDeta
     handleScroll();
   };
 
-  const onPointerUp = () => {
+  const onPointerUp = (event) => {
     if (isDragging) {
+      try {
+        event.target.releasePointerCapture?.(event.pointerId);
+      } catch {
+        // Fallback
+      }
       setIsDragging(false);
+      setIsHovered(false);
       scheduleResume();
       setTimeout(() => {
         suppressClickRef.current = false;
-      }, 60);
+      }, 80);
     }
   };
 
-  const onPointerCancel = () => {
+  const onPointerCancel = (event) => {
     if (isDragging) {
+      try {
+        event.target.releasePointerCapture?.(event.pointerId);
+      } catch {
+        // Fallback
+      }
       setIsDragging(false);
+      setIsHovered(false);
       scheduleResume();
       suppressClickRef.current = false;
     }
+  };
+
+  // Hover handlers: only apply to genuine mouse pointers with hover capability
+  const onMouseEnter = (event) => {
+    if (event.pointerType === "touch" || event.pointerType === "pen") return;
+    if (typeof window !== "undefined" && window.matchMedia && !window.matchMedia("(hover: hover) and (pointer: fine)").matches) return;
+    setIsHovered(true);
+  };
+
+  const onMouseLeave = () => {
+    setIsHovered(false);
   };
 
   const handleCardClick = useCallback((product, selection) => {
@@ -189,11 +224,8 @@ export function FeaturedProductMarquee({ products = [], catalogReady, onOpenDeta
           ref={scrollRef}
           className={`featured-marquee ${isDragging ? "is-dragging" : ""}`}
           onScroll={handleScroll}
-          onMouseEnter={() => setIsHovered(true)}
-          onMouseLeave={() => setIsHovered(false)}
-          onTouchStart={onTouchStart}
-          onTouchEnd={onTouchEnd}
-          onTouchCancel={onTouchEnd}
+          onMouseEnter={onMouseEnter}
+          onMouseLeave={onMouseLeave}
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
@@ -231,3 +263,4 @@ export function FeaturedProductMarquee({ products = [], catalogReady, onOpenDeta
 export const MemoFeaturedProductMarquee = React.memo(FeaturedProductMarquee);
 
 export default MemoFeaturedProductMarquee;
+

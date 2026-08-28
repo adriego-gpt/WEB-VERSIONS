@@ -1198,29 +1198,9 @@ img {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .featured-marquee {
-    overflow-x: auto;
-    mask-image: none;
-    scroll-snap-type: x mandatory;
-    scrollbar-width: none;
-  }
-
-  .featured-marquee::-webkit-scrollbar {
-    display: none;
-  }
-
   .featured-marquee-track {
     animation: none;
-    transform: none;
     will-change: auto;
-  }
-
-  .featured-marquee-group[aria-hidden="true"] {
-    display: none;
-  }
-
-  .featured-product-card {
-    scroll-snap-align: start;
   }
 }
 
