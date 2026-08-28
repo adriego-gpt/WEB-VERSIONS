@@ -15,6 +15,14 @@ export function useModalA11y(open, onClose, options = {}) {
   const { initialFocusRef, disableEscape = false } = options;
   const containerRef = useRef(null);
   const previousFocusRef = useRef(null);
+  // Closing callbacks often capture form state and therefore change while a user
+  // types. Keep their latest values without restarting the focus lifecycle.
+  const onCloseRef = useRef(onClose);
+  const disableEscapeRef = useRef(disableEscape);
+  const initialFocusRefRef = useRef(initialFocusRef);
+  onCloseRef.current = onClose;
+  disableEscapeRef.current = disableEscape;
+  initialFocusRefRef.current = initialFocusRef;
 
   useEffect(() => {
     if (!open) return undefined;
@@ -24,8 +32,8 @@ export function useModalA11y(open, onClose, options = {}) {
 
     // Shift focus into the modal smoothly
     const frameId = window.requestAnimationFrame(() => {
-      if (initialFocusRef?.current) {
-        initialFocusRef.current.focus();
+      if (initialFocusRefRef.current?.current) {
+        initialFocusRefRef.current.current.focus();
       } else {
         const firstFocusable = containerRef.current?.querySelector(FOCUSABLE_SELECTOR);
         firstFocusable?.focus();
@@ -34,9 +42,9 @@ export function useModalA11y(open, onClose, options = {}) {
 
     const handleKeyDown = (event) => {
       // Escape key to dismiss
-      if (event.key === "Escape" && !disableEscape) {
+      if (event.key === "Escape" && !disableEscapeRef.current) {
         event.preventDefault();
-        onClose?.();
+        onCloseRef.current?.();
         return;
       }
 
@@ -78,7 +86,7 @@ export function useModalA11y(open, onClose, options = {}) {
         previousFocusRef.current.focus();
       }
     };
-  }, [open, onClose, disableEscape, initialFocusRef]);
+  }, [open]);
 
   return containerRef;
 }
