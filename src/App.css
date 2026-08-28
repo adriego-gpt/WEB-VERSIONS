@@ -1239,6 +1239,7 @@ img {
     scrollbar-width: none;
     touch-action: pan-x pan-y;
     cursor: grab;
+    scroll-snap-type: x mandatory;
   }
 
   .featured-marquee::-webkit-scrollbar {
@@ -1247,6 +1248,20 @@ img {
 
   .featured-marquee:active {
     cursor: grabbing;
+  }
+
+  .featured-marquee-track {
+    animation: none;
+    transform: none;
+    will-change: auto;
+  }
+
+  .featured-marquee-group[aria-hidden="true"] {
+    display: none;
+  }
+
+  .featured-product-card {
+    scroll-snap-align: start;
   }
 
   .featured-product-card {

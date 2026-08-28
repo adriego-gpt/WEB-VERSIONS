@@ -7802,7 +7802,7 @@ export default function App() {
 
             <div className="hero-slide-meta">
               <div>
-                <p className="hero-caption-title" style={{ margin: 0, fontSize: 13, fontWeight: 600, letterSpacing: "0.04em", textTransform: "uppercase", color: "rgba(255, 255, 255, 0.92)" }}>
+                <p className="hero-caption-title" style={{ margin: 0, fontSize: 13, fontWeight: 600, letterSpacing: "0.04em", textTransform: "uppercase", color: "#1a1a1a" }}>
                   {activeHeroSlide?.subtitle ? activeHeroSlide.subtitle : (heroSlideHasAction ? "Prenda destacada" : "Edición exclusiva")}
                 </p>
               </div>
