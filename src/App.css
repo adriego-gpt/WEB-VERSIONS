@@ -1049,14 +1049,10 @@ img {
 
 .featured-marquee {
   width: 100%;
-  overflow-x: auto;
-  overflow-y: hidden;
-  overscroll-behavior-x: contain;
-  scrollbar-width: none;
-  -ms-overflow-style: none;
-  -webkit-overflow-scrolling: touch;
+  overflow: hidden;
+  position: relative;
   cursor: grab;
-  touch-action: pan-x pan-y;
+  touch-action: pan-y;
   user-select: none;
   mask-image: linear-gradient(90deg, transparent 0, #000 2.5%, #000 97.5%, transparent 100%);
 }
@@ -1076,6 +1072,8 @@ img {
   display: flex;
   transform: translate3d(0, 0, 0);
   will-change: transform;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
 }
 
 .featured-marquee-group {

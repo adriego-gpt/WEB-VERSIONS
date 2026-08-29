@@ -4,7 +4,9 @@ import { CatalogSkeletonCard } from "./CatalogSkeletonCard";
 
 export function FeaturedProductMarquee({ products = [], catalogReady, onOpenDetail }) {
   const sectionRef = useRef(null);
-  const scrollRef = useRef(null);
+  const trackRef = useRef(null);
+  const firstGroupRef = useRef(null);
+
   const [isInView, setIsInView] = useState(true);
   const [isHovered, setIsHovered] = useState(false);
   const [isInteracting, setIsInteracting] = useState(false);
@@ -13,7 +15,8 @@ export function FeaturedProductMarquee({ products = [], catalogReady, onOpenDeta
     typeof document === "undefined" || !document.hidden
   ));
 
-  const dragStartRef = useRef({ x: 0, scrollLeft: 0, hasMoved: false });
+  const offsetRef = useRef(0);
+  const dragStartRef = useRef({ startX: 0, startOffset: 0, hasMoved: false });
   const resumeTimerRef = useRef(null);
   const rafRef = useRef(null);
   const lastTimeRef = useRef(0);
@@ -57,41 +60,10 @@ export function FeaturedProductMarquee({ products = [], catalogReady, onOpenDeta
 
   const hasProducts = displayItems.length > 0;
 
-  // Initialize scroll position to the middle group once products load or change
+  // Ultra-smooth GPU-accelerated RAF animation loop
   useEffect(() => {
-    const el = scrollRef.current;
-    if (!el || !hasProducts) return;
-
-    const alignMiddleGroup = () => {
-      const singleWidth = el.scrollWidth / 3;
-      if (singleWidth > 0 && (el.scrollLeft === 0 || el.scrollLeft < 10)) {
-        el.scrollLeft = singleWidth;
-      }
-    };
-
-    alignMiddleGroup();
-    const timerId = setTimeout(alignMiddleGroup, 120);
-    return () => clearTimeout(timerId);
-  }, [hasProducts, displayItems.length]);
-
-  // Infinite seamless wrap calculation
-  const handleScroll = useCallback(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const singleWidth = el.scrollWidth / 3;
-    if (singleWidth <= 0) return;
-
-    if (el.scrollLeft >= singleWidth * 2) {
-      el.scrollLeft -= singleWidth;
-    } else if (el.scrollLeft <= 5) {
-      el.scrollLeft += singleWidth;
-    }
-  }, []);
-
-  // Continuous auto-scroll animation loop (RAF)
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el || !hasProducts) return undefined;
+    const track = trackRef.current;
+    if (!track || !hasProducts) return undefined;
 
     const shouldAnimate = isInView && isDocumentVisible && !isHovered && !isInteracting && !isDragging;
     if (!shouldAnimate) {
@@ -100,21 +72,22 @@ export function FeaturedProductMarquee({ products = [], catalogReady, onOpenDeta
       return undefined;
     }
 
-    const speed = 1.15; // Pixels per frame at 60fps (smooth, dynamic movement)
+    // 0.95px per frame at 60fps (~57px/sec) — fluid, buttery smooth GPU motion
+    const speed = 0.95;
 
     const tick = (time) => {
       if (!lastTimeRef.current) lastTimeRef.current = time;
-      const delta = Math.min((time - lastTimeRef.current) / 16.67, 2.5);
+      const delta = Math.min((time - lastTimeRef.current) / 16.667, 2.0);
       lastTimeRef.current = time;
 
-      const singleWidth = el.scrollWidth / 3;
-      if (singleWidth > 0) {
-        el.scrollLeft += speed * delta;
-        if (el.scrollLeft >= singleWidth * 2) {
-          el.scrollLeft -= singleWidth;
-        } else if (el.scrollLeft <= 5) {
-          el.scrollLeft += singleWidth;
+      const groupWidth = firstGroupRef.current?.offsetWidth || 0;
+      if (groupWidth > 0) {
+        let nextOffset = offsetRef.current + speed * delta;
+        if (nextOffset >= groupWidth) {
+          nextOffset %= groupWidth;
         }
+        offsetRef.current = nextOffset;
+        track.style.transform = `translate3d(${-nextOffset}px, 0, 0)`;
       }
 
       rafRef.current = requestAnimationFrame(tick);
@@ -136,10 +109,10 @@ export function FeaturedProductMarquee({ products = [], catalogReady, onOpenDeta
     }, 1100);
   }, []);
 
-  // Pointer / Mouse / Touch drag handlers with Pointer Capture
+  // Pointer / Mouse / Touch drag handlers with subpixel GPU transform
   const onPointerDown = (event) => {
-    const el = scrollRef.current;
-    if (!el) return;
+    const track = trackRef.current;
+    if (!track) return;
     if (event.button !== 0 && event.pointerType === "mouse") return;
 
     if (resumeTimerRef.current) clearTimeout(resumeTimerRef.current);
@@ -148,8 +121,8 @@ export function FeaturedProductMarquee({ products = [], catalogReady, onOpenDeta
     setIsDragging(true);
 
     dragStartRef.current = {
-      x: event.clientX,
-      scrollLeft: el.scrollLeft,
+      startX: event.clientX,
+      startOffset: offsetRef.current,
       hasMoved: false,
     };
 
@@ -162,16 +135,23 @@ export function FeaturedProductMarquee({ products = [], catalogReady, onOpenDeta
 
   const onPointerMove = (event) => {
     if (!isDragging) return;
-    const el = scrollRef.current;
-    if (!el) return;
+    const track = trackRef.current;
+    if (!track) return;
 
-    const dx = event.clientX - dragStartRef.current.x;
+    const dx = event.clientX - dragStartRef.current.startX;
     if (Math.abs(dx) > 4) {
       dragStartRef.current.hasMoved = true;
       suppressClickRef.current = true;
     }
-    el.scrollLeft = dragStartRef.current.scrollLeft - dx;
-    handleScroll();
+
+    const groupWidth = firstGroupRef.current?.offsetWidth || 0;
+    if (groupWidth > 0) {
+      let newOffset = dragStartRef.current.startOffset - dx;
+      while (newOffset < 0) newOffset += groupWidth;
+      newOffset %= groupWidth;
+      offsetRef.current = newOffset;
+      track.style.transform = `translate3d(${-newOffset}px, 0, 0)`;
+    }
   };
 
   const onPointerUp = (event) => {
@@ -235,9 +215,7 @@ export function FeaturedProductMarquee({ products = [], catalogReady, onOpenDeta
         </div>
       ) : hasProducts ? (
         <div
-          ref={scrollRef}
           className={`featured-marquee ${isDragging ? "is-dragging" : ""}`}
-          onScroll={handleScroll}
           onMouseEnter={onMouseEnter}
           onMouseLeave={onMouseLeave}
           onPointerDown={onPointerDown}
@@ -245,12 +223,13 @@ export function FeaturedProductMarquee({ products = [], catalogReady, onOpenDeta
           onPointerUp={onPointerUp}
           onPointerCancel={onPointerCancel}
         >
-          <div className="featured-marquee-track">
+          <div ref={trackRef} className="featured-marquee-track">
             {[0, 1, 2].map((groupIndex) => {
               const isDuplicate = groupIndex !== 1;
               return (
                 <div
                   key={`group-${groupIndex}`}
+                  ref={groupIndex === 0 ? firstGroupRef : undefined}
                   className="featured-marquee-group"
                   aria-hidden={isDuplicate ? "true" : undefined}
                 >
