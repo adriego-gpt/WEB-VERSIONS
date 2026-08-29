@@ -3,13 +3,12 @@ import { currency, discountPercent } from "../../utils/currency";
 import { FALLBACK_IMAGE } from "../../constants/product";
 import { getProductColorSwatch } from "../../utils/productColor";
 import {
-  getFallbackSelection,
   getCurrentImageForProduct,
   getSelectionForColor,
 } from "../../domain/products/variants";
 
 export function ShowcaseProductCard({ product, onOpenDetail, isDuplicate = false }) {
-  const fallbackSelection = getFallbackSelection(product);
+  const fallbackSelection = getSelectionForColor(product, { color: product.catalogColor });
   const [selectedColor, setSelectedColor] = useState(fallbackSelection.color);
 
   useEffect(() => {
@@ -35,31 +34,40 @@ export function ShowcaseProductCard({ product, onOpenDetail, isDuplicate = false
 
   return (
     <article className="featured-product-card" aria-hidden={isDuplicate ? "true" : undefined}>
-      <button
-        type="button"
-        className="featured-product-link"
-        onClick={handleOpen}
-        tabIndex={isDuplicate ? -1 : 0}
-        aria-label={`Ver detalle de ${product.name}, ${currency(product.price)}`}
-      >
-        <span className="featured-product-image-wrap">
-          <img
-            src={previewImage}
-            alt={isDuplicate ? "" : product.name}
-            className="featured-product-image"
-            loading="lazy"
-            decoding="async"
-            onError={(event) => {
-              if (event.currentTarget.src !== FALLBACK_IMAGE) event.currentTarget.src = FALLBACK_IMAGE;
-            }}
-          />
-          {product.offerEnabled && discount > 0 ? <span className="featured-product-discount">-{discount}%</span> : null}
-        </span>
+      <div className="featured-product-link">
+        <button
+          type="button"
+          className="featured-product-open"
+          onClick={handleOpen}
+          tabIndex={isDuplicate ? -1 : 0}
+          aria-label={`Ver detalle de ${product.name}, ${currency(product.price)}`}
+        >
+          <span className="featured-product-image-wrap">
+            <img
+              src={previewImage}
+              alt={isDuplicate ? "" : product.name}
+              className="featured-product-image"
+              loading="lazy"
+              decoding="async"
+              onError={(event) => {
+                if (event.currentTarget.src !== FALLBACK_IMAGE) event.currentTarget.src = FALLBACK_IMAGE;
+              }}
+            />
+            {product.offerEnabled && discount > 0 ? <span className="featured-product-discount">-{discount}%</span> : null}
+          </span>
+        </button>
         <span className="featured-product-info">
           <span className="featured-product-details">
-            <span className="featured-product-name">{product.name}</span>
+            <button
+              type="button"
+              className="featured-product-name"
+              onClick={handleOpen}
+              tabIndex={isDuplicate ? -1 : 0}
+            >
+              {product.name}
+            </button>
             {colors.length > 1 && (
-              <span className="featured-product-swatches" onClick={(e) => e.stopPropagation()}>
+              <span className="featured-product-swatches">
                 {visibleColors.map((color) => (
                   <button
                     key={color}
@@ -84,7 +92,7 @@ export function ShowcaseProductCard({ product, onOpenDetail, isDuplicate = false
             {product.oldPrice > product.price ? <del>{currency(product.oldPrice)}</del> : null}
           </span>
         </span>
-      </button>
+      </div>
     </article>
   );
 }

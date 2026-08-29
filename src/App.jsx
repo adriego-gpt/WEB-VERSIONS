@@ -126,6 +126,7 @@ import instagramIconUrl from "./assets/social/instagram.svg";
 import facebookIconUrl from "./assets/social/facebook.svg";
 import tiktokIconUrl from "./assets/social/tiktok.svg";
 import { getProductColorSwatch, normalizeProductColorHex } from "./utils/productColor";
+import { syncProductSelections } from "./domain/products/catalogPresentation";
 import "./App.css";
 import {
   ANIMATION,
@@ -814,7 +815,7 @@ function normalizeProduct(rawProduct) {
   );
   const colorSwatches = Object.fromEntries(colorNames.map((color) => [
     color,
-    normalizeProductColorHex(rawProduct.colorSwatches?.[color]) || getProductColorSwatch(color),
+    getProductColorSwatch(color, rawProduct.colorSwatches?.[color]),
   ]));
 
   const sizes = Array.isArray(rawProduct.sizes)
@@ -1421,16 +1422,6 @@ function normalizeOrderRecord(order = {}) {
 
 
 
-function syncSelections(products, previousSelections) {
-  return Object.fromEntries(
-    products.map((product) => {
-      const previous = previousSelections[product.id] || {};
-      const fallback = getFallbackSelection(product, previous);
-      return [product.id, { color: fallback.color, size: fallback.size }];
-    }),
-  );
-}
-
 function createProductForm(product) {
   const normalizedOfferMode = normalizeOfferDiscountMode(product.offerDiscountMode);
   const fallbackOfferValue = product.offerDiscountValue != null
@@ -1775,7 +1766,13 @@ export default function App() {
 
   const restoreProductDraft = useCallback(() => {
     if (!productDraftRecovery?.form) return;
-    const restoredForm = productDraftRecovery.form;
+    const restoredForm = {
+      ...productDraftRecovery.form,
+      colorsData: (productDraftRecovery.form.colorsData || []).map((color) => ({
+        ...color,
+        hex: getProductColorSwatch(color.name, color.hex),
+      })),
+    };
     setProductForm(restoredForm);
     setProductFormBaseline(
       productDraftRecovery.baselineSignature || getProductFormSignature(createEmptyProductForm()),
@@ -3039,7 +3036,7 @@ export default function App() {
   }, [heroIndex, heroSlides.length]);
 
   useEffect(() => {
-    setSelections((previous) => syncSelections(products, previous));
+    setSelections((previous) => syncProductSelections(products, previous));
   }, [products]);
 
   useEffect(() => {
@@ -4196,6 +4193,7 @@ export default function App() {
             size: currentSizeStock > 0 && nextSizes.includes(current.size)
               ? current.size
               : (fallbackSelection.size || nextSizes[0] || product.sizes[0]),
+            source: "user",
           },
         };
       }
@@ -4205,6 +4203,7 @@ export default function App() {
         [productId]: {
           ...current,
           [field]: value,
+          source: "user",
         },
       };
     });
@@ -6226,16 +6225,29 @@ export default function App() {
   };
 
   const handleColorFieldChange = (uid, field, value) => {
-    setProductForm((previous) => ({
-      ...previous,
-      catalogColor: field === "name" && previous.colorsData.find((color) => color.uid === uid)?.name === previous.catalogColor
-        ? stripDangerousContent(value).replace(/[\r\n\t]+/g, " ")
-        : previous.catalogColor,
-      colorsData: previous.colorsData.map((color) => color.uid === uid ? {
-          ...color,
-          [field]: field === "name" ? stripDangerousContent(value).replace(/[\r\n\t]+/g, " ") : value,
-        } : color),
-    }));
+    setProductForm((previous) => {
+      const currentColor = previous.colorsData.find((color) => color.uid === uid);
+      const nextValue = field === "name" ? stripDangerousContent(value).replace(/[\r\n\t]+/g, " ") : value;
+      return {
+        ...previous,
+        catalogColor: field === "name" && currentColor?.name === previous.catalogColor
+          ? nextValue
+          : previous.catalogColor,
+        colorsData: previous.colorsData.map((color) => {
+          if (color.uid !== uid) return color;
+          if (field !== "name") return { ...color, [field]: nextValue };
+          const currentInferredTone = getProductColorSwatch(color.name);
+          const shouldInferNextTone = !normalizeProductColorHex(color.hex)
+            || color.hex.toLowerCase() === "#c8c4bc"
+            || color.hex.toLowerCase() === currentInferredTone;
+          return {
+            ...color,
+            name: nextValue,
+            hex: shouldInferNextTone ? getProductColorSwatch(nextValue) : color.hex,
+          };
+        }),
+      };
+    });
   };
 
   const handleColorImageChange = (uid, imageIndex, value) => {
@@ -6576,6 +6588,14 @@ export default function App() {
     setFilterTagRecords(nextFilterTagRecords);
     setProducts(nextProducts);
     productsRef.current = nextProducts;
+    const savedSelection = getSelectionForColor(normalizedProduct, { color: normalizedProduct.catalogColor });
+    setSelections((previous) => ({
+      ...previous,
+      [normalizedProduct.id]: {
+        color: savedSelection.color,
+        size: savedSelection.size,
+      },
+    }));
     productTypeRecordsRef.current = nextProductTypeRecords;
     filterTagRecordsRef.current = nextFilterTagRecords;
 

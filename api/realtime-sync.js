@@ -81,6 +81,13 @@ export default async function handler(req, res) {
   const adminSession = resolveAdminSession(req);
   const userRecord = resolveVersionedUserSession(store?.users, userSession);
 
+  const isAnonymousVisitor = !userRecord && !adminSession;
+  if (isAnonymousVisitor) {
+    res.setHeader("Cache-Control", "public, s-maxage=10, stale-while-revalidate=30");
+  } else {
+    res.setHeader("Cache-Control", "private, no-cache, no-store, must-revalidate");
+  }
+
   res.status(200).json({
     ok: true,
     versions: {

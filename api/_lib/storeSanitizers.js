@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { normalizeCouponList } from "../../src/services/couponService.js";
 import { normalizeCardFeePercent } from "../../src/domain/orders/payment.js";
 import { normalizeBankAccounts } from "../../src/domain/contact/paymentSettings.js";
+import { getProductColorSwatch, normalizeProductColorHex } from "../../src/utils/productColor.js";
 import {
   isValidEmail,
   normalizeImageSource,
@@ -115,8 +116,8 @@ function sanitizeColorSwatches(rawColorSwatches = {}, colors = []) {
     ? rawColorSwatches
     : {};
   return Object.fromEntries(colors.map((color) => {
-    const value = String(entries[color] || "").trim();
-    return [color, /^#[0-9a-fA-F]{6}$/.test(value) ? value.toLowerCase() : "#c8c4bc"];
+    const value = normalizeProductColorHex(entries[color]);
+    return [color, getProductColorSwatch(color, value)];
   }));
 }
 

@@ -6,6 +6,7 @@ import { getProductColorSwatch } from "../../utils/productColor";
 import { triggerHaptic } from "../../utils/haptics";
 import { ANIMATION } from "../../constants/animation";
 import { FALLBACK_IMAGE } from "../../constants/product";
+import { getProductBadgeKinds } from "../../domain/products/catalogPresentation";
 import {
   getSelectionForColor,
   getImagesForColor,
@@ -114,13 +115,11 @@ export function CatalogProductCard({
           </AnimatePresence>
         </a>
         <div className="product-card-badges" style={{ position: "absolute", left: 10, top: 10, display: "flex", flexWrap: "wrap", gap: 6, pointerEvents: "none" }}>
-          {(() => {
-            const visibleBadges = [];
-            if (product.offerEnabled && discount > 0) visibleBadges.push(<span key="offer" className="badge badge-offer">Oferta -{discount}%</span>);
-            if (product.newArrival && visibleBadges.length < 2) visibleBadges.push(<span key="new" className="badge badge-light">Nuevo</span>);
-            if (product.featured && visibleBadges.length < 2) visibleBadges.push(<span key="feat" className="badge badge-dark">Destacado</span>);
-            return visibleBadges;
-          })()}
+          {getProductBadgeKinds(product, discount).map((badgeKind) => {
+            if (badgeKind === "offer") return <span key="offer" className="badge badge-offer">Oferta -{discount}%</span>;
+            if (badgeKind === "featured") return <span key="featured" className="badge badge-dark">Destacado</span>;
+            return <span key="new" className="badge badge-light">Nuevo</span>;
+          })}
         </div>
         <div className="product-card-floating-actions">
           <button

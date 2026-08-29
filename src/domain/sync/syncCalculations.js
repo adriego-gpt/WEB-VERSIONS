@@ -3,8 +3,8 @@
  */
 
 export const SYNC_INTERVALS = Object.freeze({
-  VISIBLE_MS: 15000,
-  BACKGROUND_MS: 30000,
+  VISIBLE_MS: 30000,
+  BACKGROUND_MS: 120000,
 });
 
 /**

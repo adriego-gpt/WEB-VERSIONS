@@ -1096,15 +1096,21 @@ img {
 .featured-product-link {
   width: 100%;
   display: block;
-  padding: 0;
-  border: 0;
   background: #fff;
   color: var(--text-strong);
   text-align: left;
+}
+
+.featured-product-open {
+  width: 100%;
+  display: block;
+  padding: 0;
+  border: 0;
+  background: transparent;
   cursor: pointer;
 }
 
-.featured-product-link:focus-visible {
+.featured-product-open:focus-visible {
   outline: 2px solid var(--brand-accent);
   outline-offset: -3px;
 }
@@ -1125,8 +1131,8 @@ img {
   transition: transform 420ms var(--ease-standard), filter 420ms var(--ease-standard);
 }
 
-.featured-product-link:hover .featured-product-image,
-.featured-product-link:focus-visible .featured-product-image {
+.featured-product-open:hover .featured-product-image,
+.featured-product-open:focus-visible .featured-product-image {
   transform: scale(1.025);
   filter: saturate(1.04);
 }
@@ -1209,6 +1215,14 @@ img {
 }
 
 .featured-product-name {
+  width: fit-content;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
   min-width: 0;
   font-size: 0.96rem;
   font-weight: 700;
