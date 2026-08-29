@@ -2263,13 +2263,13 @@ export default function App() {
 
   const featuredProducts = useMemo(() => {
     const featuredInStock = stockReadyProducts.filter((product) => product.featured);
-    if (featuredInStock.length >= 4) {
-      return featuredInStock.slice(0, 4);
+    if (featuredInStock.length > 0) {
+      return featuredInStock;
     }
     const fallbackInStock = stockReadyProducts
       .filter((product) => !product.featured)
       .sort((left, right) => (Number(right.newArrival) - Number(left.newArrival)) || ((Number(right.rating) || 0) - (Number(left.rating) || 0)));
-    return [...featuredInStock, ...fallbackInStock].slice(0, 4);
+    return fallbackInStock.slice(0, 8);
   }, [stockReadyProducts]);
 
   const recommendedProducts = useMemo(() => {

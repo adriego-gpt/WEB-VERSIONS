@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useCallback } from "react";
+import React, { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { MemoShowcaseProductCard } from "./ShowcaseProductCard";
 import { CatalogSkeletonCard } from "./CatalogSkeletonCard";
 
@@ -19,7 +19,21 @@ export function FeaturedProductMarquee({ products = [], catalogReady, onOpenDeta
   const lastTimeRef = useRef(0);
   const suppressClickRef = useRef(false);
 
-  // IntersectionObserver to pause auto-scroll when far off-screen
+  // Repeat items so that each group has at least 6 items.
+  // This guarantees that 1 group exceeds any normal viewport width (even on 4K screens)
+  // and the browser's scrollWidth will ALWAYS overflow clientWidth to allow continuous scrolling.
+  const displayItems = useMemo(() => {
+    if (!products.length) return [];
+    const minItemsPerGroup = 6;
+    const repeatCount = Math.max(1, Math.ceil(minItemsPerGroup / products.length));
+    const list = [];
+    for (let i = 0; i < repeatCount; i++) {
+      list.push(...products);
+    }
+    return list;
+  }, [products]);
+
+  // Observer to pause auto-scroll only when far off-screen
   useEffect(() => {
     const section = sectionRef.current;
     if (!section || typeof IntersectionObserver === "undefined") return undefined;
@@ -28,7 +42,7 @@ export function FeaturedProductMarquee({ products = [], catalogReady, onOpenDeta
       ([entry]) => {
         setIsInView(entry ? entry.isIntersecting : true);
       },
-      { rootMargin: "300px 0px", threshold: 0 },
+      { rootMargin: "600px 0px", threshold: 0 },
     );
     observer.observe(section);
     return () => observer.disconnect();
@@ -41,9 +55,9 @@ export function FeaturedProductMarquee({ products = [], catalogReady, onOpenDeta
     return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
   }, []);
 
-  const hasProducts = products.length > 0;
+  const hasProducts = displayItems.length > 0;
 
-  // Initialize scroll position to the middle group once products load or container mounts
+  // Initialize scroll position to the middle group once products load or change
   useEffect(() => {
     const el = scrollRef.current;
     if (!el || !hasProducts) return;
@@ -56,9 +70,9 @@ export function FeaturedProductMarquee({ products = [], catalogReady, onOpenDeta
     };
 
     alignMiddleGroup();
-    const timerId = setTimeout(alignMiddleGroup, 100);
+    const timerId = setTimeout(alignMiddleGroup, 120);
     return () => clearTimeout(timerId);
-  }, [hasProducts, products.length]);
+  }, [hasProducts, displayItems.length]);
 
   // Infinite seamless wrap calculation
   const handleScroll = useCallback(() => {
@@ -142,7 +156,7 @@ export function FeaturedProductMarquee({ products = [], catalogReady, onOpenDeta
     try {
       event.target.setPointerCapture?.(event.pointerId);
     } catch {
-      // Fallback if pointer capture is not supported on target
+      // Fallback
     }
   };
 
@@ -240,9 +254,9 @@ export function FeaturedProductMarquee({ products = [], catalogReady, onOpenDeta
                   className="featured-marquee-group"
                   aria-hidden={isDuplicate ? "true" : undefined}
                 >
-                  {products.map((product) => (
+                  {displayItems.map((product, itemIndex) => (
                     <MemoShowcaseProductCard
-                      key={`grp-${groupIndex}-${product.id}`}
+                      key={`grp-${groupIndex}-item-${itemIndex}-${product.id}`}
                       product={product}
                       onOpenDetail={handleCardClick}
                       isDuplicate={isDuplicate}
@@ -263,4 +277,5 @@ export function FeaturedProductMarquee({ products = [], catalogReady, onOpenDeta
 export const MemoFeaturedProductMarquee = React.memo(FeaturedProductMarquee);
 
 export default MemoFeaturedProductMarquee;
+
 
