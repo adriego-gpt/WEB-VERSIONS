@@ -179,7 +179,7 @@ export function CatalogProductCard({
                   aria-pressed={selectedColor === color}
                   title={color}
                 >
-                  <span style={{ "--variant-swatch": getProductColorSwatch(color) }} />
+                  <span style={{ "--variant-swatch": getProductColorSwatch(color, product.colorSwatches?.[color]) }} />
                 </button>
               ))}
               {hiddenColorCount > 0 && (

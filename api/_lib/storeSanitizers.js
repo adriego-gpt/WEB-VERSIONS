@@ -110,6 +110,16 @@ function sanitizeImagesByColor(rawImagesByColor = {}, colors = []) {
   return Object.fromEntries(safeMap.entries());
 }
 
+function sanitizeColorSwatches(rawColorSwatches = {}, colors = []) {
+  const entries = rawColorSwatches && typeof rawColorSwatches === "object" && !Array.isArray(rawColorSwatches)
+    ? rawColorSwatches
+    : {};
+  return Object.fromEntries(colors.map((color) => {
+    const value = String(entries[color] || "").trim();
+    return [color, /^#[0-9a-fA-F]{6}$/.test(value) ? value.toLowerCase() : "#c8c4bc"];
+  }));
+}
+
 function sanitizeProducts(rawProducts = []) {
   return sanitizeArray(rawProducts, MAX_PRODUCTS)
     .map((product) => {
@@ -172,6 +182,9 @@ function sanitizeProducts(rawProducts = []) {
       const colors = sanitizeStringArray(variants.map((variant) => variant.color), 12, 30);
       const sizes = sanitizeStringArray(variants.map((variant) => variant.size), 20, 20);
       const imagesByColor = sanitizeImagesByColor(product?.imagesByColor, colors);
+      const colorSwatches = sanitizeColorSwatches(product?.colorSwatches, colors);
+      const requestedCatalogColor = normalizeOptionLabel(product?.catalogColor || "").slice(0, 30);
+      const catalogColor = colors.includes(requestedCatalogColor) ? requestedCatalogColor : colors[0];
 
       return {
         id: productId,
@@ -183,7 +196,9 @@ function sanitizeProducts(rawProducts = []) {
         productType: normalizeLine(product?.productType || "General").slice(0, 40),
         description: sanitizeParagraph(product?.description || "").slice(0, 1200),
         imagesByColor,
+        colorSwatches,
         colors,
+        catalogColor,
         sizes,
         variants,
         stockBySize: summarizeStockBySize(variants, sizes),

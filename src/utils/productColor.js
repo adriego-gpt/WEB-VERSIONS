@@ -29,10 +29,17 @@ function normalizeProductColorName(color = "") {
     .toLowerCase();
 }
 
-export function getProductColorSwatch(color) {
+export function getProductColorSwatch(color, customColor = "") {
+  const normalizedCustomColor = normalizeProductColorHex(customColor);
+  if (normalizedCustomColor) return normalizedCustomColor;
   const normalized = normalizeProductColorName(color);
   const directMatch = PRODUCT_COLOR_SWATCHES[normalized];
   if (directMatch) return directMatch;
   const partialMatch = Object.entries(PRODUCT_COLOR_SWATCHES).find(([name]) => normalized.includes(name));
   return partialMatch?.[1] || "#c8c4bc";
+}
+
+export function normalizeProductColorHex(color = "") {
+  const value = String(color).trim();
+  return /^#[0-9a-fA-F]{6}$/.test(value) ? value.toLowerCase() : "";
 }

@@ -79,6 +79,21 @@ export function ProductEditorPanel({
         ) : null}
       />
 
+      <datalist id="product-color-name-suggestions">
+        <option value="Negro" />
+        <option value="Blanco" />
+        <option value="Beige" />
+        <option value="Camel" />
+        <option value="Gris" />
+        <option value="Azul marino" />
+        <option value="Celeste" />
+        <option value="Verde oliva" />
+        <option value="Rojo vino" />
+        <option value="Rosa palo" />
+        <option value="Lila" />
+        <option value="Mostaza" />
+      </datalist>
+
       {draftRecovery && (
         <div className="product-draft-recovery" role="status">
           <div>
@@ -252,7 +267,20 @@ export function ProductEditorPanel({
                       <div id={detailsId} className="product-variant-details">
                         <label className="product-editor-field">
                           <span className="product-editor-field-label">Nombre del color</span>
-                          <input className="input" value={color.name} onChange={(event) => onColorFieldChange(color.uid, "name", event.target.value)} placeholder="Ej. Negro" />
+                          <input className="input" list="product-color-name-suggestions" value={color.name} onChange={(event) => onColorFieldChange(color.uid, "name", event.target.value)} placeholder="Busca o escribe: ej. Verde oliva" />
+                        </label>
+                        <label className="product-editor-field product-color-tone-field">
+                          <span className="product-editor-field-label">Tono que verá el cliente</span>
+                          <span className="product-color-tone-control">
+                            <input
+                              type="color"
+                              value={/^#[0-9a-fA-F]{6}$/.test(color.hex || "") ? color.hex : "#c8c4bc"}
+                              onChange={(event) => onColorFieldChange(color.uid, "hex", event.target.value)}
+                              aria-label={`Elegir tono para ${color.name || "este color"}`}
+                            />
+                            <output>{(/^#[0-9a-fA-F]{6}$/.test(color.hex || "") ? color.hex : "#c8c4bc").toUpperCase()}</output>
+                          </span>
+                          <small>Escoge cualquier tono; se usará en los puntos de color del catálogo.</small>
                         </label>
 
                         <div className="product-variant-block">
@@ -315,13 +343,26 @@ export function ProductEditorPanel({
               <p>Controla dónde aparece el producto y si tendrá un descuento adicional.</p>
             </div>
             <div className="product-editor-toggle-grid">
+              <label className="product-editor-field product-editor-catalog-color-field">
+                <span className="product-editor-field-label">Color principal del catálogo</span>
+                <select
+                  className="select"
+                  value={form.catalogColor || ""}
+                  onChange={(event) => onFieldChange("catalogColor", event.target.value)}
+                >
+                  {colors.map((color) => (
+                    <option key={color.uid} value={color.name}>{color.name || "Color sin nombre"}</option>
+                  ))}
+                </select>
+                <small>Se mostrará primero en las tarjetas y en productos destacados.</small>
+              </label>
               <label className="product-editor-toggle-card">
                 <input className="checkbox" type="checkbox" checked={Boolean(form.isPublic)} onChange={(event) => onFieldChange("isPublic", event.target.checked)} />
                 <span><strong>Visible al público</strong><small>Permite comprarlo en la tienda.</small></span>
               </label>
               <label className="product-editor-toggle-card">
                 <input className="checkbox" type="checkbox" checked={Boolean(form.featured)} onChange={(event) => onFieldChange("featured", event.target.checked)} />
-                <span><strong>Producto destacado</strong><small>Aparece en espacios prioritarios.</small></span>
+                <span><strong>Producto destacado</strong><small>Se promociona usando el color principal elegido.</small></span>
               </label>
               <label className="product-editor-toggle-card">
                 <input className="checkbox" type="checkbox" checked={Boolean(form.newArrival)} onChange={(event) => onFieldChange("newArrival", event.target.checked)} />

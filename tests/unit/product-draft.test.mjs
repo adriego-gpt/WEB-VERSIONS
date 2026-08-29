@@ -33,6 +33,13 @@ test("product draft signature ignores generated row identifiers", () => {
   assert.equal(getProductFormSignature(sampleForm), getProductFormSignature(alternateIds));
 });
 
+test("product draft signature includes the catalog color", () => {
+  assert.notEqual(
+    getProductFormSignature({ ...sampleForm, catalogColor: "Negro" }),
+    getProductFormSignature({ ...sampleForm, catalogColor: "Beige" }),
+  );
+});
+
 test("product draft parser restores a valid recent payload", () => {
   const savedAt = "2026-08-21T12:00:00.000Z";
   const payload = createProductDraftPayload(sampleForm, "baseline", savedAt);
@@ -50,4 +57,3 @@ test("product draft parser rejects expired or malformed content", () => {
   }), null);
   assert.equal(parseProductDraftPayload("not-json"), null);
 });
-

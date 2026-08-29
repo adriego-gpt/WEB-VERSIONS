@@ -1,4 +1,4 @@
-﻿import test from "node:test";
+import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { stripDangerousContent } from "../../src/utils/sanitizers.js";
@@ -40,6 +40,29 @@ test("App.jsx does not trim spaces during live typing in color name and size row
     /handleManagedFilterTagDraftChange\s*=\s*[\s\S]*?normalizeOptionLabel\(value\)/,
     "handleManagedFilterTagDraftChange must not trim spaces while editing draft name",
   );
+
+  // handleProfileDraftFieldChange must preserve spaces
+  assert.doesNotMatch(
+    appCode,
+    /handleProfileFieldChange\s*=\s*[\s\S]*?normalizeOptionLabel\(value\)/,
+    "handleProfileFieldChange must preserve spaces while typing profile info",
+  );
+
+  // handleAddressBookDraftFieldChange must preserve spaces
+  assert.doesNotMatch(
+    appCode,
+    /handleAddressBookDraftFieldChange\s*=\s*[\s\S]*?normalizeOptionLabel\(value\)/,
+    "handleAddressBookDraftFieldChange must preserve spaces while typing address info",
+  );
+});
+
+test("CartSummaryModal.jsx preserves spaces in deliveryDraft inputs", () => {
+  const cartCode = fs.readFileSync("src/components/cart/CartSummaryModal.jsx", "utf8");
+  assert.doesNotMatch(
+    cartCode,
+    /handleDeliveryDraftChange\s*=\s*[\s\S]*?normalizeOptionLabel\(value\)/,
+    "handleDeliveryDraftChange must preserve spaces while typing address",
+  );
 });
 
 test("CustomDropdown.jsx does not intercept Space when focus is inside a text input or textarea", () => {
@@ -66,3 +89,4 @@ test("useModalA11y.js does not intercept Space key events", () => {
     "useModalA11y must never intercept or prevent the Space key",
   );
 });
+

@@ -583,7 +583,7 @@ export function ProductModal({
                       aria-pressed={resolvedSelection?.color === color}
                       aria-label={`Elegir color ${color}`}
                     >
-                      <span className="product-modal-color-swatch" style={{ "--variant-swatch": getProductColorSwatch(color) }} />
+                      <span className="product-modal-color-swatch" style={{ "--variant-swatch": getProductColorSwatch(color, product.colorSwatches?.[color]) }} />
                       <span>{color}</span>
                     </button>
                   ))}

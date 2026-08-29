@@ -26,7 +26,8 @@ export function hasProductAvailableStock(product) {
 }
 
 export function getFallbackSelection(product, preferredSelection = null) {
-  const safeColor = product?.colors?.[0] || "General";
+  const preferredCatalogColor = product?.colors?.includes(product?.catalogColor) ? product.catalogColor : null;
+  const safeColor = preferredCatalogColor || product?.colors?.[0] || "General";
   const safeSize = product?.sizes?.[0] || "Unica";
   if (!product) {
     return { color: safeColor, size: safeSize, availableStock: 0 };
@@ -52,7 +53,7 @@ export function getFallbackSelection(product, preferredSelection = null) {
     }
   }
 
-  const defaultColor = product.colors?.[0];
+  const defaultColor = safeColor;
   if (defaultColor) {
     const firstForDefaultColor = (product.variants || []).find((variant) => variant.color === defaultColor && (Number(variant.stock) || 0) > 0);
     if (firstForDefaultColor) {
@@ -77,7 +78,8 @@ export function getFallbackSelection(product, preferredSelection = null) {
 }
 
 export function getSelectionForColor(product, preferredSelection = null) {
-  const safeColor = product?.colors?.[0] || "General";
+  const preferredCatalogColor = product?.colors?.includes(product?.catalogColor) ? product.catalogColor : null;
+  const safeColor = preferredCatalogColor || product?.colors?.[0] || "General";
   const safeSize = product?.sizes?.[0] || "Unica";
   if (!product) {
     return { color: safeColor, size: safeSize, availableStock: 0 };
@@ -88,7 +90,7 @@ export function getSelectionForColor(product, preferredSelection = null) {
     : [...new Set((product.variants || []).map((variant) => variant.color).filter(Boolean))];
   const desiredColor = preferredSelection?.color && availableColors.includes(preferredSelection.color)
     ? preferredSelection.color
-    : (availableColors[0] || safeColor);
+    : (preferredCatalogColor || availableColors[0] || safeColor);
 
   const sizesForColor = getSizesForColor(product, desiredColor);
   const desiredSize = preferredSelection?.size;

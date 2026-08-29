@@ -5,6 +5,7 @@ export const PRODUCT_DRAFT_MAX_CHARS = 2_500_000;
 function normalizeDraftColor(color = {}) {
   return {
     name: String(color.name || ""),
+    hex: String(color.hex || ""),
     images: Array.isArray(color.images) ? color.images.map((image) => String(image || "")) : [],
     sizes: Array.isArray(color.sizes)
       ? color.sizes.map((entry) => ({
@@ -25,6 +26,7 @@ export function getProductFormSignature(form = {}) {
     productType: String(form.productType || ""),
     description: String(form.description || ""),
     filterTagsText: String(form.filterTagsText || ""),
+    catalogColor: String(form.catalogColor || ""),
     featured: Boolean(form.featured),
     rating: String(form.rating ?? ""),
     newArrival: Boolean(form.newArrival),
@@ -64,4 +66,3 @@ export function parseProductDraftPayload(rawValue, options = {}) {
     return null;
   }
 }
-

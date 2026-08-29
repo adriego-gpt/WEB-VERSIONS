@@ -1155,6 +1155,59 @@ img {
   padding: 14px 15px 16px;
 }
 
+.featured-product-details {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.featured-product-swatches {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 2px;
+}
+
+.featured-swatch {
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1.5px solid transparent;
+  background: transparent;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.15s ease, border-color 0.15s ease;
+}
+
+.featured-swatch:hover {
+  transform: scale(1.15);
+}
+
+.featured-swatch.active {
+  border-color: var(--text-strong);
+  transform: scale(1.2);
+}
+
+.featured-swatch span {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  background: var(--variant-swatch, #c8c4bc);
+  display: block;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12);
+}
+
+.featured-swatch-more {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  font-weight: 600;
+  margin-left: 2px;
+}
+
 .featured-product-name {
   min-width: 0;
   font-size: 0.96rem;
@@ -5578,6 +5631,55 @@ body,
   border-radius: 12px;
   background: #fff;
   cursor: pointer;
+}
+
+.product-editor-catalog-color-field {
+  min-height: 76px;
+  padding: 14px;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: 12px;
+  background: #fff;
+}
+
+.product-editor-catalog-color-field small {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.product-color-tone-field {
+  padding: 12px;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: 12px;
+  background: #fafafa;
+}
+
+.product-color-tone-control {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.product-color-tone-control input[type="color"] {
+  width: 42px;
+  height: 34px;
+  padding: 2px;
+  border: 1px solid #d4d4d8;
+  border-radius: 8px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.product-color-tone-control output {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.product-color-tone-field small {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.35;
 }
 
 .product-editor-toggle-card span {
@@ -15465,4 +15567,3 @@ body,
     grid-template-rows: none;
   }
 }
-
