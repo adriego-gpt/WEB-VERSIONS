@@ -1,6 +1,6 @@
 export const FILE_SECURITY = {
   maxImageSizeMb: 15,
-  maxInlineImageBytes: 380 * 1024,
+  maxInlineImageBytes: 150 * 1024,
 };
 
 export const PRODUCT_FORM_LIMITS = {

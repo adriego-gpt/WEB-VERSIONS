@@ -53,16 +53,17 @@ async function optimizeInlineImage(dataUrl, maxBytes) {
   const image = await loadImageFromDataUrl(dataUrl);
   const sourceWidth = Math.max(1, Number(image.naturalWidth) || Number(image.width) || 1);
   const sourceHeight = Math.max(1, Number(image.naturalHeight) || Number(image.height) || 1);
-  const initialScale = Math.min(1, 1200 / Math.max(sourceWidth, sourceHeight));
+  const initialScale = Math.min(1, 960 / Math.max(sourceWidth, sourceHeight));
   const outputFormats = [
-    ["image/png", undefined],
-    ["image/webp", 0.9],
-    ["image/webp", 0.78],
-    ["image/jpeg", 0.84],
+    ["image/webp", 0.82],
+    ["image/webp", 0.74],
+    ["image/jpeg", 0.80],
+    ["image/jpeg", 0.72],
+    ["image/webp", 0.62],
   ];
 
   for (let sizeAttempt = 0; sizeAttempt < 5; sizeAttempt += 1) {
-    const scale = initialScale * (0.82 ** sizeAttempt);
+    const scale = initialScale * (0.85 ** sizeAttempt);
     const width = Math.max(64, Math.round(sourceWidth * scale));
     const height = Math.max(64, Math.round(sourceHeight * scale));
     const canvas = document.createElement("canvas");
@@ -97,11 +98,11 @@ export async function fileToDataUrl(file) {
   if (!dataUrl.startsWith("data:image/")) {
     throw new Error("No pudimos procesar la imagen seleccionada.");
   }
-  if (estimateDataUrlBytes(dataUrl) <= FILE_SECURITY.maxInlineImageBytes) {
-    return dataUrl;
-  }
 
   const optimized = await optimizeInlineImage(dataUrl, FILE_SECURITY.maxInlineImageBytes);
   if (optimized) return optimized;
+  if (estimateDataUrlBytes(dataUrl) <= FILE_SECURITY.maxInlineImageBytes) {
+    return dataUrl;
+  }
   throw new Error("La imagen no pudo optimizarse para guardar. Elige una imagen más pequeña o con menor resolución.");
 }

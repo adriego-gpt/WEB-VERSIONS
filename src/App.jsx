@@ -2957,6 +2957,9 @@ export default function App() {
 
       const result = await syncCatalogState(payload);
       if (!result.ok) {
+        if (result.status === 413 || String(result.message || "").toLowerCase().includes("too large") || String(result.message || "").includes("PAYLOAD_TOO_LARGE")) {
+          result.message = "El tamaño total del catálogo e imágenes supera el límite de 4.5MB permitido por Vercel. Reduce el tamaño de las fotos o utiliza enlaces externos (URLs).";
+        }
         if (!silent) {
           showToastMessage(result.message || "No pudimos sincronizar cambios con el servidor.", "warning");
         }
