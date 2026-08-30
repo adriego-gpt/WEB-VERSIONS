@@ -1,8 +1,7 @@
 
-import { readStore } from "./_lib/store.js";
+import { readRealtimeMeta, readStore } from "./_lib/store.js";
 import {
   consumeRateLimit,
-  ensureCsrfCookie,
   getAllowedOrigins,
   getClientIp,
   isOriginAllowed,
@@ -41,7 +40,6 @@ function resolveAdminSession(req) {
 export default async function handler(req, res) {
   monitorApiRequest(req, res, ENDPOINT_NAME);
   setCommonSecurityHeaders(res);
-  ensureCsrfCookie(req, res);
 
   if (req.method === "OPTIONS") {
     res.status(204).end();
@@ -62,14 +60,42 @@ export default async function handler(req, res) {
     return;
   }
 
+  const action = normalizeLine(req.query?.action || "status").toLowerCase();
+  if (action !== "status" && action !== "public-status") {
+    res.status(400).json({ ok: false, message: "Invalid action" });
+    return;
+  }
+  const isPublicStatus = action === "public-status";
+
   const clientIp = getClientIp(req);
-  const rateLimit = await consumeRateLimit("realtime-sync-ip", clientIp, 240, 10 * 60 * 1000, {
+  const rateLimit = await consumeRateLimit(isPublicStatus ? "realtime-public-ip" : "realtime-sync-ip", clientIp, 240, 10 * 60 * 1000, {
     endpoint: ENDPOINT_NAME,
     ip: clientIp,
   });
   if (!rateLimit.ok) {
     res.setHeader("Retry-After", String(Math.ceil(rateLimit.retryAfterMs / 1000)));
     res.status(429).json({ ok: false, message: "Too many requests" });
+    return;
+  }
+
+  if (isPublicStatus) {
+    const realtime = await readRealtimeMeta();
+    res.setHeader("Cache-Control", "public, max-age=0, must-revalidate");
+    res.setHeader("Vercel-CDN-Cache-Control", "public, s-maxage=30, stale-while-revalidate=120");
+    res.status(200).json({
+      ok: true,
+      versions: {
+        global: normalizeVersion(realtime.globalVersion),
+        catalog: normalizeVersion(realtime.catalogVersion),
+        orders: 0,
+        users: 0,
+        userState: 0,
+        updatedAt: normalizeLine(realtime.updatedAt || "").slice(0, 60),
+      },
+      authenticated: false,
+      isAdmin: false,
+      currentUser: null,
+    });
     return;
   }
 
@@ -81,12 +107,7 @@ export default async function handler(req, res) {
   const adminSession = resolveAdminSession(req);
   const userRecord = resolveVersionedUserSession(store?.users, userSession);
 
-  const isAnonymousVisitor = !userRecord && !adminSession;
-  if (isAnonymousVisitor) {
-    res.setHeader("Cache-Control", "public, s-maxage=10, stale-while-revalidate=30");
-  } else {
-    res.setHeader("Cache-Control", "private, no-cache, no-store, must-revalidate");
-  }
+  res.setHeader("Cache-Control", "private, no-cache, no-store, must-revalidate");
 
   res.status(200).json({
     ok: true,

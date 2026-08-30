@@ -80,7 +80,7 @@ import {
   syncContactState,
   updateServerOrder,
 } from "./services/serverStateService";
-import { ensureCsrfToken } from "./services/httpClient";
+import { uploadCatalogProductImage } from "./services/blobImageService";
 import { useBodyScrollLock } from "./hooks/useBodyScrollLock";
 import { useMobileNavGuards } from "./hooks/useMobileNavGuards";
 import { useSwipeGesture } from "./hooks/useSwipeGesture";
@@ -2891,6 +2891,13 @@ export default function App() {
   };
 
   const applyCatalogStateFromServer = useCallback((data = {}) => {
+    const incomingCatalogVersion = Number(data.catalogVersion);
+    if (Number.isInteger(incomingCatalogVersion) && incomingCatalogVersion >= 0) {
+      realtimeSyncVersionsRef.current.catalog = Math.max(
+        Number(realtimeSyncVersionsRef.current.catalog || 0),
+        incomingCatalogVersion,
+      );
+    }
     const previousProductsMap = new Map(productsRef.current.map((product) => [String(product.id), product]));
     const incomingProducts = Array.isArray(data.products)
       ? data.products.map((rawProduct) => {
@@ -3401,10 +3408,6 @@ export default function App() {
   }, [catalogReady, editingCartItemKey, productRouteSlug, products, selectedProduct]);
 
   useEffect(() => {
-    void ensureCsrfToken();
-  }, []);
-
-  useEffect(() => {
     if (typeof document === "undefined") return undefined;
     const hints = [
       { rel: "preconnect", href: "https://images.unsplash.com", crossOrigin: "anonymous" },
@@ -3477,44 +3480,6 @@ export default function App() {
       window.clearInterval(intervalId);
     };
   }, [showAdminPanel, isAdmin, liveOrdersEnabled, refreshOrdersFromServer]);
-
-  useEffect(() => {
-    if (!catalogReady) return undefined;
-    let cancelled = false;
-
-    const revalidateCatalog = async () => {
-      if (cancelled) return;
-      if (showAdminPanel && isAdmin && adminTab === "producto") return;
-      const result = await getCatalogState({ preferCache: false, force: true });
-      if (cancelled) return;
-      if (result.ok && result.data) {
-        applyCatalogStateFromServer(result.data);
-      }
-    };
-
-    const visibilityHandler = () => {
-      if (typeof document === "undefined") return;
-      if (document.visibilityState !== "visible") return;
-      void revalidateCatalog();
-    };
-
-    window.addEventListener("focus", revalidateCatalog);
-    if (typeof document !== "undefined") {
-      document.addEventListener("visibilitychange", visibilityHandler);
-    }
-    const intervalId = window.setInterval(() => {
-      void revalidateCatalog();
-    }, 90000);
-
-    return () => {
-      cancelled = true;
-      window.removeEventListener("focus", revalidateCatalog);
-      if (typeof document !== "undefined") {
-        document.removeEventListener("visibilitychange", visibilityHandler);
-      }
-      window.clearInterval(intervalId);
-    };
-  }, [catalogReady, showAdminPanel, isAdmin, adminTab, applyCatalogStateFromServer]);
 
   useEffect(() => {
     if (!showAdminPanel || !isAdmin) return;
@@ -4658,7 +4623,7 @@ export default function App() {
         expiresAt: Number(result.session.expiresAt) || 0,
         issuedAt: Number(result.session.issuedAt) || Date.now(),
       });
-      const catalogResult = await getCatalogState({ preferCache: true, force: false });
+      const catalogResult = await getCatalogState({ admin: true, preferCache: true, force: false });
       if (catalogResult.ok && catalogResult.data) {
         applyCatalogStateFromServer(catalogResult.data);
         setCatalogReady(true);
@@ -5448,7 +5413,7 @@ export default function App() {
           expiresAt: Number(adminLoginResult.session.expiresAt) || 0,
           issuedAt: Number(adminLoginResult.session.issuedAt) || Date.now(),
         });
-        const catalogResult = await getCatalogState({ preferCache: true, force: false });
+        const catalogResult = await getCatalogState({ admin: true, preferCache: true, force: false });
         if (catalogResult.ok && catalogResult.data) {
           applyCatalogStateFromServer(catalogResult.data);
           setCatalogReady(true);
@@ -6356,7 +6321,7 @@ export default function App() {
     const files = Array.from(inputElement?.files || []);
     if (!files.length) return;
     try {
-      const uploadedImages = await Promise.all(files.map((file) => fileToDataUrl(file)));
+      const uploadedImages = await Promise.all(files.map((file) => uploadCatalogProductImage(file)));
 
       setProductForm((previous) => ({
         ...previous,
@@ -6370,7 +6335,7 @@ export default function App() {
         }),
       }));
       setEditorError("");
-      showToastMessage(`${uploadedImages.length} imagen(es) cargadas correctamente.`, "success");
+      showToastMessage(`${uploadedImages.length} imagen(es) optimizadas y guardadas en Vercel Blob.`, "success");
     } catch (error) {
       const message = error instanceof Error ? error.message : "No pudimos cargar una o mas imagenes.";
       setEditorError(message);

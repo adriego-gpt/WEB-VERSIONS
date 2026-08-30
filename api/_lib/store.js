@@ -6,6 +6,7 @@ import crypto from "node:crypto";
 const DATA_DIR = path.join(process.cwd(), ".data");
 const DATA_FILE = path.join(DATA_DIR, "store.json");
 const STORE_KEY = String(process.env.STORE_STATE_KEY || "adriego:store:v1").trim();
+const STORE_REALTIME_KEY = `${STORE_KEY}:realtime`;
 const STORE_LOCK_KEY = `${STORE_KEY}:lock`;
 const STORE_LOCK_TTL_SECONDS = Math.max(4, Number(process.env.STORE_LOCK_TTL_SECONDS) || 8);
 const STORE_LOCK_MAX_WAIT_MS = Math.max(400, Number(process.env.STORE_LOCK_MAX_WAIT_MS) || 2600);
@@ -102,6 +103,81 @@ async function runKvCommand(command, ...args) {
   return payload?.result;
 }
 
+async function runKvPipeline(commands = []) {
+  const baseUrl = String(process.env.KV_REST_API_URL || "").trim().replace(/\/+$/, "");
+  const token = String(process.env.KV_REST_API_TOKEN || "").trim();
+  const normalizedCommands = (Array.isArray(commands) ? commands : [])
+    .filter((command) => Array.isArray(command) && command.length)
+    .map(([command, ...args]) => [
+      String(command || "").toUpperCase(),
+      ...args.map((item) => String(item)),
+    ]);
+  if (!baseUrl || !token) throw new Error("kv-not-configured");
+  if (!normalizedCommands.length) return [];
+
+  const response = await fetch(`${baseUrl}/pipeline`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(normalizedCommands),
+  });
+
+  if (!response.ok) {
+    const details = await response.text().catch(() => "");
+    throw new Error(`kv-pipeline-http-${response.status}${details ? `:${details.slice(0, 200)}` : ""}`);
+  }
+
+  const payload = await response.json().catch(() => null);
+  if (!Array.isArray(payload)) throw new Error("kv-pipeline-invalid-response");
+  return payload.map((entry) => {
+    if (entry && typeof entry === "object" && entry.error) {
+      throw new Error(`kv-pipeline-error:${String(entry.error)}`);
+    }
+    return entry?.result;
+  });
+}
+
+async function runKvTransaction(commands = []) {
+  const baseUrl = String(process.env.KV_REST_API_URL || "").trim().replace(/\/+$/, "");
+  const token = String(process.env.KV_REST_API_TOKEN || "").trim();
+  const normalizedCommands = (Array.isArray(commands) ? commands : [])
+    .filter((command) => Array.isArray(command) && command.length)
+    .map(([command, ...args]) => [
+      String(command || "").toUpperCase(),
+      ...args.map((item) => String(item)),
+    ]);
+  if (!baseUrl || !token) throw new Error("kv-not-configured");
+  if (!normalizedCommands.length) return [];
+
+  const response = await fetch(`${baseUrl}/multi-exec`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(normalizedCommands),
+  });
+
+  if (!response.ok) {
+    const details = await response.text().catch(() => "");
+    throw new Error(`kv-transaction-http-${response.status}${details ? `:${details.slice(0, 200)}` : ""}`);
+  }
+
+  const payload = await response.json().catch(() => null);
+  if (payload && !Array.isArray(payload) && payload.error) {
+    throw new Error(`kv-transaction-error:${String(payload.error)}`);
+  }
+  if (!Array.isArray(payload)) throw new Error("kv-transaction-invalid-response");
+  return payload.map((entry) => {
+    if (entry && typeof entry === "object" && entry.error) {
+      throw new Error(`kv-transaction-command-error:${String(entry.error)}`);
+    }
+    return entry?.result;
+  });
+}
+
 async function readKvStore() {
   const serialized = await runKvCommand("GET", STORE_KEY);
   if (!serialized) return clone(DEFAULT_STORE);
@@ -116,7 +192,13 @@ async function readKvStore() {
 }
 
 async function writeKvStore(store) {
-  await runKvCommand("SET", STORE_KEY, JSON.stringify(store));
+  const realtime = store?.meta?.realtime && typeof store.meta.realtime === "object"
+    ? store.meta.realtime
+    : DEFAULT_STORE.meta.realtime;
+  await runKvTransaction([
+    ["SET", STORE_KEY, JSON.stringify(store)],
+    ["SET", STORE_REALTIME_KEY, JSON.stringify(realtime)],
+  ]);
 }
 
 async function acquireKvLock() {
@@ -255,6 +337,30 @@ async function readStore() {
   }
 }
 
+async function readRealtimeMeta() {
+  assertStoreConfigured();
+  if (isKvConfigured()) {
+    const serialized = await runKvCommand("GET", STORE_REALTIME_KEY);
+    if (serialized) {
+      try {
+        const parsed = typeof serialized === "string" ? JSON.parse(serialized) : serialized;
+        const normalized = normalizeStore({ meta: { realtime: parsed } });
+        return normalized.meta.realtime;
+      } catch {
+        // Fall through to the main store for one-time backwards compatibility.
+      }
+    }
+
+    const store = await readKvStore();
+    const realtime = store.meta.realtime;
+    await runKvCommand("SET", STORE_REALTIME_KEY, JSON.stringify(realtime)).catch(() => null);
+    return realtime;
+  }
+
+  const store = await readStore();
+  return store.meta.realtime;
+}
+
 async function persistStore(nextStore) {
   assertStoreConfigured();
   const normalized = normalizeStore(nextStore);
@@ -305,6 +411,9 @@ export {
   isKvConfigured,
   requiresPersistentStore,
   readStore,
+  readRealtimeMeta,
   runKvCommand,
+  runKvPipeline,
+  runKvTransaction,
   updateStore,
 };

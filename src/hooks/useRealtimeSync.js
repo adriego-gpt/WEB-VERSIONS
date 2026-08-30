@@ -36,7 +36,13 @@ export function useRealtimeSync({
 
     const pollRealtimeSync = async (force = false) => {
       try {
-        const result = await getRealtimeSyncStatus({ force, preferCache: !force, maxAgeMs: force ? 0 : 2500 });
+        const privateStatus = Boolean(currentUserId || isAdmin);
+        const result = await getRealtimeSyncStatus({
+          privateStatus,
+          force,
+          preferCache: !force,
+          maxAgeMs: force ? 0 : (privateStatus ? 5000 : 30000),
+        });
         if (cancelled || !result?.ok || !result.versions) {
           scheduleNext();
           return;
@@ -54,7 +60,12 @@ export function useRealtimeSync({
         });
 
         if (triggers.shouldRefreshCatalog) {
-          const catalogResult = await getCatalogState({ preferCache: false, force: true });
+          const catalogResult = await getCatalogState({
+            admin: Boolean(isAdmin),
+            catalogVersion: nextVersions.catalog,
+            preferCache: false,
+            force: true,
+          });
           if (!cancelled && catalogResult?.ok && catalogResult?.data) {
             applyCatalogState(catalogResult.data);
           }

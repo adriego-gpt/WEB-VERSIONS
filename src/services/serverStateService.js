@@ -3,10 +3,12 @@ import { cachedRequest, invalidateCachedRequest } from "./smartCache.js";
 import { createUuid } from "../utils/uid.js";
 
 const SERVER_CACHE_KEYS = {
-  catalog: "server:catalog-state",
+  catalogPublic: "server:catalog-state:public",
+  catalogAdmin: "server:catalog-state:admin",
   orders: "server:orders-list",
   security: "server:security-metrics",
-  realtime: "server:realtime-sync",
+  realtimePublic: "server:realtime-sync:public",
+  realtimePrivate: "server:realtime-sync:private",
 };
 
 let latestCatalogVersion = 0;
@@ -28,20 +30,29 @@ function postJson(endpoint, payload) {
 
 function getCatalogState(options = {}) {
   const {
+    admin = false,
+    catalogVersion = latestCatalogVersion,
     force = false,
     preferCache = true,
     maxAgeMs = 25000,
   } = options;
+  const normalizedVersion = Number.isInteger(Number(catalogVersion)) && Number(catalogVersion) > 0
+    ? Math.floor(Number(catalogVersion))
+    : 0;
+  const endpoint = admin
+    ? "/api/catalog-state?action=get"
+    : `/api/catalog-state?action=get-public${normalizedVersion ? `&v=${normalizedVersion}` : ""}`;
   return cachedRequest(
-    SERVER_CACHE_KEYS.catalog,
-    () => requestJson("/api/catalog-state?action=get", {
+    admin ? SERVER_CACHE_KEYS.catalogAdmin : SERVER_CACHE_KEYS.catalogPublic,
+    () => requestJson(endpoint, {
       method: "GET",
+      credentials: admin ? "include" : "omit",
     }),
     {
       force,
       preferCache,
       maxAgeMs,
-      persist: true,
+      persist: !admin,
     },
   ).then(rememberCatalogVersion);
 }
@@ -55,10 +66,12 @@ function syncCatalogState(data, options = {}) {
     if (response?.ok) {
       rememberCatalogVersion(response);
       invalidateCachedRequest([
-        SERVER_CACHE_KEYS.catalog,
+        SERVER_CACHE_KEYS.catalogPublic,
+        SERVER_CACHE_KEYS.catalogAdmin,
         SERVER_CACHE_KEYS.orders,
         SERVER_CACHE_KEYS.security,
-        SERVER_CACHE_KEYS.realtime,
+        SERVER_CACHE_KEYS.realtimePublic,
+        SERVER_CACHE_KEYS.realtimePrivate,
       ]);
     }
     return response;
@@ -73,8 +86,10 @@ function syncContactState(contactSettings, storeSettings) {
     if (response?.ok) {
       rememberCatalogVersion(response);
       invalidateCachedRequest([
-        SERVER_CACHE_KEYS.catalog,
-        SERVER_CACHE_KEYS.realtime,
+        SERVER_CACHE_KEYS.catalogPublic,
+        SERVER_CACHE_KEYS.catalogAdmin,
+        SERVER_CACHE_KEYS.realtimePublic,
+        SERVER_CACHE_KEYS.realtimePrivate,
       ]);
     }
     return response;
@@ -89,10 +104,12 @@ function createServerCheckoutOrder(payload) {
   return postJson("/api/checkout-order", requestPayload).then((response) => {
     if (response?.ok) {
       invalidateCachedRequest([
-        SERVER_CACHE_KEYS.catalog,
+        SERVER_CACHE_KEYS.catalogPublic,
+        SERVER_CACHE_KEYS.catalogAdmin,
         SERVER_CACHE_KEYS.orders,
         SERVER_CACHE_KEYS.security,
-        SERVER_CACHE_KEYS.realtime,
+        SERVER_CACHE_KEYS.realtimePublic,
+        SERVER_CACHE_KEYS.realtimePrivate,
       ]);
     }
     return response;
@@ -129,7 +146,7 @@ function updateServerOrder(payload) {
       invalidateCachedRequest([
         SERVER_CACHE_KEYS.orders,
         SERVER_CACHE_KEYS.security,
-        SERVER_CACHE_KEYS.realtime,
+        SERVER_CACHE_KEYS.realtimePrivate,
       ]);
     }
     return response;
@@ -142,7 +159,7 @@ function deleteServerOrder(payload) {
       invalidateCachedRequest([
         SERVER_CACHE_KEYS.orders,
         SERVER_CACHE_KEYS.security,
-        SERVER_CACHE_KEYS.realtime,
+        SERVER_CACHE_KEYS.realtimePrivate,
       ]);
     }
     return response;
@@ -180,14 +197,16 @@ function resetSecurityMetricsSnapshot() {
 
 function getRealtimeSyncStatus(options = {}) {
   const {
+    privateStatus = false,
     force = false,
     preferCache = true,
     maxAgeMs = 3000,
   } = options;
   return cachedRequest(
-    SERVER_CACHE_KEYS.realtime,
-    () => requestJson("/api/realtime-sync?action=status", {
+    privateStatus ? SERVER_CACHE_KEYS.realtimePrivate : SERVER_CACHE_KEYS.realtimePublic,
+    () => requestJson(`/api/realtime-sync?action=${privateStatus ? "status" : "public-status"}`, {
       method: "GET",
+      credentials: privateStatus ? "include" : "omit",
     }),
     {
       force,

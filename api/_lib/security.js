@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import { Buffer } from "node:buffer";
 import fs from "node:fs";
 import path from "node:path";
-import { isKvConfigured, runKvCommand } from "./store.js";
+import { isKvConfigured, runKvCommand, runKvPipeline } from "./store.js";
 
 const CSRF_COOKIE_NAME = "adriego_csrf_token";
 const RATE_LIMIT_STORE_KEY = "__ADRIEGO_RATE_LIMIT_STORE__";
@@ -318,6 +318,10 @@ async function persistApiMetricEvent(endpoint = "", event = "request", payload =
     const method = normalizeLine(payload.method || "").toUpperCase() || "UNKNOWN";
     increments.push(["requests", 1], [`method:${method}`, 1]);
   } else if (event === "response") {
+    if (payload.includeRequest) {
+      const method = normalizeLine(payload.method || "").toUpperCase() || "UNKNOWN";
+      increments.push(["requests", 1], [`method:${method}`, 1]);
+    }
     const status = Math.max(100, Math.min(599, Number(payload.status) || 200));
     increments.push(["responses", 1], [`status:${status}`, 1]);
     if (status >= 400) increments.push(["errors", 1]);
@@ -335,9 +339,11 @@ async function persistApiMetricEvent(endpoint = "", event = "request", payload =
     if (field) increments.push([field, 1]);
   }
 
-  await runKvCommand("SADD", SECURITY_METRICS_INDEX_KEY, metricKey);
-  await runKvCommand("HSET", metricKey, "endpoint", normalizedEndpoint, "lastEventAt", new Date().toISOString());
-  await Promise.all(increments.map(([field, amount]) => runKvCommand("HINCRBY", metricKey, field, String(amount))));
+  await runKvPipeline([
+    ["SADD", SECURITY_METRICS_INDEX_KEY, metricKey],
+    ["HSET", metricKey, "endpoint", normalizedEndpoint, "lastEventAt", new Date().toISOString()],
+    ...increments.map(([field, amount]) => ["HINCRBY", metricKey, field, String(amount)]),
+  ]);
 }
 
 function recordApiMetric(endpoint = "", event = "request", payload = {}) {
@@ -384,7 +390,7 @@ function recordApiMetric(endpoint = "", event = "request", payload = {}) {
       break;
   }
 
-  if (isKvConfigured()) {
+  if (isKvConfigured() && payload.persist !== false) {
     void persistApiMetricEvent(endpoint, event, payload).catch((error) => {
       logSecurityEvent(endpoint, "metrics-persistence-failed", {
         message: normalizeLine(error?.message || "unknown-error").slice(0, 160),
@@ -399,6 +405,7 @@ function monitorApiRequest(req, res, endpoint = "") {
 
   recordApiMetric(normalizedEndpoint, "request", {
     method: String(req?.method || "GET"),
+    persist: false,
   });
 
   const startedAt = Date.now();
@@ -409,6 +416,8 @@ function monitorApiRequest(req, res, endpoint = "") {
     if (finished) return;
     finished = true;
     recordApiMetric(normalizedEndpoint, "response", {
+      includeRequest: true,
+      method: String(req?.method || "GET"),
       status: Number(res.statusCode) || 200,
       durationMs: Date.now() - startedAt,
     });
@@ -875,8 +884,12 @@ async function consumeRateLimit(namespace, key, limit, windowMs, context = {}) {
   const safeWindowMs = Math.max(1000, Math.floor(windowMs));
 
   try {
-    const count = Math.max(0, Number(await runKvCommand("INCR", bucketKey)) || 0);
-    let ttl = Number(await runKvCommand("PTTL", bucketKey));
+    const [rawCount, rawTtl] = await runKvPipeline([
+      ["INCR", bucketKey],
+      ["PTTL", bucketKey],
+    ]);
+    const count = Math.max(0, Number(rawCount) || 0);
+    let ttl = Number(rawTtl);
     if (!Number.isFinite(ttl) || ttl <= 0) {
       await runKvCommand("PEXPIRE", bucketKey, String(safeWindowMs));
       ttl = safeWindowMs;

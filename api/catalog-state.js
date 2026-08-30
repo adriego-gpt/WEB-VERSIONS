@@ -7,7 +7,6 @@ import {
 } from "./_lib/storeSanitizers.js";
 import {
   consumeRateLimit,
-  ensureCsrfCookie,
   getAllowedOrigins,
   getClientIp,
   isOriginAllowed,
@@ -48,10 +47,19 @@ function resolveAdminSession(req) {
   return verifySignedToken(cookies[ADMIN_COOKIE_NAME] || cookies.atelier_admin_session || "", sessionSecret);
 }
 
+function setPublicCatalogCacheHeaders(res, { versioned = false } = {}) {
+  res.setHeader("Cache-Control", "public, max-age=0, must-revalidate");
+  res.setHeader(
+    "Vercel-CDN-Cache-Control",
+    versioned
+      ? "public, s-maxage=31536000, stale-while-revalidate=86400"
+      : "public, s-maxage=60, stale-while-revalidate=300",
+  );
+}
+
 export default async function handler(req, res) {
   monitorApiRequest(req, res, ENDPOINT_NAME);
   setCommonSecurityHeaders(res);
-  ensureCsrfCookie(req, res);
 
   if (req.method === "OPTIONS") {
     res.status(204).end();
@@ -68,12 +76,13 @@ export default async function handler(req, res) {
   }
 
   const action = normalizeLine(req.query?.action || "get").toLowerCase();
-  const adminSession = resolveAdminSession(req);
+  const isPublicRead = action === "get-public";
+  const adminSession = isPublicRead ? null : resolveAdminSession(req);
   const isAdmin = Boolean(adminSession);
   const clientIp = getClientIp(req);
 
-  if (action === "get") {
-    const rateLimit = await consumeRateLimit("catalog-get-ip", clientIp, 180, 10 * 60 * 1000, {
+  if (action === "get" || isPublicRead) {
+    const rateLimit = await consumeRateLimit(isPublicRead ? "catalog-get-public-ip" : "catalog-get-ip", clientIp, 180, 10 * 60 * 1000, {
       endpoint: ENDPOINT_NAME,
       ip: clientIp,
     });
@@ -95,12 +104,18 @@ export default async function handler(req, res) {
       storageBackend: getStoreBackend(),
     };
 
-    if (isAdmin) {
+    if (isAdmin && !isPublicRead) {
       payload.coupons = sanitizedCatalog.coupons;
       payload.orderHistory = sanitizeArray(store.orders);
       res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+    } else if (isPublicRead) {
+      const requestedVersion = Number(req.query?.v);
+      const isVersioned = Number.isInteger(requestedVersion)
+        && requestedVersion > 0
+        && requestedVersion === payload.catalogVersion;
+      setPublicCatalogCacheHeaders(res, { versioned: isVersioned });
     } else {
-      res.setHeader("Cache-Control", "public, s-maxage=60, stale-while-revalidate=300");
+      res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
     }
 
     res.status(200).json({ ok: true, data: payload });
