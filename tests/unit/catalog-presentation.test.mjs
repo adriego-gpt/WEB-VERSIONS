@@ -57,3 +57,9 @@ test("featured product card does not nest color buttons inside its main action",
   assert.doesNotMatch(source, /<button[\s\S]{0,180}className="featured-product-link"/);
   assert.match(source, /<div className="featured-product-link">/);
 });
+
+test("featured cards use the principal catalog color without showing color selectors", async () => {
+  const source = await readFile(new URL("../../src/components/catalog/ShowcaseProductCard.jsx", import.meta.url), "utf8");
+  assert.match(source, /getSelectionForColor\(product, \{ color: product\.catalogColor \}\)/);
+  assert.doesNotMatch(source, /featured-product-swatches|featured-swatch/);
+});

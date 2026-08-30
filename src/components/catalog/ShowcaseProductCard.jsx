@@ -1,36 +1,21 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useCallback } from "react";
 import { currency, discountPercent } from "../../utils/currency";
 import { FALLBACK_IMAGE } from "../../constants/product";
-import { getProductColorSwatch } from "../../utils/productColor";
 import {
   getCurrentImageForProduct,
   getSelectionForColor,
 } from "../../domain/products/variants";
 
 export function ShowcaseProductCard({ product, onOpenDetail, isDuplicate = false }) {
-  const fallbackSelection = getSelectionForColor(product, { color: product.catalogColor });
-  const [selectedColor, setSelectedColor] = useState(fallbackSelection.color);
-
-  useEffect(() => {
-    setSelectedColor(fallbackSelection.color);
-  }, [product?.id, fallbackSelection.color]);
-
+  const principalSelection = getSelectionForColor(product, { color: product.catalogColor });
+  const principalColor = principalSelection.color;
   const discount = discountPercent(product.price, product.oldPrice);
-  const previewImage = getCurrentImageForProduct(product, selectedColor) || FALLBACK_IMAGE;
-  const colors = Array.isArray(product?.colors) ? product.colors.filter(Boolean) : [];
-  const visibleColors = colors.slice(0, 4);
-  const hiddenColorCount = Math.max(0, colors.length - visibleColors.length);
-
-  const handleColorClick = (event, color) => {
-    event.stopPropagation();
-    event.preventDefault();
-    setSelectedColor(color);
-  };
+  const previewImage = getCurrentImageForProduct(product, principalColor) || FALLBACK_IMAGE;
 
   const handleOpen = useCallback(() => {
-    const resolved = getSelectionForColor(product, { color: selectedColor });
+    const resolved = getSelectionForColor(product, { color: principalColor });
     onOpenDetail(product, resolved);
-  }, [onOpenDetail, product, selectedColor]);
+  }, [onOpenDetail, principalColor, product]);
 
   return (
     <article className="featured-product-card" aria-hidden={isDuplicate ? "true" : undefined}>
@@ -66,26 +51,6 @@ export function ShowcaseProductCard({ product, onOpenDetail, isDuplicate = false
             >
               {product.name}
             </button>
-            {colors.length > 1 && (
-              <span className="featured-product-swatches">
-                {visibleColors.map((color) => (
-                  <button
-                    key={color}
-                    type="button"
-                    className={`featured-swatch${selectedColor === color ? " active" : ""}`}
-                    onClick={(e) => handleColorClick(e, color)}
-                    title={`Color ${color}`}
-                    aria-label={`Color ${color}`}
-                    tabIndex={isDuplicate ? -1 : 0}
-                  >
-                    <span style={{ "--variant-swatch": getProductColorSwatch(color, product.colorSwatches?.[color]) }} />
-                  </button>
-                ))}
-                {hiddenColorCount > 0 && (
-                  <span className="featured-swatch-more">+{hiddenColorCount}</span>
-                )}
-              </span>
-            )}
           </span>
           <span className="featured-product-prices">
             <strong>{currency(product.price)}</strong>

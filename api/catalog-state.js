@@ -1,4 +1,5 @@
 
+import { handleUpload } from "@vercel/blob/client";
 import { bumpRealtimeMeta, getStoreBackend, readStore, updateStore } from "./_lib/store.js";
 import {
   sanitizeAdminCatalogPayload,
@@ -21,6 +22,9 @@ import {
 
 const ADMIN_COOKIE_NAME = "adriego_admin_session";
 const ENDPOINT_NAME = "catalog-state";
+const MAX_PRODUCT_IMAGE_BYTES = 150 * 1024;
+const ALLOWED_PRODUCT_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp"];
+const PRODUCT_IMAGE_PATH_PATTERN = /^catalog\/products\/\d{4}-\d{2}\/[a-f0-9-]{20,}\.(?:jpe?g|png|webp)$/i;
 
 function sanitizeArray(value) {
   return Array.isArray(value) ? value : [];
@@ -45,6 +49,21 @@ function resolveAdminSession(req) {
   if (!sessionSecret) return null;
   const cookies = parseCookies(req.headers?.cookie || "");
   return verifySignedToken(cookies[ADMIN_COOKIE_NAME] || cookies.atelier_admin_session || "", sessionSecret);
+}
+
+function getCatalogImageUploadPolicy(pathname, multipart = false) {
+  const safePathname = normalizeLine(pathname || "");
+  if (multipart || !PRODUCT_IMAGE_PATH_PATTERN.test(safePathname)) {
+    throw new Error("Ruta de imagen no permitida");
+  }
+  return {
+    allowedContentTypes: ALLOWED_PRODUCT_IMAGE_TYPES,
+    maximumSizeInBytes: MAX_PRODUCT_IMAGE_BYTES,
+    addRandomSuffix: true,
+    allowOverwrite: false,
+    cacheControlMaxAge: 60 * 60 * 24 * 365,
+    validUntil: Date.now() + (5 * 60 * 1000),
+  };
 }
 
 function setPublicCatalogCacheHeaders(res, { versioned = false } = {}) {
@@ -80,6 +99,60 @@ export default async function handler(req, res) {
   const adminSession = isPublicRead ? null : resolveAdminSession(req);
   const isAdmin = Boolean(adminSession);
   const clientIp = getClientIp(req);
+
+  if (action === "image-upload") {
+    if (!isOriginAllowed(req, getAllowedOrigins(process.env.ADMIN_ALLOWED_ORIGIN))) {
+      res.status(403).json({ ok: false, message: "Origen no permitido" });
+      return;
+    }
+    if (req.method !== "POST") {
+      res.status(405).json({ ok: false, message: "Method not allowed" });
+      return;
+    }
+    if (!requireCsrf(req, res, { endpoint: ENDPOINT_NAME })) return;
+    if (!isAdmin) {
+      res.status(401).json({ ok: false, message: "No autorizado" });
+      return;
+    }
+
+    const uploadRateLimit = await consumeRateLimit("catalog-image-upload-admin-ip", clientIp, 120, 10 * 60 * 1000, {
+      endpoint: ENDPOINT_NAME,
+      ip: clientIp,
+    });
+    if (!uploadRateLimit.ok) {
+      res.setHeader("Retry-After", String(Math.ceil(uploadRateLimit.retryAfterMs / 1000)));
+      res.status(429).json({ ok: false, message: "Too many requests" });
+      return;
+    }
+
+    const body = requireJsonBody(req, res, { endpoint: ENDPOINT_NAME });
+    if (!body) return;
+    if (body.type !== "blob.generate-client-token") {
+      res.status(400).json({ ok: false, message: "Solicitud de carga no válida" });
+      return;
+    }
+
+    const blobToken = String(process.env.BLOB_READ_WRITE_TOKEN || "").trim();
+    if (!blobToken) {
+      res.status(503).json({ ok: false, message: "Almacenamiento de imágenes no configurado" });
+      return;
+    }
+
+    try {
+      const response = await handleUpload({
+        token: blobToken,
+        request: req,
+        body,
+        onBeforeGenerateToken: async (pathname, _clientPayload, multipart) => (
+          getCatalogImageUploadPolicy(pathname, multipart)
+        ),
+      });
+      res.status(200).json(response);
+    } catch {
+      res.status(400).json({ ok: false, message: "No se pudo autorizar la carga de la imagen" });
+    }
+    return;
+  }
 
   if (action === "get" || isPublicRead) {
     const rateLimit = await consumeRateLimit(isPublicRead ? "catalog-get-public-ip" : "catalog-get-ip", clientIp, 180, 10 * 60 * 1000, {
@@ -242,4 +315,10 @@ export default async function handler(req, res) {
     },
   });
 }
+
+export {
+  ALLOWED_PRODUCT_IMAGE_TYPES,
+  MAX_PRODUCT_IMAGE_BYTES,
+  getCatalogImageUploadPolicy,
+};
 

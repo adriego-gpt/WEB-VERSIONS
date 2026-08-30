@@ -44,7 +44,7 @@ test("Blob image service", async (t) => {
     assert.equal(captured[0], "catalog/products/2026-08/test-image-1234567890.webp");
     assert.equal(captured[1], imageBlob);
     assert.equal(captured[2].access, "public");
-    assert.equal(captured[2].handleUploadUrl, "/api/catalog-image-upload");
+    assert.equal(captured[2].handleUploadUrl, "/api/catalog-state?action=image-upload");
     assert.equal(captured[2].headers["X-CSRF-Token"], "csrf-token-for-test");
     assert.equal(captured[2].headers["X-Requested-With"], "XMLHttpRequest");
   });

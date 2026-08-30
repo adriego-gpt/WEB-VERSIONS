@@ -4,7 +4,7 @@ import { signPayload } from "../../api/_lib/security.js";
 import catalogImageUploadHandler, {
   MAX_PRODUCT_IMAGE_BYTES,
   getCatalogImageUploadPolicy,
-} from "../../api/catalog-image-upload.js";
+} from "../../api/catalog-state.js";
 
 const APP_ORIGIN = "http://localhost:5173";
 const SESSION_SECRET = "blob-upload-session-secret";
@@ -47,8 +47,8 @@ function createRequest({ admin = false, csrf = true, pathname = "catalog/product
   }
   return {
     method: "POST",
-    url: "/api/catalog-image-upload",
-    query: {},
+    url: "/api/catalog-state?action=image-upload",
+    query: { action: "image-upload" },
     headers: {
       origin: APP_ORIGIN,
       host: "localhost:5173",

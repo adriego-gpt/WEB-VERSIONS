@@ -4,7 +4,7 @@ import { createUuid } from "../utils/uid.js";
 import { fileToDataUrl } from "../utils/fileUpload.js";
 import { ensureCsrfToken } from "./httpClient.js";
 
-const PRODUCT_IMAGE_UPLOAD_ENDPOINT = "/api/catalog-image-upload";
+const PRODUCT_IMAGE_UPLOAD_ENDPOINT = "/api/catalog-state?action=image-upload";
 const PUBLIC_BLOB_HOST_SUFFIX = ".public.blob.vercel-storage.com";
 const SUPPORTED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 
