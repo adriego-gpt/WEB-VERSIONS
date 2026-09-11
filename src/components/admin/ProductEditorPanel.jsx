@@ -21,6 +21,12 @@ const EDITOR_SECTIONS = [
   { id: "publicacion", label: "Publicación y oferta" },
 ];
 
+const COMMON_PRODUCT_SIZES = ["XS", "S", "M", "L", "XL", "2XL", "3XL", "Única"];
+
+function normalizeSizeKey(value = "") {
+  return String(value).trim().toLocaleLowerCase("es");
+}
+
 export function ProductEditorPanel({
   form = {},
   draftRecovery,
@@ -52,12 +58,15 @@ export function ProductEditorPanel({
   onColorImageChange,
   onRemoveImageField,
   onAddSize,
+  onAddSizeToAll,
+  onRemoveSizeFromAll,
   onSizeChange,
   onRemoveSize,
   onSave,
   onReset,
 }) {
   const [activeSection, setActiveSection] = useState("datos");
+  const [customSize, setCustomSize] = useState("");
   const colorsData = form?.colorsData;
   const [expandedColorId, setExpandedColorId] = useState(colorsData?.[0]?.uid || "");
   const formTags = useMemo(() => splitFilterTagsText(form?.filterTagsText), [form?.filterTagsText]);
@@ -75,6 +84,30 @@ export function ProductEditorPanel({
     (total, color) => total + (color.sizes || []).reduce((subtotal, entry) => subtotal + Math.max(0, Number(entry.stock) || 0), 0),
     0,
   );
+  const sizeColumns = useMemo(() => {
+    const seen = new Set();
+    return colors.flatMap((color) => color.sizes || []).reduce((result, entry) => {
+      const label = String(entry?.size || "").trim();
+      const key = normalizeSizeKey(label);
+      if (!key || seen.has(key)) return result;
+      seen.add(key);
+      result.push(label);
+      return result;
+    }, []);
+  }, [colors]);
+  const sizeRowsByColor = useMemo(() => new Map(colors.map((color) => [
+    color.uid,
+    new Map((color.sizes || []).flatMap((entry) => {
+      const key = normalizeSizeKey(entry?.size);
+      return key ? [[key, entry]] : [];
+    })),
+  ])), [colors]);
+  const addSharedSize = (rawSize) => {
+    const nextSize = String(rawSize || "").trim();
+    if (!nextSize) return;
+    onAddSizeToAll?.(nextSize);
+    setCustomSize("");
+  };
   const publishChecks = [
     { label: "Nombre", complete: String(form.name || "").trim().length >= 2 },
     { label: "Precio", complete: Number(form.price) > 0 },
@@ -113,6 +146,9 @@ export function ProductEditorPanel({
         <option value="Rosa palo" />
         <option value="Lila" />
         <option value="Mostaza" />
+      </datalist>
+      <datalist id="product-size-suggestions">
+        {COMMON_PRODUCT_SIZES.map((size) => <option key={size} value={size} />)}
       </datalist>
 
       {draftRecovery && (
@@ -310,6 +346,124 @@ export function ProductEditorPanel({
               </div>
             )}
 
+            <section className="product-stock-matrix-card" aria-labelledby="product-stock-matrix-heading">
+              <div className="product-stock-matrix-toolbar">
+                <div>
+                  <span className="product-editor-kicker">Inventario por combinación</span>
+                  <h6 id="product-stock-matrix-heading">Color × talla</h6>
+                  <p>Cambia el stock directamente. Puedes agregar cualquier talla y eliminar una columna completa de todos los colores.</p>
+                </div>
+                <div className="product-size-add-control">
+                  <input
+                    className="input"
+                    list="product-size-suggestions"
+                    value={customSize}
+                    onChange={(event) => setCustomSize(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key !== "Enter") return;
+                      event.preventDefault();
+                      addSharedSize(customSize);
+                    }}
+                    placeholder="Nueva talla"
+                    aria-label="Nueva talla para todos los colores"
+                  />
+                  <button className="btn btn-outline" type="button" onClick={() => addSharedSize(customSize)} disabled={!customSize.trim()}>
+                    <Plus size={15} />Agregar a todos
+                  </button>
+                </div>
+              </div>
+
+              <div className="product-size-presets" aria-label="Tallas frecuentes">
+                {COMMON_PRODUCT_SIZES.map((size) => {
+                  const sizeKey = normalizeSizeKey(size);
+                  const isPresentEverywhere = colors.length > 0 && colors.every((color) => sizeRowsByColor.get(color.uid)?.has(sizeKey));
+                  return (
+                    <button
+                      key={size}
+                      type="button"
+                      className={`product-size-preset${isPresentEverywhere ? " is-complete" : ""}`}
+                      onClick={() => addSharedSize(size)}
+                      disabled={isPresentEverywhere}
+                    >
+                      {isPresentEverywhere && <CheckCircle2 size={13} aria-hidden="true" />}{size}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {sizeColumns.length ? (
+                <div className="product-stock-matrix-scroll" tabIndex="0" aria-label="Tabla de existencias por color y talla">
+                  <div className="product-stock-matrix" style={{ "--stock-column-count": sizeColumns.length }}>
+                    <div className="product-stock-matrix-corner">Color</div>
+                    {sizeColumns.map((size) => (
+                      <div key={size} className="product-stock-matrix-heading is-size">
+                        <span>{size}</span>
+                        <button
+                          type="button"
+                          onClick={() => onRemoveSizeFromAll?.(size)}
+                          aria-label={`Eliminar talla ${size} de todos los colores`}
+                          title={`Eliminar talla ${size}`}
+                        >
+                          <X size={12} aria-hidden="true" />
+                        </button>
+                      </div>
+                    ))}
+                    <div className="product-stock-matrix-heading is-total">Total</div>
+
+                    {colors.map((color) => {
+                      const colorStock = (color.sizes || []).reduce((total, entry) => total + Math.max(0, Number(entry.stock) || 0), 0);
+                      return (
+                        <React.Fragment key={`matrix-${color.uid}`}>
+                          <div className="product-stock-matrix-color">
+                            <span style={{ backgroundColor: /^#[0-9a-fA-F]{6}$/.test(color.hex || "") ? color.hex : "#c8c4bc" }} aria-hidden="true" />
+                            <strong>{color.name || "Sin nombre"}</strong>
+                          </div>
+                          {sizeColumns.map((size) => {
+                            const sizeRow = sizeRowsByColor.get(color.uid)?.get(normalizeSizeKey(size));
+                            return sizeRow ? (
+                              <label key={`${color.uid}-${size}`} className="product-stock-matrix-cell">
+                                <span className="visually-hidden">Stock de {color.name || "color sin nombre"}, talla {size}</span>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  max="999"
+                                  inputMode="numeric"
+                                  value={sizeRow.stock}
+                                  onChange={(event) => onSizeChange(color.uid, sizeRow.uid, "stock", event.target.value)}
+                                />
+                              </label>
+                            ) : (
+                              <button
+                                key={`${color.uid}-${size}`}
+                                className="product-stock-matrix-empty"
+                                type="button"
+                                onClick={() => onAddSize(color.uid, size)}
+                                aria-label={`Agregar talla ${size} al color ${color.name || "sin nombre"}`}
+                                title={`Agregar ${size} a ${color.name || "este color"}`}
+                              >
+                                <Plus size={14} aria-hidden="true" />
+                              </button>
+                            );
+                          })}
+                          <output className="product-stock-matrix-total" aria-label={`Total de ${color.name || "color sin nombre"}`}>{colorStock}</output>
+                        </React.Fragment>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : (
+                <div className="product-stock-matrix-empty-state">
+                  <PackagePlus size={18} aria-hidden="true" />
+                  <span>Agrega una talla frecuente o escribe una personalizada para comenzar.</span>
+                </div>
+              )}
+            </section>
+
+            <div className="product-variant-details-heading">
+              <strong>Detalles por color</strong>
+              <span>Edita fotografías, tono y tallas especiales.</span>
+            </div>
+
             <div className="product-variant-list">
               {colors.map((color, colorIndex) => {
                 const isExpanded = activeColorId === color.uid;
@@ -420,8 +574,8 @@ export function ProductEditorPanel({
                             <div className="product-size-table-head"><span>Talla</span><span>Stock</span><span /></div>
                             {(color.sizes || []).map((sizeRow) => (
                               <div key={sizeRow.uid} className="product-size-row">
-                                <input className="input" value={sizeRow.size} onChange={(event) => onSizeChange(color.uid, sizeRow.uid, "size", event.target.value)} placeholder="Ej. M" />
-                                <input className="input" type="number" min="0" value={sizeRow.stock} onChange={(event) => onSizeChange(color.uid, sizeRow.uid, "stock", event.target.value)} placeholder="0" />
+                                <input className="input" list="product-size-suggestions" value={sizeRow.size} onChange={(event) => onSizeChange(color.uid, sizeRow.uid, "size", event.target.value)} placeholder="Ej. M" />
+                                <input className="input" type="number" min="0" max="999" inputMode="numeric" value={sizeRow.stock} onChange={(event) => onSizeChange(color.uid, sizeRow.uid, "stock", event.target.value)} placeholder="0" />
                                 <button type="button" className="icon-btn" onClick={() => onRemoveSize(color.uid, sizeRow.uid)} aria-label={`Quitar talla ${sizeRow.size || "sin nombre"}`}><Trash2 size={15} /></button>
                               </div>
                             ))}

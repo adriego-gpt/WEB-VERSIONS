@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { Heart, PencilLine, Trash2, X, Check } from "lucide-react";
 import { motion as Motion, AnimatePresence } from "framer-motion";
 import { currency, discountPercent } from "../../utils/currency";
+import { slugify } from "../../utils/sanitizers";
 import { getProductColorSwatch } from "../../utils/productColor";
 import { triggerHaptic } from "../../utils/haptics";
 import { ANIMATION } from "../../constants/animation";
@@ -44,6 +45,8 @@ export function CatalogProductCard({
   onEdit,
   onDelete,
 }) {
+  const productSlug = slugify(product.slug || product.name || product.id || "");
+  const productPath = productSlug ? `/producto/${encodeURIComponent(productSlug)}` : "/";
   const [isSelectingSize, setIsSelectingSize] = useState(false);
   const [justAddedSize, setJustAddedSize] = useState("");
   const [addedFeedback, setAddedFeedback] = useState(false);
@@ -99,7 +102,7 @@ export function CatalogProductCard({
     <div className="card product-card">
       <div className="product-img-wrap">
         <a
-          href={`/producto/${product.slug || product.id}`}
+          href={productPath}
           onClick={(event) => {
             event.preventDefault();
             onOpenDetail(product, { color: selectedColor, size: selectedSize });
@@ -158,7 +161,7 @@ export function CatalogProductCard({
           <div className="product-card-identity">
             <p className="product-card-category">{product.category}</p>
             <a
-              href={`/producto/${product.slug || product.id}`}
+              href={productPath}
               className="product-card-title-button"
               onClick={(event) => {
                 event.preventDefault();

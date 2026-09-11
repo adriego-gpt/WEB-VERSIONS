@@ -101,9 +101,11 @@ import {
 import { enqueueAsyncOperation } from "./utils/asyncQueue";
 import {
   PRODUCT_DRAFT_MAX_CHARS,
+  addSizeToColorDrafts,
   createProductDraftPayload,
   getProductFormSignature,
   parseProductDraftPayload,
+  removeSizeFromColorDrafts,
 } from "./domain/admin/productDraft";
 import { trackAnalyticsEvent } from "./services/analyticsService";
 import { AnimatedCurrencyValue } from "./components/ui/AnimatedCurrencyValue";
@@ -218,6 +220,11 @@ const OrderSuccessRedirectModal = lazyWithRetry(() => import("./components/modal
 const KNOWN_DIRECT_ROUTES = new Set(["/", "/cuenta/restablecer", "/carrito", "/favoritos", "/pedidos", "/buscar", "/error-preview"]);
 const ADMIN_WORKSPACE_HISTORY_KEY = "__adriegoAdminWorkspace";
 const ORDERS_PAGE_HISTORY_KEY = "__adriegoOrdersPage";
+const CART_PAGE_HISTORY_KEY = "__adriegoCartPage";
+const FAVORITES_PAGE_HISTORY_KEY = "__adriegoFavoritesPage";
+const PRODUCT_PAGE_HISTORY_KEY = "__adriegoProductPage";
+const CATALOG_SCROLL_HISTORY_KEY = "__adriegoCatalogScrollY";
+const PRIVATE_UTILITY_ROUTES = new Set(["/carrito", "/favoritos", "/pedidos"]);
 const MAX_IMPORT_SYNC_BYTES = 3_500_000;
 const ADMIN_ROUTE_TO_TAB = {
   "/admin": "resumen", "/admin/hoy": "resumen", "/admin/catalogo": "catalogo",
@@ -1986,6 +1993,44 @@ export default function App() {
     window.history.replaceState({}, document.title, "/");
     setPathname("/");
   }, []);
+  const openCartPage = useCallback(() => {
+    setShowMobileNav(false);
+    setShowFavoritesPanel(false);
+    setShowCartSummary(true);
+    if (typeof window !== "undefined" && window.location.pathname !== "/carrito") {
+      window.history.pushState({ ...(window.history.state || {}), [CART_PAGE_HISTORY_KEY]: true }, document.title, "/carrito");
+      setPathname("/carrito");
+    }
+  }, []);
+  const closeCartPage = useCallback(() => {
+    setShowCartSummary(false);
+    if (typeof window === "undefined" || window.location.pathname !== "/carrito") return;
+    if (window.history.state?.[CART_PAGE_HISTORY_KEY]) {
+      window.history.back();
+      return;
+    }
+    window.history.replaceState({}, document.title, "/");
+    setPathname("/");
+  }, []);
+  const openFavoritesPage = useCallback(() => {
+    setShowMobileNav(false);
+    setShowCartSummary(false);
+    setShowFavoritesPanel(true);
+    if (typeof window !== "undefined" && window.location.pathname !== "/favoritos") {
+      window.history.pushState({ ...(window.history.state || {}), [FAVORITES_PAGE_HISTORY_KEY]: true }, document.title, "/favoritos");
+      setPathname("/favoritos");
+    }
+  }, []);
+  const closeFavoritesPage = useCallback(() => {
+    setShowFavoritesPanel(false);
+    if (typeof window === "undefined" || window.location.pathname !== "/favoritos") return;
+    if (window.history.state?.[FAVORITES_PAGE_HISTORY_KEY]) {
+      window.history.back();
+      return;
+    }
+    window.history.replaceState({}, document.title, "/");
+    setPathname("/");
+  }, []);
   const productRouteMatch = normalizedPathname.match(/^\/producto\/([^/]+)$/);
   const productRouteSlug = productRouteMatch ? decodeRouteSegment(productRouteMatch[1]) : "";
   const isResetRoute = normalizedPathname === "/cuenta/restablecer";
@@ -2026,7 +2071,7 @@ export default function App() {
 
   useEffect(() => {
     if (typeof window === "undefined") return undefined;
-    const handlePopState = () => {
+    const handlePopState = (event) => {
       const nextPathname = window.location.pathname || "/";
       setPathname(nextPathname);
       if (nextPathname !== "/") return;
@@ -2037,6 +2082,10 @@ export default function App() {
       setProductTypeFilter(nextCatalogState.productType);
       setSortBy(nextCatalogState.sortBy);
       setCatalogPage(nextCatalogState.page);
+      const savedScrollY = Math.max(0, Number(event.state?.[CATALOG_SCROLL_HISTORY_KEY]) || 0);
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => window.scrollTo({ top: savedScrollY, behavior: "auto" }));
+      });
     };
     window.addEventListener("popstate", handlePopState);
     return () => window.removeEventListener("popstate", handlePopState);
@@ -2075,11 +2124,10 @@ export default function App() {
 
   useEffect(() => {
     if (typeof document === "undefined") return;
-    const isMissingRoute = normalizedPathname !== "/"
-      && !isResetRoute
+    const isMissingRoute = !KNOWN_DIRECT_ROUTES.has(normalizedPathname)
       && !adminRouteActive
       && (!productRouteSlug || (catalogReady && !routedProduct));
-    const robots = isResetRoute || isMissingRoute
+    const robots = isResetRoute || adminRouteActive || PRIVATE_UTILITY_ROUTES.has(normalizedPathname) || isMissingRoute
       ? "noindex, nofollow"
       : "index, follow";
     let robotsMeta = document.querySelector('meta[name="robots"]');
@@ -2097,13 +2145,20 @@ export default function App() {
     const productImage = normalizeSafeUrl(
       routedProduct?.images?.[0] || routedProduct?.image || FALLBACK_IMAGE,
     ) || FALLBACK_IMAGE;
+    const utilityRouteTitle = normalizedPathname === "/carrito"
+      ? "Tu carrito | Adriego Store"
+      : normalizedPathname === "/favoritos"
+        ? "Tus favoritos | Adriego Store"
+        : normalizedPathname === "/pedidos"
+          ? "Tus pedidos | Adriego Store"
+          : "";
     const title = adminRouteActive
       ? "Administración | Adriego Store"
       : isResetRoute
       ? "Restablecer contraseña | Adriego Store"
       : (isMissingRoute
         ? "Página no encontrada | Adriego Store"
-        : (routedProduct ? `${productName} | Adriego Store` : "Adriego Store | Moda seleccionada"));
+        : (routedProduct ? `${productName} | Adriego Store` : (utilityRouteTitle || "Adriego Store | Moda seleccionada")));
     const description = adminRouteActive
       ? "Espacio privado de administración de Adriego Store."
       : routedProduct ? productDescription : "Descubre Adriego Store. Moda seleccionada con atención personalizada por WhatsApp.";
@@ -3545,12 +3600,8 @@ export default function App() {
     if (typeof window === "undefined") return;
     if (normalizedPathname === "/carrito") {
       setShowCartSummary(true);
-      window.history.replaceState({}, document.title, "/");
-      setPathname("/");
     } else if (normalizedPathname === "/favoritos") {
       setShowFavoritesPanel(true);
-      window.history.replaceState({}, document.title, "/");
-      setPathname("/");
     } else if (normalizedPathname === "/pedidos") {
       setShowOrdersModal(true);
     } else if (adminRouteActive) {
@@ -3564,6 +3615,11 @@ export default function App() {
       setPathname("/");
     }
   }, [adminRouteActive, normalizedPathname, openCatalogSearch]);
+
+  useEffect(() => {
+    if (normalizedPathname !== "/carrito" && showCartSummary) setShowCartSummary(false);
+    if (normalizedPathname !== "/favoritos" && showFavoritesPanel) setShowFavoritesPanel(false);
+  }, [normalizedPathname, showCartSummary, showFavoritesPanel]);
 
   useEffect(() => {
     if (!catalogReady) return;
@@ -4318,7 +4374,7 @@ export default function App() {
   const clearCartState = () => {
     setCart([]);
     removeStorage(STORAGE_KEYS.cart);
-    setShowCartSummary(false);
+    closeCartPage();
   };
 
   const openProductDetail = (product, selectionOverride = null, options = {}) => {
@@ -4357,7 +4413,13 @@ export default function App() {
     if (productSlug && options.syncRoute !== false && typeof window !== "undefined") {
       const nextPath = `/producto/${encodeURIComponent(productSlug)}`;
       if (window.location.pathname !== nextPath) {
-        window.history.pushState({}, document.title, nextPath);
+        if (window.location.pathname === "/") {
+          window.history.replaceState({
+            ...(window.history.state || {}),
+            [CATALOG_SCROLL_HISTORY_KEY]: Math.max(0, window.scrollY || 0),
+          }, document.title, window.location.href);
+        }
+        window.history.pushState({ ...(window.history.state || {}), [PRODUCT_PAGE_HISTORY_KEY]: true }, document.title, nextPath);
         setPathname(nextPath);
       }
     }
@@ -4368,14 +4430,16 @@ export default function App() {
 
   const closeProductModal = ({ returnToCart = false } = {}) => {
     const wasEditingCartItem = Boolean(editingCartItemKey);
-    if (productRouteSlug && typeof window !== "undefined") {
+    if (typeof window !== "undefined" && /^\/producto\/[^/]+\/?$/.test(window.location.pathname)) {
       window.history.replaceState({}, document.title, "/");
       setPathname("/");
+    } else if (typeof window !== "undefined") {
+      setPathname(window.location.pathname || "/");
     }
     setSelectedProduct(null);
     setEditingCartItemKey(null);
     if (returnToCart && wasEditingCartItem) {
-      setShowCartSummary(true);
+      openCartPage();
     }
   };
 
@@ -6697,14 +6761,42 @@ export default function App() {
     }));
   };
 
-  const addSizeRow = (uid) => {
+  const addSizeRow = (uid, initialSize = "") => {
+    const safeInitialSize = stripDangerousContent(initialSize).replace(/[\r\n\t]+/g, " ").trim().slice(0, 20);
     setProductForm((previous) => ({
       ...previous,
-      colorsData: previous.colorsData.map((color) => color.uid === uid ? {
-        ...color,
-        sizes: [...(color.sizes || []), { uid: createUid(), size: "", stock: "0" }],
-      } : color),
+      colorsData: safeInitialSize
+        ? addSizeToColorDrafts(previous.colorsData, safeInitialSize, {
+          colorUid: uid,
+          maxSizes: PRODUCT_FORM_LIMITS.maxSizesPerColor,
+          createUid,
+        })
+        : previous.colorsData.map((color) => color.uid === uid && (color.sizes || []).length < PRODUCT_FORM_LIMITS.maxSizesPerColor ? {
+          ...color,
+          sizes: [...(color.sizes || []), { uid: createUid(), size: "", stock: "0" }],
+        } : color),
     }));
+  };
+
+  const addSizeToAllColors = (initialSize) => {
+    const safeInitialSize = stripDangerousContent(initialSize).replace(/[\r\n\t]+/g, " ").trim().slice(0, 20);
+    if (!safeInitialSize) return;
+    setProductForm((previous) => ({
+      ...previous,
+      colorsData: addSizeToColorDrafts(previous.colorsData, safeInitialSize, {
+        maxSizes: PRODUCT_FORM_LIMITS.maxSizesPerColor,
+        createUid,
+      }),
+    }));
+    setEditorError("");
+  };
+
+  const removeSizeFromAllColors = (size) => {
+    setProductForm((previous) => ({
+      ...previous,
+      colorsData: removeSizeFromColorDrafts(previous.colorsData, size, { createUid }),
+    }));
+    setEditorError("");
   };
 
   const handleSizeRowChange = (colorUid, sizeUid, field, value) => {
@@ -7764,12 +7856,12 @@ export default function App() {
                 addToCart(product, animationMeta);
                 if (wasEditingCartItem) {
                   closeProductModal();
-                  setShowCartSummary(true);
+                  openCartPage();
                 }
               }}
               onOpenCart={() => {
                 closeProductModal();
-                setShowCartSummary(true);
+                openCartPage();
               }}
               isAdmin={isAdmin}
               onEditProduct={(product) => {
@@ -7813,12 +7905,12 @@ export default function App() {
       </div>
 
       {showCartSummary && (
-        <ErrorBoundary onReset={() => setShowCartSummary(false)}>
+        <ErrorBoundary onReset={closeCartPage}>
           <Suspense fallback={null}>
             <CartSummaryModal
               key={`cart-summary-${showCartSummary ? "open" : "closed"}-${currentUser?.id || "guest"}`}
               open={showCartSummary}
-              onClose={() => setShowCartSummary(false)}
+              onClose={closeCartPage}
               cart={cart}
               subtotal={subtotal}
               discountAmount={discountAmount}
@@ -7852,11 +7944,11 @@ export default function App() {
       )}
 
       {showFavoritesPanel && (
-        <ErrorBoundary onReset={() => setShowFavoritesPanel(false)}>
+        <ErrorBoundary onReset={closeFavoritesPage}>
           <Suspense fallback={null}>
             <FavoritesModal
               open={showFavoritesPanel}
-              onClose={() => setShowFavoritesPanel(false)}
+              onClose={closeFavoritesPage}
               favorites={favorites}
               products={products}
               onOpenProduct={(product) => openProductDetail(product)}
@@ -8114,6 +8206,8 @@ export default function App() {
               appendFilterTagToForm={appendFilterTagToForm}
               removeFilterTagFromForm={removeFilterTagFromForm}
               addSizeRow={addSizeRow}
+              addSizeToAllColors={addSizeToAllColors}
+              removeSizeFromAllColors={removeSizeFromAllColors}
               handleSizeRowChange={handleSizeRowChange}
               removeSizeRow={removeSizeRow}
               productTypeRecords={productTypeRecords}
@@ -8327,11 +8421,11 @@ export default function App() {
               >
                 <UserRound size={19} />
               </button>
-              <button type="button" className="icon-quick-btn icon-quick-btn-badge" onClick={() => setShowFavoritesPanel(true)} aria-label="Favoritos" title="Favoritos">
+              <button type="button" className="icon-quick-btn icon-quick-btn-badge" onClick={openFavoritesPage} aria-label="Favoritos" title="Favoritos">
                 <Heart size={19} />
                 {favorites.length > 0 && <span className="icon-quick-badge">{Math.min(favorites.length, 99)}</span>}
               </button>
-              <button type="button" ref={desktopCartAnchorRef} className="icon-quick-btn icon-quick-btn-badge" onClick={() => setShowCartSummary(true)} aria-label="Carrito" title="Carrito">
+              <button type="button" ref={desktopCartAnchorRef} className="icon-quick-btn icon-quick-btn-badge" onClick={openCartPage} aria-label="Carrito" title="Carrito">
                 <ShoppingBag size={19} />
                 {totalItems > 0 && <span className="icon-quick-badge">{Math.min(totalItems, 99)}</span>}
               </button>
@@ -8440,11 +8534,11 @@ export default function App() {
                 >
                   <UserRound size={18} />
                 </button>
-                <button type="button" className="icon-quick-btn icon-quick-btn-badge" onClick={() => { setShowMobileNav(false); setShowFavoritesPanel(true); }} aria-label="Favoritos">
+                <button type="button" className="icon-quick-btn icon-quick-btn-badge" onClick={openFavoritesPage} aria-label="Favoritos">
                   <Heart size={18} />
                   {favorites.length > 0 && <span className="icon-quick-badge">{Math.min(favorites.length, 99)}</span>}
                 </button>
-                <button type="button" className="icon-quick-btn icon-quick-btn-badge" onClick={() => { setShowMobileNav(false); setShowCartSummary(true); }} aria-label="Carrito">
+                <button type="button" className="icon-quick-btn icon-quick-btn-badge" onClick={openCartPage} aria-label="Carrito">
                   <ShoppingBag size={18} />
                   {totalItems > 0 && <span className="icon-quick-badge">{Math.min(totalItems, 99)}</span>}
                 </button>
@@ -8452,11 +8546,11 @@ export default function App() {
               <div className="mobile-nav-actions">
                 {!currentUser && <button type="button" className="btn btn-outline" onClick={openOrdersPage}>Mis pedidos sin cuenta</button>}
                 <div className="mobile-nav-primary-grid">
-                  <button className="btn btn-outline" onClick={() => { setShowMobileNav(false); setShowFavoritesPanel(true); }}>
+                  <button className="btn btn-outline" onClick={openFavoritesPage}>
                     <Heart size={14} />
                     Favoritos ({favorites.length})
                   </button>
-                  <button className="btn btn-primary" onClick={() => { setShowMobileNav(false); setShowCartSummary(true); }}>
+                  <button className="btn btn-primary" onClick={openCartPage}>
                     <ShoppingBag size={14} />
                     Carrito ({totalItems})
                   </button>
@@ -8546,8 +8640,7 @@ export default function App() {
           type="button"
           className={`mobile-bottom-item mobile-bottom-item-badge ${mobileQuickActive === "favoritos" ? "active" : ""}`}
           onClick={() => {
-            setShowMobileNav(false);
-            setShowFavoritesPanel(true);
+            openFavoritesPage();
           }}
           aria-label="Abrir favoritos"
         >
@@ -8560,8 +8653,7 @@ export default function App() {
           className={`mobile-bottom-item mobile-bottom-item-badge ${mobileQuickActive === "carrito" ? "active" : ""}`}
           ref={mobileCartAnchorRef}
           onClick={() => {
-            setShowMobileNav(false);
-            setShowCartSummary(true);
+            openCartPage();
           }}
           aria-label="Abrir carrito"
         >

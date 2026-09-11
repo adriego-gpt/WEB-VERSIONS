@@ -2,6 +2,64 @@ export const PRODUCT_DRAFT_VERSION = 1;
 export const PRODUCT_DRAFT_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
 export const PRODUCT_DRAFT_MAX_CHARS = 2_500_000;
 
+function normalizeDraftSizeKey(value = "") {
+  return String(value).trim().toLocaleLowerCase("es");
+}
+
+export function addSizeToColorDrafts(colorsData = [], rawSize = "", options = {}) {
+  const size = String(rawSize || "").trim();
+  if (!size || !Array.isArray(colorsData)) return colorsData;
+  const sizeKey = normalizeDraftSizeKey(size);
+  const targetColorUid = options.colorUid == null ? null : String(options.colorUid);
+  const maxSizes = Math.max(1, Number(options.maxSizes) || Number.POSITIVE_INFINITY);
+  const makeUid = typeof options.createUid === "function"
+    ? options.createUid
+    : () => globalThis.crypto?.randomUUID?.() || `size-${Date.now()}`;
+  let changed = false;
+  const nextColors = colorsData.map((color) => {
+    if (targetColorUid != null && String(color?.uid) !== targetColorUid) return color;
+    const sizes = Array.isArray(color?.sizes) ? color.sizes : [];
+    if (sizes.some((entry) => normalizeDraftSizeKey(entry?.size) === sizeKey)) return color;
+    const emptyRowIndex = sizes.findIndex((entry) => !String(entry?.size || "").trim());
+    if (emptyRowIndex >= 0) {
+      changed = true;
+      return {
+        ...color,
+        sizes: sizes.map((entry, index) => index === emptyRowIndex ? { ...entry, size } : entry),
+      };
+    }
+    if (sizes.length >= maxSizes) return color;
+    changed = true;
+    return {
+      ...color,
+      sizes: [...sizes, { uid: makeUid(), size, stock: "0" }],
+    };
+  });
+  return changed ? nextColors : colorsData;
+}
+
+export function removeSizeFromColorDrafts(colorsData = [], rawSize = "", options = {}) {
+  const sizeKey = normalizeDraftSizeKey(rawSize);
+  if (!sizeKey || !Array.isArray(colorsData)) return colorsData;
+  const makeUid = typeof options.createUid === "function"
+    ? options.createUid
+    : () => globalThis.crypto?.randomUUID?.() || `size-${Date.now()}`;
+  let changed = false;
+  const nextColors = colorsData.map((color) => {
+    const sizes = Array.isArray(color?.sizes) ? color.sizes : [];
+    const remainingSizes = sizes.filter((entry) => normalizeDraftSizeKey(entry?.size) !== sizeKey);
+    if (remainingSizes.length === sizes.length) return color;
+    changed = true;
+    return {
+      ...color,
+      sizes: remainingSizes.length
+        ? remainingSizes
+        : [{ uid: makeUid(), size: "", stock: "0" }],
+    };
+  });
+  return changed ? nextColors : colorsData;
+}
+
 function normalizeDraftColor(color = {}) {
   return {
     name: String(color.name || ""),

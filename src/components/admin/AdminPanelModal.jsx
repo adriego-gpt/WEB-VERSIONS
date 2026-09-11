@@ -204,6 +204,8 @@ export function AdminPanelModal({
   appendFilterTagToForm,
   removeFilterTagFromForm,
   addSizeRow,
+  addSizeToAllColors,
+  removeSizeFromAllColors,
   handleSizeRowChange,
   removeSizeRow,
   productTypeRecords,
@@ -1268,6 +1270,8 @@ export function AdminPanelModal({
                     onColorImageChange={handleColorImageChange}
                     onRemoveImageField={removeImageField}
                     onAddSize={addSizeRow}
+                    onAddSizeToAll={addSizeToAllColors}
+                    onRemoveSizeFromAll={removeSizeFromAllColors}
                     onSizeChange={handleSizeRowChange}
                     onRemoveSize={removeSizeRow}
                     onSave={saveProduct}

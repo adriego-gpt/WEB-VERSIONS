@@ -62,8 +62,6 @@ export function ProductModal({
   const previewScaleRef = useRef(1);
   const previewPanRef = useRef({ x: 0, y: 0 });
   const imagePreviewOpenRef = useRef(false);
-  const detailHistoryKeyRef = useRef(null);
-  const initialProductIdRef = useRef(product?.id);
   const previewHistoryKeyRef = useRef(null);
   const onCloseRef = useRef(onClose);
   const currentImages = product ? getImagesForColor(product, resolvedSelection?.color) : [];
@@ -124,7 +122,7 @@ export function ProductModal({
 
   const openImagePreview = () => {
     if (typeof window !== "undefined") {
-      const historyKey = `${detailHistoryKeyRef.current}-image`;
+      const historyKey = `product-image-${product?.id || "detail"}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
       previewHistoryKeyRef.current = historyKey;
       window.history.pushState(
         { ...window.history.state, adriegoOverlayKey: historyKey, adriegoOverlay: "product-image-preview" },
@@ -157,7 +155,7 @@ export function ProductModal({
   }, [resetImagePreview]);
 
   const closeProductDetail = useCallback(() => {
-    if (typeof window !== "undefined" && window.history.state?.adriegoOverlayKey === detailHistoryKeyRef.current) {
+    if (typeof window !== "undefined" && window.history.state?.__adriegoProductPage) {
       window.history.back();
       return;
     }
@@ -381,15 +379,7 @@ export function ProductModal({
   }, [onClose]);
 
   useEffect(() => {
-    const productId = initialProductIdRef.current;
-    if (!productId || typeof window === "undefined") return undefined;
-    const historyKey = `product-detail-${productId}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    detailHistoryKeyRef.current = historyKey;
-    window.history.pushState(
-      { ...window.history.state, adriegoOverlayKey: historyKey, adriegoOverlay: "product-detail" },
-      "",
-      window.location.href,
-    );
+    if (!product?.id || typeof window === "undefined") return undefined;
     const handlePopState = () => {
       if (imagePreviewOpenRef.current) {
         resetImagePreview();
@@ -399,7 +389,7 @@ export function ProductModal({
     };
     window.addEventListener("popstate", handlePopState);
     return () => window.removeEventListener("popstate", handlePopState);
-  }, [resetImagePreview]);
+  }, [product?.id, resetImagePreview]);
 
   const previousFocusRef = useRef(null);
 
@@ -691,7 +681,7 @@ export function ProductModal({
                       : `Agregar al carrito · ${currency(product.price)}`)}
                 </span>
               </button>
-              <button className="btn btn-outline product-modal-dismiss-btn" onClick={onClose}>
+              <button className="btn btn-outline product-modal-dismiss-btn" onClick={closeProductDetail}>
                 Seguir viendo
               </button>
               {isAdmin && (
