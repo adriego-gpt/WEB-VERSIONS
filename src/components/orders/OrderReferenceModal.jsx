@@ -74,7 +74,7 @@ export function OrderReferenceModal({ open, order, onClose, statusTone }) {
               <span className="badge badge-light">{order.itemCount} artículo(s)</span>
               <span className="badge badge-light">Subtotal: {currency(order.subtotal)}</span>
               {Number(order.discountAmount || 0) > 0 && <span className="badge badge-light">Descuento: -{currency(order.discountAmount)}</span>}
-              <span className="badge badge-light">Total: {currency(order.total || order.subtotal)}</span>
+              <span className="badge badge-light">Total: {currency(order.total ?? order.subtotal)}</span>
               {order.couponCode && <span className="badge badge-light">Cupón: {order.couponCode}</span>}
               <span className={`order-status-pill ${statusClass}`}>{status}</span>
             </div>

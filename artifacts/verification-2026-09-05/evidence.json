@@ -1,0 +1,38 @@
+{
+  "localConfig": {
+    "imagekitPublic": true,
+    "imagekitPrivate": true,
+    "imagekitEndpoint": true,
+    "kvUrl": false,
+    "kvToken": false
+  },
+  "imagekitRead": {
+    "status": 200,
+    "isFileList": true,
+    "sampleCount": 1,
+    "imageStatus": 200,
+    "imageType": "image/jpeg",
+    "endpointMatches": true
+  },
+  "catalogRetry": {
+    "fetchAttempts": 1,
+    "statuses": [
+      "checking",
+      "error",
+      "checking",
+      "synced"
+    ],
+    "rememberedCatalog": 2
+  },
+  "ordersIndicator": {
+    "statuses": [
+      "checking",
+      "synced"
+    ],
+    "orderRequestStillPending": true
+  },
+  "notePrivacy": {
+    "status": 200,
+    "customerReceivedInternalNote": true
+  }
+}

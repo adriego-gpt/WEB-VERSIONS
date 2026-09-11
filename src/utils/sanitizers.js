@@ -29,7 +29,9 @@ export function stripDangerousContent(value = "") {
 
 export function normalizeEntityId(value = "") {
   if (value == null) return "";
-  return String(value).trim();
+  const normalized = String(value).trim().slice(0, 160);
+  if (["__proto__", "prototype", "constructor"].includes(normalized.toLowerCase())) return "";
+  return normalized;
 }
 
 export function normalizeOptionLabel(value = "") {
@@ -83,4 +85,3 @@ export function normalizeSearchText(value = "") {
     .replace(/[\u0300-\u036f]/g, "")
     .trim();
 }
-

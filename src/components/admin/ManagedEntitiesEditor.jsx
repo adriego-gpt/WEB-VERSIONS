@@ -1,6 +1,7 @@
-import React, { useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { ChevronDown, Eye, EyeOff, Plus, Save, Trash2 } from "lucide-react";
 import { normalizeOptionLabel, slugify } from "../../utils";
+import { pruneSelection } from "../../domain/admin/selection";
 
 export function ManagedEntitiesEditor(props) {
   const {
@@ -17,11 +18,22 @@ export function ManagedEntitiesEditor(props) {
     onSave,
     onDelete,
     onToggleActive,
+    onBulkSetActive,
+    onBulkDelete,
   } = props;
   const Icon = icon;
   const [replacementMap, setReplacementMap] = useState({});
   const [expandedRecordId, setExpandedRecordId] = useState("");
+  const [selectedRecordIds, setSelectedRecordIds] = useState([]);
+  const [bulkBusy, setBulkBusy] = useState(false);
   const isType = entityType === "productType";
+  const selectedSet = useMemo(() => new Set(selectedRecordIds.map(String)), [selectedRecordIds]);
+  const allSelected = records.length > 0 && records.every((record) => selectedSet.has(String(record.id)));
+
+  useEffect(() => {
+    const existingIds = new Set(records.map((record) => String(record.id)));
+    setSelectedRecordIds((previous) => pruneSelection(previous, existingIds));
+  }, [records]);
 
   const getAssociationCount = (record) => (products || []).filter((product) => (
     isType
@@ -38,6 +50,26 @@ export function ManagedEntitiesEditor(props) {
 
   const toggleExpandedRecord = (recordId) => {
     setExpandedRecordId((current) => (current === recordId ? "" : recordId));
+  };
+
+  const toggleSelection = (recordId) => {
+    const id = String(recordId);
+    setSelectedRecordIds((previous) => previous.includes(id) ? previous.filter((item) => item !== id) : [...previous, id]);
+  };
+
+  const toggleAll = () => {
+    setSelectedRecordIds(allSelected ? [] : records.map((record) => String(record.id)));
+  };
+
+  const runBulkAction = async (action) => {
+    if (!selectedSet.size || bulkBusy) return;
+    setBulkBusy(true);
+    try {
+      const result = await action([...selectedSet]);
+      if (result?.ok) setSelectedRecordIds([]);
+    } finally {
+      setBulkBusy(false);
+    }
   };
 
   return (
@@ -58,6 +90,23 @@ export function ManagedEntitiesEditor(props) {
         <button className="btn btn-primary" type="button" onClick={onAdd}><Plus size={16} />Agregar</button>
       </div>
 
+      {records.length > 0 && (
+        <div className={`entity-bulk-bar${selectedSet.size ? " has-selection" : ""}`}>
+          <label className="admin-selection-control">
+            <input type="checkbox" checked={allSelected} onChange={toggleAll} />
+            <span>{selectedSet.size ? `${selectedSet.size} seleccionados` : "Seleccionar todos"}</span>
+          </label>
+          {selectedSet.size > 0 && (
+            <div className="entity-bulk-actions">
+              <button className="btn btn-soft" type="button" disabled={bulkBusy} onClick={() => runBulkAction((ids) => onBulkSetActive(ids, true))}><Eye size={15} />Activar</button>
+              <button className="btn btn-outline" type="button" disabled={bulkBusy} onClick={() => runBulkAction((ids) => onBulkSetActive(ids, false))}><EyeOff size={15} />Ocultar</button>
+              <button className="btn btn-danger" type="button" disabled={bulkBusy} onClick={() => runBulkAction(onBulkDelete)}><Trash2 size={15} />Eliminar</button>
+              {bulkBusy && <span className="bulk-action-progress" role="status" aria-live="polite">Procesando acción...</span>}
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="entity-list">
         {records.length === 0 ? (
           <div className="empty-admin-note">Todavía no hay elementos registrados en esta sección.</div>
@@ -69,6 +118,9 @@ export function ManagedEntitiesEditor(props) {
           return (
             <article key={record.id} className={`entity-row${isExpanded ? " is-expanded" : ""}`}>
               <div className="entity-row-summary">
+                <label className="entity-row-selector" aria-label={`Seleccionar ${record.name}`}>
+                  <input type="checkbox" checked={selectedSet.has(String(record.id))} onChange={() => toggleSelection(record.id)} />
+                </label>
                 <button
                   className="entity-row-disclosure"
                   type="button"

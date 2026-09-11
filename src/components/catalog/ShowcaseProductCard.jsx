@@ -1,4 +1,4 @@
-import React, { useCallback } from "react";
+import React from "react";
 import { currency, discountPercent } from "../../utils/currency";
 import { FALLBACK_IMAGE } from "../../constants/product";
 import {
@@ -6,16 +6,23 @@ import {
   getSelectionForColor,
 } from "../../domain/products/variants";
 
+function getResponsiveSources(src) {
+  if (!/^https:\/\/images\.unsplash\.com\//i.test(src)) return undefined;
+  return [320, 640, 960]
+    .map((width) => src.replace(/([?&])w=\d+/i, `$1w=${width}`))
+    .join(", ");
+}
+
 export function ShowcaseProductCard({ product, onOpenDetail, isDuplicate = false }) {
   const principalSelection = getSelectionForColor(product, { color: product.catalogColor });
   const principalColor = principalSelection.color;
   const discount = discountPercent(product.price, product.oldPrice);
   const previewImage = getCurrentImageForProduct(product, principalColor) || FALLBACK_IMAGE;
 
-  const handleOpen = useCallback(() => {
+  const handleOpen = () => {
     const resolved = getSelectionForColor(product, { color: principalColor });
     onOpenDetail(product, resolved);
-  }, [onOpenDetail, principalColor, product]);
+  };
 
   return (
     <article className="featured-product-card" aria-hidden={isDuplicate ? "true" : undefined}>
@@ -30,6 +37,8 @@ export function ShowcaseProductCard({ product, onOpenDetail, isDuplicate = false
           <span className="featured-product-image-wrap">
             <img
               src={previewImage}
+              srcSet={getResponsiveSources(previewImage)}
+              sizes="(max-width: 768px) 50vw, (max-width: 1100px) 33vw, 25vw"
               alt={isDuplicate ? "" : product.name}
               className="featured-product-image"
               loading="lazy"

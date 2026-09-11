@@ -12,14 +12,16 @@ import {
   X,
 } from "lucide-react";
 import { currency } from "../../utils";
+import { isLegacyInlineCatalogImage } from "../../domain/admin/legacyImageMigration.js";
 import { AdminSectionHeader } from "./AdminSectionHeader";
 
 export function ProductCatalogPanel({
   products = [],
   query = "",
   onQueryChange,
+  quickView: controlledQuickView,
+  onQuickViewChange,
   selectedSet = new Set(),
-  allVisibleSelected = false,
   bulkBusy = false,
   getProductImage,
   onCreate,
@@ -34,6 +36,38 @@ export function ProductCatalogPanel({
   onDelete,
 }) {
   const selectedCount = selectedSet?.size || 0;
+  const [internalQuickView, setInternalQuickView] = React.useState("all");
+  const quickView = controlledQuickView !== undefined ? controlledQuickView : internalQuickView;
+  const setQuickView = onQuickViewChange || setInternalQuickView;
+  const [sortMode, setSortMode] = React.useState("name");
+  const visibleProducts = React.useMemo(() => {
+    const matches = products.filter((product) => {
+      const stock = (product.variants || []).reduce((total, variant) => total + Math.max(0, Number(variant.stock) || 0), 0);
+      const imageCount = Object.values(product.imagesByColor || {}).flat().filter(Boolean).length;
+      if (quickView === "draft") return product.isPublic === false;
+      if (quickView === "published") return product.isPublic !== false;
+      if (quickView === "legacy-photos") {
+        return Object.values(product.imagesByColor || {}).flat().some((img) => isLegacyInlineCatalogImage(img));
+      }
+      if (quickView === "no-photo") return imageCount === 0;
+      if (quickView === "out") return stock === 0;
+      if (quickView === "low") return stock > 0 && stock <= 5;
+      if (quickView === "offer") return Boolean(product.offerEnabled);
+      if (quickView === "featured") return Boolean(product.featured);
+      return true;
+    });
+    return [...matches].sort((left, right) => {
+      if (sortMode === "price-asc") return Number(left.basePrice ?? left.price) - Number(right.basePrice ?? right.price);
+      if (sortMode === "price-desc") return Number(right.basePrice ?? right.price) - Number(left.basePrice ?? left.price);
+      if (sortMode === "stock") {
+        const stockFor = (product) => (product.variants || []).reduce((total, variant) => total + Math.max(0, Number(variant.stock) || 0), 0);
+        return stockFor(left) - stockFor(right);
+      }
+      return String(left.name || "").localeCompare(String(right.name || ""), "es", { sensitivity: "base" });
+    });
+  }, [products, quickView, sortMode]);
+  const visibleProductIds = React.useMemo(() => visibleProducts.map((product) => String(product.id)), [visibleProducts]);
+  const allDisplayedSelected = visibleProductIds.length > 0 && visibleProductIds.every((id) => selectedSet.has(id));
 
   return (
     <section className="admin-workspace admin-catalog-workspace" aria-labelledby="admin-catalog-title">
@@ -41,7 +75,7 @@ export function ProductCatalogPanel({
         title="Productos"
         titleId="admin-catalog-title"
         description="Busca, publica o edita productos sin perder el contexto del catálogo."
-        meta={<span className="admin-count-label">{products.length} visibles</span>}
+        meta={<span className="admin-count-label">{visibleProducts.length} de {products.length}</span>}
         actions={(
           <button className="btn btn-primary" type="button" onClick={onCreate}>
             <Plus size={16} />Nuevo producto
@@ -59,10 +93,25 @@ export function ProductCatalogPanel({
             onChange={(event) => onQueryChange(event.target.value)}
           />
         </label>
-        <button className="btn btn-outline" type="button" onClick={onToggleAllVisible} disabled={!products.length}>
+        <button
+          className="btn btn-outline"
+          type="button"
+          onClick={() => onToggleAllVisible(visibleProductIds)}
+          disabled={!visibleProductIds.length}
+        >
           <CheckCircle2 size={16} />
-          {allVisibleSelected ? "Quitar visibles" : "Seleccionar visibles"}
+          {allDisplayedSelected ? "Quitar visibles" : "Seleccionar visibles"}
         </button>
+      </div>
+
+      <div className="admin-catalog-viewbar">
+        <div className="admin-quick-views" aria-label="Vistas rápidas del catálogo">
+          {[
+            ["all", "Todos"], ["draft", "Borradores"], ["published", "Publicados"], ["legacy-photos", "Por migrar"],
+            ["no-photo", "Sin foto"], ["out", "Agotados"], ["low", "Stock bajo"], ["offer", "Con oferta"], ["featured", "Destacados"],
+          ].map(([value, label]) => <button key={value} type="button" className={quickView === value ? "active" : ""} onClick={() => setQuickView(value)}>{label}</button>)}
+        </div>
+        <label className="admin-catalog-sort"><span>Ordenar</span><select className="select" value={sortMode} onChange={(event) => setSortMode(event.target.value)}><option value="name">Nombre</option><option value="price-asc">Precio menor</option><option value="price-desc">Precio mayor</option><option value="stock">Menor stock</option></select></label>
       </div>
 
       {selectedCount > 0 && (
@@ -79,20 +128,21 @@ export function ProductCatalogPanel({
               <X size={15} />Limpiar
             </button>
             <button className="btn btn-danger" type="button" disabled={bulkBusy} onClick={onDeleteSelected}>
-              <Trash2 size={15} />{bulkBusy ? "Procesando..." : "Eliminar"}
+              <Trash2 size={15} />{bulkBusy ? "Procesando…" : "Eliminar"}
             </button>
           </div>
         </div>
       )}
 
       <div className="admin-catalog-list">
-        {products.length === 0 ? (
+        {visibleProducts.length === 0 ? (
           <div className="empty-admin-note">No hay productos que coincidan con la búsqueda actual.</div>
-        ) : products.map((product) => {
+        ) : visibleProducts.map((product) => {
           const colors = Array.isArray(product.colors) ? product.colors : [];
           const sizes = Array.isArray(product.sizes) ? product.sizes : [];
           const tags = Array.isArray(product.filterTags) ? product.filterTags : [];
           const isPublic = product.isPublic !== false;
+          const hasLegacyImages = Object.values(product.imagesByColor || {}).flat().some((img) => isLegacyInlineCatalogImage(img));
           const price = Number(product.basePrice != null ? product.basePrice : product.price) || 0;
           return (
             <article key={product.id} className={`admin-catalog-item${selectedSet.has(String(product.id)) ? " is-selected" : ""}`}>
@@ -107,6 +157,8 @@ export function ProductCatalogPanel({
               <img
                 src={getProductImage(product, colors[0])}
                 alt=""
+                width="64"
+                height="68"
                 className="admin-catalog-thumb"
                 loading="lazy"
                 decoding="async"
@@ -120,10 +172,12 @@ export function ProductCatalogPanel({
                   <strong>{currency(price)}</strong>
                 </div>
                 <div className="admin-catalog-meta">
+                  {product.sku && <span>SKU {product.sku}</span>}
                   <span>{colors.length} color{colors.length === 1 ? "" : "es"}</span>
                   <span>{sizes.length} talla{sizes.length === 1 ? "" : "s"}</span>
                   {tags.length > 0 && <span>{tags.length} tag{tags.length === 1 ? "" : "s"}</span>}
                   <span className={isPublic ? "is-success" : "is-muted"}>{isPublic ? "Público" : "Oculto"}</span>
+                  {hasLegacyImages && <span className="admin-status-label is-warning">Fotos por migrar</span>}
                   {product.featured && <span className="is-featured">Destacado</span>}
                 </div>
               </div>

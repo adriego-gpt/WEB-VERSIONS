@@ -156,7 +156,7 @@ export function OrderConfirmationModal({
                 </div>
                 <div className="order-total-row final-total-row">
                   <strong>Total a pagar:</strong>
-                  <strong className="order-final-amount">{formatCurrency(order.total || order.subtotal)}</strong>
+                  <strong className="order-final-amount">{formatCurrency(order.total ?? order.subtotal)}</strong>
                 </div>
               </div>
             </div>

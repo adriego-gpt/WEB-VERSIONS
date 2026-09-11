@@ -1,9 +1,11 @@
 
-import { handleUpload } from "@vercel/blob/client";
+import { createHmac, randomUUID } from "node:crypto";
+import { Buffer } from "node:buffer";
 import { bumpRealtimeMeta, getStoreBackend, readStore, updateStore } from "./_lib/store.js";
 import {
   sanitizeAdminCatalogPayload,
   sanitizeContactSettings,
+  sanitizePhysicalStockEvents,
   sanitizeStoreSettings,
 } from "./_lib/storeSanitizers.js";
 import {
@@ -24,7 +26,11 @@ const ADMIN_COOKIE_NAME = "adriego_admin_session";
 const ENDPOINT_NAME = "catalog-state";
 const MAX_PRODUCT_IMAGE_BYTES = 150 * 1024;
 const ALLOWED_PRODUCT_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp"];
-const PRODUCT_IMAGE_PATH_PATTERN = /^catalog\/products\/\d{4}-\d{2}\/[a-f0-9-]{20,}\.(?:jpe?g|png|webp)$/i;
+const IMAGEKIT_AUTH_LIFETIME_SECONDS = 10 * 60;
+const IMAGEKIT_API_URL = "https://api.imagekit.io/v1/files";
+const IMAGEKIT_CATALOG_IMAGE_PREFIX = "/catalog/products/";
+const MAX_IMAGE_CLEANUP_PER_SYNC = 20;
+const MAX_PENDING_IMAGE_CLEANUPS = 200;
 
 function sanitizeArray(value) {
   return Array.isArray(value) ? value : [];
@@ -51,19 +57,124 @@ function resolveAdminSession(req) {
   return verifySignedToken(cookies[ADMIN_COOKIE_NAME] || cookies.atelier_admin_session || "", sessionSecret);
 }
 
-function getCatalogImageUploadPolicy(pathname, multipart = false) {
-  const safePathname = normalizeLine(pathname || "");
-  if (multipart || !PRODUCT_IMAGE_PATH_PATTERN.test(safePathname)) {
-    throw new Error("Ruta de imagen no permitida");
+function normalizeImageKitEndpoint(value = "") {
+  try {
+    const parsed = new URL(String(value || "").trim());
+    if (parsed.protocol !== "https:" || parsed.username || parsed.password) return "";
+    parsed.search = "";
+    parsed.hash = "";
+    return parsed.toString().replace(/\/$/, "");
+  } catch {
+    return "";
   }
-  return {
-    allowedContentTypes: ALLOWED_PRODUCT_IMAGE_TYPES,
-    maximumSizeInBytes: MAX_PRODUCT_IMAGE_BYTES,
-    addRandomSuffix: true,
-    allowOverwrite: false,
-    cacheControlMaxAge: 60 * 60 * 24 * 365,
-    validUntil: Date.now() + (5 * 60 * 1000),
-  };
+}
+
+function validateImageKitAuthPayload(payload = {}) {
+  const contentType = normalizeLine(payload?.contentType || "").toLowerCase();
+  const size = Math.floor(Number(payload?.size) || 0);
+  if (!ALLOWED_PRODUCT_IMAGE_TYPES.includes(contentType)) {
+    return { ok: false, message: "Solo se permiten imágenes JPG, PNG o WebP" };
+  }
+  if (size <= 0 || size > MAX_PRODUCT_IMAGE_BYTES) {
+    return { ok: false, message: "La imagen optimizada excede el tamaño permitido" };
+  }
+  return { ok: true, contentType, size };
+}
+
+function createImageKitUploadAuth(privateKey, nowMs = Date.now()) {
+  const token = randomUUID();
+  const expire = Math.floor(nowMs / 1000) + IMAGEKIT_AUTH_LIFETIME_SECONDS;
+  const signature = createHmac("sha1", privateKey).update(`${token}${expire}`).digest("hex");
+  return { token, expire, signature };
+}
+
+function normalizeCatalogImagePath(value = "") {
+  const path = String(value || "").trim();
+  if (!path.startsWith(IMAGEKIT_CATALOG_IMAGE_PREFIX) || path.includes("\\") || path.includes("?")) return "";
+  const parts = path.split("/").filter(Boolean);
+  if (parts.length < 4 || parts.some((part) => part === "." || part === ".." || !part)) return "";
+  if (!/\.(?:jpe?g|png|webp)$/i.test(parts.at(-1) || "")) return "";
+  return `/${parts.join("/")}`;
+}
+
+function getCatalogImagePathFromUrl(value = "", urlEndpoint = "") {
+  try {
+    const imageUrl = new URL(String(value || "").trim());
+    const endpoint = new URL(String(urlEndpoint || "").trim());
+    if (imageUrl.protocol !== "https:" || endpoint.protocol !== "https:" || imageUrl.origin !== endpoint.origin) return "";
+    const endpointPath = endpoint.pathname.replace(/\/$/, "");
+    if (!imageUrl.pathname.startsWith(`${endpointPath}/`)) return "";
+    return normalizeCatalogImagePath(decodeURIComponent(imageUrl.pathname.slice(endpointPath.length)));
+  } catch {
+    return "";
+  }
+}
+
+function collectCatalogImagePaths(catalog = {}, urlEndpoint = "") {
+  const urls = [];
+  for (const product of (Array.isArray(catalog?.products) ? catalog.products : [])) {
+    for (const images of Object.values(product?.imagesByColor || {})) {
+      if (Array.isArray(images)) urls.push(...images);
+    }
+  }
+  for (const slide of (Array.isArray(catalog?.storeSettings?.heroSlides) ? catalog.storeSettings.heroSlides : [])) {
+    urls.push(slide?.image);
+  }
+  for (const account of (Array.isArray(catalog?.contactSettings?.paymentSettings?.bankAccounts)
+    ? catalog.contactSettings.paymentSettings.bankAccounts
+    : [])) {
+    urls.push(account?.bankLogoImage, account?.bankQrImage);
+  }
+  return new Set(urls.map((url) => getCatalogImagePathFromUrl(url, urlEndpoint)).filter(Boolean));
+}
+
+function getPendingImageCleanupPaths(value = []) {
+  return [...new Set((Array.isArray(value) ? value : [])
+    .map(normalizeCatalogImagePath)
+    .filter(Boolean))].slice(0, MAX_PENDING_IMAGE_CLEANUPS);
+}
+
+function getImageKitAuthorization(privateKey = "") {
+  return `Basic ${Buffer.from(`${String(privateKey)}:`).toString("base64")}`;
+}
+
+async function deleteImageKitCatalogAssets(paths = [], privateKey = "", fetchFn = fetch) {
+  const pendingPaths = getPendingImageCleanupPaths(paths).slice(0, MAX_IMAGE_CLEANUP_PER_SYNC);
+  const deletedPaths = [];
+  const retryPaths = [];
+  if (!pendingPaths.length || !String(privateKey || "").trim()) {
+    return { deletedPaths, retryPaths: pendingPaths };
+  }
+
+  const headers = { Accept: "application/json", Authorization: getImageKitAuthorization(privateKey) };
+  for (const imagePath of pendingPaths) {
+    const segments = imagePath.split("/").filter(Boolean);
+    const fileName = segments.pop();
+    const folderPath = `/${segments.join("/")}`;
+    try {
+      const query = new URLSearchParams({ path: folderPath, searchQuery: `name = "${fileName}"`, fileType: "image", limit: "10" });
+      const lookup = await fetchFn(`${IMAGEKIT_API_URL}?${query.toString()}`, { headers });
+      if (!lookup.ok) throw new Error(`imagekit-list-${lookup.status}`);
+      const files = await lookup.json();
+      const matchingFiles = (Array.isArray(files) ? files : []).filter((file) => (
+        String(file?.name || "") === fileName && String(file?.path || "") === folderPath && String(file?.fileId || "")
+      ));
+      if (!matchingFiles.length) {
+        // It may have been deleted manually. There is nothing left to retry.
+        deletedPaths.push(imagePath);
+        continue;
+      }
+      const deleteResults = await Promise.all(matchingFiles.map(async (file) => {
+        const response = await fetchFn(`${IMAGEKIT_API_URL}/${encodeURIComponent(file.fileId)}`, { method: "DELETE", headers });
+        if (!response.ok && response.status !== 404) throw new Error(`imagekit-delete-${response.status}`);
+      }));
+      void deleteResults;
+      deletedPaths.push(imagePath);
+    } catch {
+      retryPaths.push(imagePath);
+    }
+  }
+  return { deletedPaths, retryPaths };
 }
 
 function setPublicCatalogCacheHeaders(res, { versioned = false } = {}) {
@@ -127,30 +238,32 @@ export default async function handler(req, res) {
 
     const body = requireJsonBody(req, res, { endpoint: ENDPOINT_NAME });
     if (!body) return;
-    if (body.type !== "blob.generate-client-token") {
+    if (body.type !== "imagekit.generate-upload-auth") {
       res.status(400).json({ ok: false, message: "Solicitud de carga no válida" });
       return;
     }
 
-    const blobToken = String(process.env.BLOB_READ_WRITE_TOKEN || "").trim();
-    if (!blobToken) {
-      res.status(503).json({ ok: false, message: "Almacenamiento de imágenes no configurado" });
+    const validatedPayload = validateImageKitAuthPayload(body.payload);
+    if (!validatedPayload.ok) {
+      res.status(400).json({ ok: false, message: validatedPayload.message });
       return;
     }
 
-    try {
-      const response = await handleUpload({
-        token: blobToken,
-        request: req,
-        body,
-        onBeforeGenerateToken: async (pathname, _clientPayload, multipart) => (
-          getCatalogImageUploadPolicy(pathname, multipart)
-        ),
-      });
-      res.status(200).json(response);
-    } catch {
-      res.status(400).json({ ok: false, message: "No se pudo autorizar la carga de la imagen" });
+    const publicKey = String(process.env.IMAGEKIT_PUBLIC_KEY || "").trim();
+    const privateKey = String(process.env.IMAGEKIT_PRIVATE_KEY || "").trim();
+    const urlEndpoint = normalizeImageKitEndpoint(process.env.IMAGEKIT_URL_ENDPOINT);
+    if (!publicKey || !privateKey || !urlEndpoint) {
+      res.status(503).json({ ok: false, message: "ImageKit no está configurado. Agrega sus tres variables de entorno." });
+      return;
     }
+
+    res.status(200).json({
+      ok: true,
+      type: "imagekit.upload-auth",
+      publicKey,
+      urlEndpoint,
+      ...createImageKitUploadAuth(privateKey),
+    });
     return;
   }
 
@@ -167,8 +280,11 @@ export default async function handler(req, res) {
 
     const store = await readStore();
     const sanitizedCatalog = buildSanitizedCatalogPayload(store);
+    const canReadPrivateCatalog = isAdmin && !isPublicRead;
     const payload = {
-      products: sanitizedCatalog.products,
+      products: canReadPrivateCatalog
+        ? sanitizedCatalog.products
+        : sanitizedCatalog.products.filter((product) => product?.isPublic !== false),
       contactSettings: sanitizedCatalog.contactSettings || null,
       storeSettings: sanitizedCatalog.storeSettings || null,
       productTypeRecords: sanitizedCatalog.productTypeRecords,
@@ -177,9 +293,10 @@ export default async function handler(req, res) {
       storageBackend: getStoreBackend(),
     };
 
-    if (isAdmin && !isPublicRead) {
+    if (canReadPrivateCatalog) {
       payload.coupons = sanitizedCatalog.coupons;
       payload.orderHistory = sanitizeArray(store.orders);
+      payload.physicalStockEvents = sanitizePhysicalStockEvents(store.physicalStockEvents);
       res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
     } else if (isPublicRead) {
       const requestedVersion = Number(req.query?.v);
@@ -254,6 +371,12 @@ export default async function handler(req, res) {
     return;
   }
 
+  // Older open tabs can automatically upload a fallback catalog on hydration.
+  // Require the release that only writes after an explicit admin action.
+  if (body?.writeProtocol !== 2) {
+    res.status(409).json({ ok: false, code: "CATALOG_CLIENT_OUTDATED", message: "Actualiza la página antes de guardar. Esta versión antigua no puede modificar el catálogo." });
+    return;
+  }
   const requestedBaseVersion = Number(body?.baseCatalogVersion);
   if (!Number.isInteger(requestedBaseVersion) || requestedBaseVersion < 0) {
     res.status(400).json({
@@ -264,9 +387,12 @@ export default async function handler(req, res) {
     return;
   }
   const sanitized = sanitizeAdminCatalogPayload(body?.data && typeof body.data === "object" ? body.data : {});
+  const pendingInventoryMovement = sanitizePhysicalStockEvents(body?.data?.inventoryMovement ? [body.data.inventoryMovement] : [])[0] || null;
+  const imageKitEndpoint = normalizeImageKitEndpoint(process.env.IMAGEKIT_URL_ENDPOINT);
 
   let conflictState = null;
-  const nextStore = await updateStore((draft) => {
+  let queuedImageCleanupPaths = [];
+  let nextStore = await updateStore((draft) => {
     const currentVersion = getCatalogVersion(draft);
     if (requestedBaseVersion !== currentVersion) {
       conflictState = {
@@ -275,12 +401,27 @@ export default async function handler(req, res) {
       };
       return draft;
     }
+    const previousImagePaths = collectCatalogImagePaths(draft, imageKitEndpoint);
     draft.products = sanitized.products;
     draft.coupons = sanitized.coupons;
     draft.contactSettings = sanitized.contactSettings;
     draft.storeSettings = sanitized.storeSettings;
     draft.productTypes = sanitized.productTypeRecords;
     draft.filterTags = sanitized.filterTagRecords;
+    const retainedImagePaths = collectCatalogImagePaths(draft, imageKitEndpoint);
+    const noLongerReferencedPaths = [...previousImagePaths].filter((imagePath) => !retainedImagePaths.has(imagePath));
+    const currentQueue = getPendingImageCleanupPaths(draft?.meta?.imageCleanupQueue);
+    queuedImageCleanupPaths = getPendingImageCleanupPaths([...currentQueue, ...noLongerReferencedPaths]);
+    draft.meta = {
+      ...(draft.meta || {}),
+      imageCleanupQueue: queuedImageCleanupPaths,
+    };
+    if (pendingInventoryMovement) {
+      const existingEvents = Array.isArray(draft.physicalStockEvents) ? draft.physicalStockEvents : [];
+      if (!existingEvents.some((event) => String(event?.id) === pendingInventoryMovement.id)) {
+        draft.physicalStockEvents = [...existingEvents, pendingInventoryMovement].slice(-80);
+      }
+    }
     bumpRealtimeMeta(draft, ["catalog"]);
     return draft;
   });
@@ -298,6 +439,19 @@ export default async function handler(req, res) {
     });
     return;
   }
+  const imageCleanup = await deleteImageKitCatalogAssets(
+    queuedImageCleanupPaths,
+    String(process.env.IMAGEKIT_PRIVATE_KEY || "").trim(),
+  );
+  if (imageCleanup.deletedPaths.length) {
+    const deletedPathSet = new Set(imageCleanup.deletedPaths);
+    nextStore = await updateStore((draft) => {
+      const queue = getPendingImageCleanupPaths(draft?.meta?.imageCleanupQueue)
+        .filter((imagePath) => !deletedPathSet.has(imagePath));
+      draft.meta = { ...(draft.meta || {}), imageCleanupQueue: queue };
+      return draft;
+    });
+  }
   const sanitizedCatalog = buildSanitizedCatalogPayload(nextStore);
 
   res.status(200).json({
@@ -306,19 +460,30 @@ export default async function handler(req, res) {
       products: sanitizedCatalog.products,
       coupons: sanitizedCatalog.coupons,
       orderHistory: sanitizeArray(nextStore.orders),
+      physicalStockEvents: sanitizePhysicalStockEvents(nextStore.physicalStockEvents),
       contactSettings: sanitizedCatalog.contactSettings || null,
       storeSettings: sanitizedCatalog.storeSettings || null,
       productTypeRecords: sanitizedCatalog.productTypeRecords,
       filterTagRecords: sanitizedCatalog.filterTagRecords,
       catalogVersion: getCatalogVersion(nextStore),
       storageBackend: getStoreBackend(),
+      imageCleanup: {
+        deleted: imageCleanup.deletedPaths.length,
+        pending: getPendingImageCleanupPaths(nextStore?.meta?.imageCleanupQueue).length,
+      },
     },
   });
 }
 
 export {
   ALLOWED_PRODUCT_IMAGE_TYPES,
+  collectCatalogImagePaths,
+  deleteImageKitCatalogAssets,
+  getCatalogImagePathFromUrl,
+  getPendingImageCleanupPaths,
   MAX_PRODUCT_IMAGE_BYTES,
-  getCatalogImageUploadPolicy,
+  createImageKitUploadAuth,
+  normalizeImageKitEndpoint,
+  validateImageKitAuthPayload,
 };
 

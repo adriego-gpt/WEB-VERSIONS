@@ -25,6 +25,15 @@ function decorateResponse(res) {
     };
   }
 
+  if (typeof res.send !== "function") {
+    res.send = (payload) => {
+      if (typeof payload === "string" && !res.getHeader("Content-Type")) {
+        res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      }
+      res.end(payload);
+    };
+  }
+
   return res;
 }
 
@@ -132,6 +141,15 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [react(), localApiPlugin()],
+    resolve: {
+      // Keep runtime hooks and icon components on the exact same React instance.
+      dedupe: ["react", "react-dom"],
+    },
+    optimizeDeps: {
+      // Prebundle these before the first admin render. Late discovery can otherwise
+      // invalidate the dependency graph while an image upload updates the UI.
+      include: ["react", "react-dom", "lucide-react", "framer-motion"],
+    },
     build: {
       rollupOptions: {
         output: {

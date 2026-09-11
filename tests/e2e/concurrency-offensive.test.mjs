@@ -305,7 +305,7 @@ test("Offensive Concurrency & Race Condition Suite", async (t) => {
       query: { action: "sync" },
       cookieJar: admin1Cookies,
       csrfToken: admin1SyncCsrf,
-      json: { baseCatalogVersion: baseVersion, data: mod1 }
+      json: { baseCatalogVersion: baseVersion, data: mod1, writeProtocol: 2 }
     });
 
     const save2Promise = callApi(catalogStateHandler, {
@@ -313,7 +313,7 @@ test("Offensive Concurrency & Race Condition Suite", async (t) => {
       query: { action: "sync" },
       cookieJar: admin2Cookies,
       csrfToken: admin2SyncCsrf,
-      json: { baseCatalogVersion: baseVersion, data: mod2 }
+      json: { baseCatalogVersion: baseVersion, data: mod2, writeProtocol: 2 }
     });
 
     const [save1, save2] = await Promise.all([save1Promise, save2Promise]);

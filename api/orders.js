@@ -1,6 +1,8 @@
 
 import { bumpRealtimeMeta, readStore, updateStore } from "./_lib/store.js";
 import { sanitizeOrderPatch } from "./_lib/storeSanitizers.js";
+import { toCustomerOrder } from "./_lib/customerOrders.js";
+import { readGuestSession } from "./_lib/guestSession.js";
 import {
   consumeRateLimit,
   ensureCsrfCookie,
@@ -8,7 +10,6 @@ import {
   getClientIp,
   isOriginAllowed,
   monitorApiRequest,
-  normalizeEmail,
   normalizeLine,
   parseCookies,
   requireJsonBody,
@@ -239,26 +240,20 @@ export default async function handler(req, res) {
     }
     const store = await readStore();
     const sessionUser = resolveVersionedUserSession(store.users, userSession);
-    if (!isAdmin && !sessionUser) {
+    const guest = !userSession ? readGuestSession(req) : null;
+    if (!isAdmin && !sessionUser && !guest) {
       res.status(401).json({ ok: false, message: "No autorizado" });
       return;
     }
-    const userId = sessionUser ? String(sessionUser.id) : "";
-    const userEmail = sessionUser ? normalizeEmail(sessionUser.email) : "";
+    const userId = sessionUser ? String(sessionUser.id) : guest?.sub || "";
     const orders = Array.isArray(store.orders) ? store.orders : [];
     const visibleOrders = isAdmin
       ? orders
-      : orders.filter((order) => (
-        String(order.customerId || "") === userId
-        || (
-          !String(order.customerId || "")
-          && userEmail
-          && normalizeEmail(order.customerEmail || "") === userEmail
-        )
-      ));
+      : orders.filter((order) => String(order.customerId || "") === userId);
     res.status(200).json({
       ok: true,
-      orderHistory: visibleOrders,
+      orderHistory: isAdmin ? visibleOrders : visibleOrders.map(toCustomerOrder),
+      guestId: !isAdmin && !sessionUser ? guest?.sub || "" : "",
     });
     return;
   }

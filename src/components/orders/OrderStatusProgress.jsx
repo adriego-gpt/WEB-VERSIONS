@@ -27,12 +27,15 @@ export function OrderStatusProgress({ status, deliveryType = "delivery" }) {
 
   return (
     <div className="order-progress">
-      <span className={`order-status-pill ${currentMeta.tone}`}><Icon size={16} /> {normalizedStatus}</span>
+      <div className="order-progress-current">
+        <span className={`order-status-pill ${currentMeta.tone}`}><Icon size={16} aria-hidden="true" /> {normalizedStatus}</span>
+        <span className="order-progress-stage-count">Paso {Math.max(1, currentIndex + 1)} de {steps.length}</span>
+      </div>
       <p className="order-progress-current-copy">{currentMeta.description}</p>
       <div className="order-progress-bar" aria-hidden="true">
         <div className="order-progress-bar-fill" style={{ transform: `scaleX(${progress / 100})` }} />
       </div>
-      <div className="order-progress-steps">
+      <div className="order-progress-steps" aria-label={`Progreso del pedido: ${normalizedStatus}`}>
         {steps.map((step, index) => {
           const StepIcon = getOrderStatusMeta(step).icon;
           const stepState = index < currentIndex ? "done" : index === currentIndex ? "active" : "upcoming";

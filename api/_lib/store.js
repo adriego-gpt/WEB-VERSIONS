@@ -11,12 +11,15 @@ const STORE_LOCK_KEY = `${STORE_KEY}:lock`;
 const STORE_LOCK_TTL_SECONDS = Math.max(4, Number(process.env.STORE_LOCK_TTL_SECONDS) || 8);
 const STORE_LOCK_MAX_WAIT_MS = Math.max(400, Number(process.env.STORE_LOCK_MAX_WAIT_MS) || 2600);
 const STORE_LOCK_RETRY_MS = Math.max(40, Number(process.env.STORE_LOCK_RETRY_MS) || 110);
+const RENEW_LOCK_SCRIPT = 'if redis.call("get", KEYS[1]) == ARGV[1] then return redis.call("pexpire", KEYS[1], ARGV[2]) else return 0 end';
+const RELEASE_LOCK_SCRIPT = 'if redis.call("get", KEYS[1]) == ARGV[1] then return redis.call("del", KEYS[1]) else return 0 end';
 
 const DEFAULT_STORE = {
   users: [],
   products: [],
   coupons: [],
   orders: [],
+  physicalStockEvents: [],
   contactSettings: null,
   storeSettings: null,
   productTypes: [],
@@ -187,15 +190,18 @@ async function readKvStore() {
   try {
     return normalizeStore(JSON.parse(serialized));
   } catch {
-    return clone(DEFAULT_STORE);
+    throw new Error("store-corrupt-refusing-empty-fallback");
   }
 }
 
-async function writeKvStore(store) {
+async function writeKvStore(store, previousStore = null) {
   const realtime = store?.meta?.realtime && typeof store.meta.realtime === "object"
     ? store.meta.realtime
     : DEFAULT_STORE.meta.realtime;
   await runKvTransaction([
+    ...(previousStore && previousStore.meta.realtime.catalogVersion !== store.meta.realtime.catalogVersion
+      ? [["SET", `${STORE_KEY}:backup:${previousStore.meta.realtime.catalogVersion % 3}`, JSON.stringify(previousStore)]]
+      : []),
     ["SET", STORE_KEY, JSON.stringify(store)],
     ["SET", STORE_REALTIME_KEY, JSON.stringify(realtime)],
   ]);
@@ -226,9 +232,20 @@ async function acquireKvLock() {
 
 async function releaseKvLock(lockToken = "") {
   if (!lockToken) return;
-  const currentLockValue = await runKvCommand("GET", STORE_LOCK_KEY).catch(() => "");
-  if (String(currentLockValue || "") !== String(lockToken)) return;
-  await runKvCommand("DEL", STORE_LOCK_KEY).catch(() => null);
+  await runKvCommand("EVAL", RELEASE_LOCK_SCRIPT, "1", STORE_LOCK_KEY, lockToken).catch(() => null);
+}
+
+async function renewKvLock(lockToken = "") {
+  if (!lockToken) return false;
+  const renewed = await runKvCommand(
+    "EVAL",
+    RENEW_LOCK_SCRIPT,
+    "1",
+    STORE_LOCK_KEY,
+    lockToken,
+    String(STORE_LOCK_TTL_SECONDS * 1000),
+  );
+  return Number(renewed) === 1;
 }
 
 function getMemoryStore() {
@@ -256,6 +273,9 @@ function normalizeStore(raw = {}) {
     products: Array.isArray(safe.products) ? safe.products : [],
     coupons: Array.isArray(safe.coupons) ? safe.coupons : [],
     orders: Array.isArray(safe.orders) ? safe.orders : [],
+    physicalStockEvents: Array.isArray(safe.physicalStockEvents)
+      ? safe.physicalStockEvents.filter((event) => event && typeof event === "object").slice(-80)
+      : [],
     contactSettings: safe.contactSettings ?? DEFAULT_STORE.contactSettings,
     storeSettings: safe.storeSettings ?? DEFAULT_STORE.storeSettings,
     productTypes: Array.isArray(safe.productTypes) ? safe.productTypes : [],
@@ -386,7 +406,10 @@ async function updateStore(mutator) {
       const draft = clone(current);
       const mutated = await mutator(draft);
       const next = normalizeStore(mutated ?? draft);
-      await writeKvStore(next);
+      if (!await renewKvLock(lockToken)) {
+        throw new Error("kv-lock-lost");
+      }
+      await writeKvStore(next, current);
       return next;
     } finally {
       await releaseKvLock(lockToken);

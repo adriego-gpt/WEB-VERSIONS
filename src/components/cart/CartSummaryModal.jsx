@@ -30,7 +30,7 @@ import { normalizeAddressBook } from "../../domain/user/addressBook";
 import { sanitizeLine, sanitizeParagraph, normalizeEntityId, stripDangerousContent } from "../../utils/sanitizers";
 import { normalizeUserPhoneNumber } from "../../utils/phone";
 import { AUTH_FIELD_LIMITS } from "../../constants/auth";
-import { FILE_SECURITY } from "../../constants/product";
+import { FALLBACK_IMAGE, FILE_SECURITY } from "../../constants/product";
 import { getStockForVariant, getStockStatus } from "../../domain/products/variants";
 import { EmotionalEmptyState } from "../ui/EmotionalEmptyState";
 import { AnimatedCurrencyValue } from "../ui/AnimatedCurrencyValue";
@@ -109,6 +109,8 @@ export function CartSummaryModal({
     };
   };
   const [checkoutStep, setCheckoutStep] = useState(CHECKOUT_STEPS.summary);
+  const [guestCheckout, setGuestCheckout] = useState(false);
+  const needsAccountChoice = requiresLogin && !guestCheckout;
   const [deliveryType, setDeliveryType] = useState("pickup");
   const [paymentMethod, setPaymentMethod] = useState(() => (
     transferReady ? PAYMENT_METHODS.transfer : PAYMENT_METHODS.cardLink
@@ -227,7 +229,7 @@ export function CartSummaryModal({
     : "¿Tienes cupón? Aplícalo en el resumen";
   const checkoutButtonLabel = checkoutBusy
     ? "Registrando pedido..."
-    : requiresLogin
+    : needsAccountChoice
       ? "Inicia sesión para confirmar"
       : checkoutStep === CHECKOUT_STEPS.summary
         ? "Continuar con la entrega"
@@ -269,6 +271,17 @@ export function CartSummaryModal({
     setCheckoutFormError("");
   };
 
+  const unavailableCartItems = useMemo(() => {
+    return (cart || []).filter((item) => {
+      const productRecord = (products || []).find((product) => String(product.id) === String(item.id));
+      if (!productRecord || productRecord.isPublic === false) return true;
+      const availableStock = getStockForVariant(productRecord, item.color, item.size);
+      return availableStock <= 0 || item.quantity > availableStock;
+    });
+  }, [cart, products]);
+
+  const hasUnavailableItems = unavailableCartItems.length > 0;
+
   const validateDeliverySelection = () => {
     if (deliveryType !== "delivery") return true;
     const fullName = sanitizeLine(deliveryDraft.fullName || "");
@@ -297,16 +310,33 @@ export function CartSummaryModal({
   };
 
   const handleCheckoutAction = () => {
-    if (requiresLogin) {
+    if (needsAccountChoice) {
       onCheckout(null);
       return;
     }
+
+    if (hasUnavailableItems) {
+      const firstUnavailable = unavailableCartItems[0];
+      const productRecord = (products || []).find((product) => String(product.id) === String(firstUnavailable.id));
+      const availableStock = productRecord ? getStockForVariant(productRecord, firstUnavailable.color, firstUnavailable.size) : 0;
+      if (availableStock <= 0) {
+        setCheckoutFormError(`La prenda "${firstUnavailable.name}" (${firstUnavailable.color} / ${firstUnavailable.size}) se encuentra agotada. Quítala del carrito para continuar.`);
+      } else {
+        setCheckoutFormError(`Solo quedan ${availableStock} unidad(es) de "${firstUnavailable.name}" (${firstUnavailable.color} / ${firstUnavailable.size}). Ajusta la cantidad para continuar.`);
+      }
+      return;
+    }
+
     if (checkoutStep === CHECKOUT_STEPS.summary) {
       setCheckoutStep(getNextCheckoutStep(checkoutStep));
       setCheckoutFormError("");
       return;
     }
     if (checkoutStep === CHECKOUT_STEPS.delivery) {
+      if (guestCheckout && (!sanitizeLine(deliveryDraft.fullName) || normalizeUserPhoneNumber(deliveryDraft.phone).length !== 10)) {
+        setCheckoutFormError("Completa tu nombre y teléfono de 10 dígitos para continuar.");
+        return;
+      }
       if (!validateDeliverySelection()) return;
       if (
         deliveryType === "delivery" &&
@@ -350,6 +380,7 @@ export function CartSummaryModal({
 
     setCheckoutFormError("");
     onCheckout({
+      guestCheckout: requiresLogin && guestCheckout,
       deliveryType,
       paymentMethod: selectedPaymentMethod,
       paymentProof: selectedPaymentMethod === PAYMENT_METHODS.transfer ? paymentProof : "",
@@ -478,23 +509,59 @@ export function CartSummaryModal({
                   onAction={onBrowseCatalog}
                 />
               ) : (
-                (cart || []).map((item) => {
-                  const productRecord = (products || []).find((product) => product.id === item.id);
-                  const stockStatus = getStockStatus(getStockForVariant(productRecord, item.color, item.size));
+                <>
+                {hasUnavailableItems && (
+                  <div className="cart-stock-warning-banner" role="alert">
+                    <AlertCircle size={18} aria-hidden="true" />
+                    <div>
+                      <strong>Prendas con stock insuficiente o agotadas</strong>
+                      <p>Modifica o retira las prendas marcadas para poder continuar con tu pedido.</p>
+                    </div>
+                  </div>
+                )}
+                {(cart || []).map((item) => {
+                  const productRecord = (products || []).find((product) => String(product.id) === String(item.id));
+                  const availableStock = productRecord ? getStockForVariant(productRecord, item.color, item.size) : 0;
+                  const isOutOfStock = availableStock <= 0 || !productRecord || productRecord.isPublic === false;
+                  const isOverStock = !isOutOfStock && item.quantity > availableStock;
+                  const stockStatus = getStockStatus(availableStock);
                   return (
-                    <Motion.div key={item.key} layout className="cart-item sheet-product-card cart-line-item">
+                    <Motion.div key={item.key} layout className={`cart-item sheet-product-card cart-line-item ${isOutOfStock ? "is-out-of-stock" : ""}`}>
                       <div className="cart-line-layout">
                         <button type="button" onClick={() => onOpenItem(item)} className="sheet-thumb-button cart-line-thumb-btn" aria-label={`Ver ${item.name}`}>
-                          <img src={item.image} alt={item.name} className="sheet-product-thumb cart-line-thumb" loading="eager" decoding="async" />
+                          <img
+                            src={item.image}
+                            alt={item.name}
+                            className="sheet-product-thumb cart-line-thumb"
+                            loading="eager"
+                            decoding="async"
+                            onError={(event) => {
+                              if (event.currentTarget.src !== FALLBACK_IMAGE) {
+                                event.currentTarget.src = FALLBACK_IMAGE;
+                              }
+                            }}
+                          />
                         </button>
 
                         <button type="button" onClick={() => onOpenItem(item)} className="sheet-product-title-button cart-line-main" aria-label={`Ver detalle de ${item.name}`}>
                           <p className="sheet-product-title cart-line-title">{item.name}</p>
                           <p className="muted sheet-product-meta-text cart-line-meta">{item.color} - {item.size}</p>
-                          <span className={`stock-badge stock-badge-${stockStatus.tone} stock-badge-compact`} style={{ marginTop: 4 }}>
-                            <span className="stock-dot" aria-hidden="true" />
-                            <span>{stockStatus.label}</span>
-                          </span>
+                          {isOutOfStock ? (
+                            <span className="stock-badge stock-badge-danger stock-badge-compact" style={{ marginTop: 4 }}>
+                              <span className="stock-dot" aria-hidden="true" />
+                              <span>Agotado · Quitar prenda</span>
+                            </span>
+                          ) : isOverStock ? (
+                            <span className="stock-badge stock-badge-warning stock-badge-compact" style={{ marginTop: 4 }}>
+                              <span className="stock-dot" aria-hidden="true" />
+                              <span>Solo {availableStock} disponible{availableStock === 1 ? "" : "s"}</span>
+                            </span>
+                          ) : (
+                            <span className={`stock-badge stock-badge-${stockStatus.tone} stock-badge-compact`} style={{ marginTop: 4 }}>
+                              <span className="stock-dot" aria-hidden="true" />
+                              <span>{stockStatus.label}</span>
+                            </span>
+                          )}
                         </button>
 
                         <div className="cart-line-side">
@@ -545,7 +612,8 @@ export function CartSummaryModal({
                       </div>
                     </Motion.div>
                   );
-                })
+                })}
+                </>
               )}
             </div>
 
@@ -602,7 +670,7 @@ export function CartSummaryModal({
                 )}
               </div>
 
-              {cart.length > 0 && !requiresLogin && isCheckoutStep && (
+              {cart.length > 0 && !needsAccountChoice && isCheckoutStep && (
                 <div className="surface checkout-confirm-surface">
                   <div className="checkout-confirm-head">
                     <div className="checkout-step-progress" role="list" aria-label="Progreso del pedido">
@@ -646,6 +714,16 @@ export function CartSummaryModal({
 
                   {checkoutStep === CHECKOUT_STEPS.delivery && (
                     <>
+                    {guestCheckout && (
+                      <fieldset className="guest-checkout-contact">
+                        <legend>Comprar sin cuenta</legend>
+                        <p>Podrás consultar tus pedidos en este navegador durante 30 días. Para ayuda desde otro dispositivo, guarda el código de tu pedido y contacta a la tienda.</p>
+                        {deliveryType === "pickup" && <>
+                          <label>Nombre completo<input className="input" name="guest-name" autoComplete="name" value={deliveryDraft.fullName} onChange={(event) => handleDeliveryDraftChange("fullName", event.target.value)} required /></label>
+                          <label>Teléfono de contacto<input className="input" name="guest-phone" type="tel" inputMode="tel" autoComplete="tel-national" maxLength={10} value={deliveryDraft.phone} onChange={(event) => handleDeliveryDraftChange("phone", event.target.value)} required /></label>
+                        </>}
+                      </fieldset>
+                    )}
                     <div className="checkout-delivery-switch" role="tablist" aria-label="Tipo de entrega">
                     <button
                       type="button"
@@ -1115,9 +1193,12 @@ export function CartSummaryModal({
                   {checkoutButtonLabel}
                 </button>
               </div>
-              {requiresLogin && cart.length > 0 && (
+              {needsAccountChoice && cart.length > 0 && (
+                <button type="button" className="btn btn-outline" onClick={() => { setGuestCheckout(true); setCheckoutStep(CHECKOUT_STEPS.delivery); setCheckoutFormError(""); }}>Comprar sin cuenta</button>
+              )}
+              {needsAccountChoice && cart.length > 0 && (
                 <p className="helper-text sheet-login-hint">
-                  Gracias por elegirnos. Inicia sesión para guardar tu pedido, seguimiento y confirmación.
+                  Puedes comprar sin cuenta o iniciar sesión para guardar tus direcciones y seguir tus compras desde otros dispositivos.
                 </p>
               )}
             </div>

@@ -16,7 +16,8 @@ test("Admin Panel Integrity and Tab Completeness", async (t) => {
         continue;
       }
       const isImported = new RegExp(`\\b${tag}\\b`).test(importBlock);
-      assert.ok(isImported, `Icon or component <${tag}> is used in JSX but missing from imports in AdminPanelModal.jsx`);
+      const isDeclaredLocally = new RegExp(`function\\s+${tag}\\s*\\(`).test(content);
+      assert.ok(isImported || isDeclaredLocally, `Icon or component <${tag}> is used in JSX but missing from imports or local declarations in AdminPanelModal.jsx`);
     }
   });
 
@@ -40,4 +41,14 @@ test("Admin Panel Integrity and Tab Completeness", async (t) => {
       assert.ok(content.includes(`adminTab === "${tab}"`), `Tab '${tab}' must be handled`);
     }
   });
+});
+
+test("photo-created products remain dirty so their draft can be recovered", () => {
+  const app = fs.readFileSync("src/App.jsx", "utf8");
+  const start = app.indexOf("const createProductFromPhotoBatch = async");
+  const end = app.indexOf("const openRecommendedProduct", start);
+  const handler = app.slice(start, end);
+  assert.ok(handler.includes("const emptyBaseline = createEmptyProductForm()"));
+  assert.ok(handler.includes("setProductFormBaseline(getProductFormSignature(emptyBaseline))"));
+  assert.ok(!handler.includes("setProductFormBaseline(getProductFormSignature(form))"));
 });

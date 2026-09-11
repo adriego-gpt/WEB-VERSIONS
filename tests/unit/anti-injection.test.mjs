@@ -5,6 +5,7 @@ import {
   sanitizeParagraph,
 } from "../../api/_lib/security.js";
 import {
+  normalizeEntityId,
   sanitizeLine as frontendSanitizeLine,
 } from "../../src/utils/sanitizers.js";
 
@@ -60,5 +61,12 @@ test("Strict Anti-Injection: Backend & Frontend Sanitizers", async (t) => {
     const multiline = "Línea 1<script>bad()</script>\nLínea 2 `rm -rf /`\n\nLínea 3";
     const sanitized = sanitizeParagraph(multiline);
     assert.equal(sanitized, "Línea 1\nLínea 2\n\nLínea 3");
+  });
+
+  await t.test("9. Entity identifiers reject prototype-pollution keys", () => {
+    assert.equal(normalizeEntityId("__proto__"), "");
+    assert.equal(normalizeEntityId("constructor"), "");
+    assert.equal(normalizeEntityId("prototype"), "");
+    assert.equal(normalizeEntityId("product-123"), "product-123");
   });
 });

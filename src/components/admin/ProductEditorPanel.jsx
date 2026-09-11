@@ -1,6 +1,8 @@
 import React, { useMemo, useState } from "react";
 import {
+  CheckCircle2,
   ChevronDown,
+  Circle,
   ImagePlus,
   PackagePlus,
   Plus,
@@ -9,6 +11,7 @@ import {
   X,
 } from "lucide-react";
 import { splitFilterTagsText } from "../../utils";
+import { isLegacyInlineCatalogImage } from "../../domain/admin/legacyImageMigration.js";
 import { AdminSectionHeader } from "./AdminSectionHeader";
 
 const EDITOR_SECTIONS = [
@@ -41,6 +44,10 @@ export function ProductEditorPanel({
   onColorFieldChange,
   onRemoveColor,
   onColorFilesUpload,
+  onMigrateLegacyImages,
+  onMigrateAllLegacyImages,
+  imageUploadStateByColor = {},
+  onCancelImageUpload,
   onAddImageField,
   onColorImageChange,
   onRemoveImageField,
@@ -59,10 +66,22 @@ export function ProductEditorPanel({
     ? expandedColorId
     : (colors[0]?.uid || "");
   const photoCount = colors.reduce((total, color) => total + (color.images || []).filter(Boolean).length, 0);
+  const legacyPhotoCount = colors.reduce(
+    (total, color) => total + (color.images || []).filter((image) => isLegacyInlineCatalogImage(image)).length,
+    0,
+  );
+  const isAnyColorUploading = Object.values(imageUploadStateByColor).some((st) => st?.status === "uploading");
   const stockCount = colors.reduce(
     (total, color) => total + (color.sizes || []).reduce((subtotal, entry) => subtotal + Math.max(0, Number(entry.stock) || 0), 0),
     0,
   );
+  const publishChecks = [
+    { label: "Nombre", complete: String(form.name || "").trim().length >= 2 },
+    { label: "Precio", complete: Number(form.price) > 0 },
+    { label: "Fotografía", complete: photoCount > 0 },
+    { label: "Variante", complete: colors.some((color) => (color.sizes || []).some((size) => String(size.size || "").trim())) },
+  ];
+  const publishReady = publishChecks.every((check) => check.complete);
   const draftTimeLabel = draftSavedAt
     ? new Intl.DateTimeFormat("es-EC", { hour: "2-digit", minute: "2-digit" }).format(new Date(draftSavedAt))
     : "";
@@ -74,9 +93,11 @@ export function ProductEditorPanel({
         titleId="product-editor-title"
         description={form.id ? "Actualiza la información y guarda cuando todo esté listo." : "Completa cada bloque sin perder de vista el resultado final."}
         meta={<span className={`admin-status-label${form.isPublic === false ? " is-muted" : " is-success"}`}>{form.isPublic === false ? "Oculto" : "Público"}</span>}
-        actions={form.id ? (
-          <button className="btn btn-outline" type="button" onClick={onReset}><X size={16} />Cancelar edición</button>
-        ) : null}
+        actions={(
+          <button className="btn btn-outline" type="button" onClick={() => onReset?.({ returnToCatalog: true })}>
+            <X size={16} />{form.id ? "Cancelar edición" : "Volver al catálogo"}
+          </button>
+        )}
       />
 
       <datalist id="product-color-name-suggestions">
@@ -112,13 +133,30 @@ export function ProductEditorPanel({
       <div className="product-editor-overview">
         <span><strong>{colors.length}</strong> colores</span>
         <span><strong>{photoCount}</strong> fotos</span>
+        {legacyPhotoCount > 0 && (
+          <span className="product-editor-legacy-badge" title="Fotos guardadas como Base64 que deben migrarse a ImageKit">
+            <strong>{legacyPhotoCount}</strong> por migrar
+          </span>
+        )}
         <span><strong>{stockCount}</strong> unidades</span>
         <span><strong>{formTags.length}</strong> tags</span>
         <span className={`product-draft-indicator${draftSaveError ? " is-error" : (hasUnsavedChanges ? " is-pending" : " is-saved")}`} role={draftSaveError ? "alert" : "status"}>
           {draftSaveError || (hasUnsavedChanges
-            ? (draftTimeLabel ? `Borrador guardado ${draftTimeLabel}` : "Guardando borrador...")
+            ? (draftTimeLabel ? `Borrador guardado ${draftTimeLabel}` : "Guardando borrador…")
             : "Sin cambios pendientes")}
         </span>
+      </div>
+
+      <div className={`product-publish-checklist${publishReady ? " is-ready" : ""}`} aria-label="Preparación para publicar">
+        <strong>{publishReady ? "Listo para publicar" : "Completa la ficha"}</strong>
+        <div>
+          {publishChecks.map((check) => (
+            <span key={check.label} className={check.complete ? "is-complete" : ""}>
+              {check.complete ? <CheckCircle2 size={14} aria-hidden="true" /> : <Circle size={14} aria-hidden="true" />}
+              {check.label}
+            </span>
+          ))}
+        </div>
       </div>
 
       <nav className="product-editor-nav" aria-label="Secciones del producto">
@@ -143,6 +181,10 @@ export function ProductEditorPanel({
               <p>Nombre, categoría, precio y descripción que verá el cliente.</p>
             </div>
             <div className="product-editor-grid admin-grid">
+              <label className="product-editor-field">
+                <span className="product-editor-field-label">SKU <small>opcional, útil para importar</small></span>
+                <input className="input" value={form.sku || ""} onChange={(event) => onFieldChange("sku", event.target.value.toUpperCase())} placeholder="Ej. VES-LIN-001" />
+              </label>
               <label className="product-editor-field admin-full">
                 <span className="product-editor-field-label">Nombre del producto</span>
                 <input className="input" value={form.name} onChange={(event) => onFieldChange("name", event.target.value)} placeholder="Ej. Vestido lino natural" />
@@ -233,12 +275,45 @@ export function ProductEditorPanel({
                 <h5 id="product-variants-heading">Colores, fotos y stock</h5>
                 <p>Abre solo el color que necesitas editar.</p>
               </div>
-              <button className="btn btn-primary" type="button" onClick={onAddColor}><Plus size={16} />Agregar color</button>
+              <div className="admin-actions">
+                {legacyPhotoCount > 0 && onMigrateAllLegacyImages && (
+                  <button
+                    className="btn btn-outline"
+                    type="button"
+                    onClick={onMigrateAllLegacyImages}
+                    disabled={isAnyColorUploading}
+                    title="Migra todas las fotos Base64 de este producto a ImageKit"
+                  >
+                    <ImagePlus size={16} />Migrar todas ({legacyPhotoCount})
+                  </button>
+                )}
+                <button className="btn btn-primary" type="button" onClick={onAddColor}><Plus size={16} />Agregar color</button>
+              </div>
             </div>
+
+            {legacyPhotoCount > 0 && (
+              <div className="product-legacy-migration-callout" role="status">
+                <div>
+                  <strong>Fotos antiguas detectadas ({legacyPhotoCount})</strong>
+                  <p>Este producto contiene fotos en formato Base64. Puedes migrarlas todas a ImageKit con un clic para acelerar la carga del catálogo.</p>
+                </div>
+                {onMigrateAllLegacyImages && (
+                  <button
+                    className="btn btn-primary"
+                    type="button"
+                    onClick={onMigrateAllLegacyImages}
+                    disabled={isAnyColorUploading}
+                  >
+                    <ImagePlus size={15} />Migrar todas a ImageKit
+                  </button>
+                )}
+              </div>
+            )}
 
             <div className="product-variant-list">
               {colors.map((color, colorIndex) => {
                 const isExpanded = activeColorId === color.uid;
+                const imageUploadState = imageUploadStateByColor[color.uid];
                 const colorStock = (color.sizes || []).reduce((total, entry) => total + Math.max(0, Number(entry.stock) || 0), 0);
                 const detailsId = `product-color-${color.uid}-details`;
                 return (
@@ -290,22 +365,47 @@ export function ProductEditorPanel({
                               <p>Pega enlaces o sube varias imágenes.</p>
                             </div>
                             <div className="admin-actions">
+                              {(color.images || []).filter((image) => isLegacyInlineCatalogImage(image)).length > 0 && (
+                                <button className="btn btn-outline" type="button" onClick={() => onMigrateLegacyImages?.(color.uid)} disabled={imageUploadState?.status === "uploading"}>
+                                  <ImagePlus size={15} />Migrar fotos antiguas
+                                </button>
+                              )}
                               <button className="btn btn-outline" type="button" onClick={() => onAddImageField(color.uid)}><Plus size={15} />Agregar URL</button>
-                              <label className="btn btn-soft admin-file-btn">
-                                <ImagePlus size={15} />Subir fotos
-                                <input type="file" accept="image/*" multiple onChange={(event) => onColorFilesUpload(color.uid, event)} />
+                              <label className="btn btn-soft admin-file-btn" aria-disabled={imageUploadState?.status === "uploading"}>
+                                <ImagePlus size={15} />
+                                {imageUploadState?.status === "uploading"
+                                  ? `Subiendo ${imageUploadState.completed}/${imageUploadState.total}${imageUploadState.percent ? ` · ${imageUploadState.percent}%` : ""}`
+                                  : "Subir fotos"}
+                                <input
+                                  type="file"
+                                  accept="image/jpeg,image/png,image/webp"
+                                  multiple
+                                  disabled={imageUploadState?.status === "uploading"}
+                                  onChange={(event) => onColorFilesUpload(color.uid, event)}
+                                />
                               </label>
+                              {imageUploadState?.status === "uploading" && (
+                                <button className="btn btn-outline" type="button" onClick={() => onCancelImageUpload?.(color.uid)}>
+                                  <X size={15} />Cancelar
+                                </button>
+                              )}
                             </div>
                           </div>
                           <div className="product-image-editor-list">
                             {(color.images || []).map((image, imageIndex) => (
                               <div key={`${color.uid}-${imageIndex}`} className="product-image-editor-row">
-                                {image ? <img src={image} alt="" loading="lazy" decoding="async" /> : <span className="product-image-placeholder"><ImagePlus size={16} /></span>}
+                                {image ? <img src={image} alt="" width="40" height="40" loading="lazy" decoding="async" /> : <span className="product-image-placeholder"><ImagePlus size={16} /></span>}
                                 <input className="input" value={image} onChange={(event) => onColorImageChange(color.uid, imageIndex, event.target.value)} placeholder={`URL de imagen ${imageIndex + 1}`} />
                                 <button className="icon-btn" type="button" onClick={() => onRemoveImageField(color.uid, imageIndex)} aria-label={`Quitar imagen ${imageIndex + 1}`}><Trash2 size={15} /></button>
                               </div>
                             ))}
                           </div>
+                          {imageUploadState && imageUploadState.status !== "uploading" && (
+                            <p className={`product-image-upload-result is-${imageUploadState.status}`} role="status" aria-live="polite">
+                              {imageUploadState.succeeded > 0 ? `${imageUploadState.succeeded} foto(s) listas.` : "No se guardó ninguna foto."}
+                              {imageUploadState.failed > 0 ? ` ${imageUploadState.failed} fallaron; puedes volver a intentarlo.` : ""}
+                            </p>
+                          )}
                         </div>
 
                         <div className="product-variant-block">

@@ -22,15 +22,13 @@ const ANNOUNCEMENTS = [
 
 export function AnnouncementBar() {
   const [currentIndex, setCurrentIndex] = useState(0);
-  const [isPaused, setIsPaused] = useState(false);
 
   useEffect(() => {
-    if (isPaused) return undefined;
-    const interval = setInterval(() => {
-      setCurrentIndex((prev) => (prev + 1) % ANNOUNCEMENTS.length);
-    }, 4000);
-    return () => clearInterval(interval);
-  }, [isPaused]);
+    const timer = setInterval(() => {
+      setCurrentIndex((index) => (index + 1) % ANNOUNCEMENTS.length);
+    }, 4500);
+    return () => clearInterval(timer);
+  }, []);
 
   const currentItem = ANNOUNCEMENTS[currentIndex];
   const CurrentIcon = currentItem.icon;
@@ -38,13 +36,8 @@ export function AnnouncementBar() {
   return (
     <div
       className="announcement-bar"
-      onMouseEnter={() => setIsPaused(true)}
-      onMouseLeave={() => setIsPaused(false)}
-      onFocusCapture={() => setIsPaused(true)}
-      onBlurCapture={() => setIsPaused(false)}
       role="region"
       aria-label="Anuncios de la tienda"
-      aria-live="polite"
     >
       <div className="container announcement-bar-container">
         <div className="announcement-content">

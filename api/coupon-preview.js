@@ -111,7 +111,7 @@ function pickCouponState(result, couponCode) {
     excludedSubtotal: Number(result?.excludedSubtotal) || 0,
     discountAmount: Number(result?.discountAmount) || 0,
     minPurchase: Number(result?.minPurchase) || 0,
-    total: Number(result?.total) || Number(result?.subtotal) || 0,
+    total: Number(result?.total ?? result?.subtotal ?? 0),
     eligibleItemsCount: Number(result?.eligibleItemsCount) || 0,
     excludedItemsCount: Number(result?.excludedItemsCount) || 0,
   };

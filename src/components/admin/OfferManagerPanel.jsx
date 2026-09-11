@@ -38,7 +38,7 @@ export function OfferManagerPanel({
               <RotateCcw size={16} />Restablecer
             </button>
             <button className="btn btn-primary" type="button" onClick={onSave} disabled={!hasPendingChanges || saving}>
-              <ShieldCheck size={16} />{saving ? "Guardando..." : "Guardar cambios"}
+              <ShieldCheck size={16} />{saving ? "Guardando…" : "Guardar cambios"}
             </button>
           </>
         )}
@@ -74,6 +74,8 @@ export function OfferManagerPanel({
               <img
                 src={getProductImage(product, colors[0])}
                 alt=""
+                width="64"
+                height="68"
                 className="admin-offer-thumb"
                 loading="lazy"
                 decoding="async"
@@ -138,11 +140,10 @@ export function OfferManagerPanel({
         <div className="admin-sticky-action-bar">
           <span><strong>{pendingCount}</strong> cambio{pendingCount === 1 ? "" : "s"} pendiente{pendingCount === 1 ? "" : "s"}</span>
           <button className="btn btn-primary" type="button" onClick={onSave} disabled={saving}>
-            <ShieldCheck size={16} />{saving ? "Guardando..." : "Guardar ofertas"}
+            <ShieldCheck size={16} />{saving ? "Guardando…" : "Guardar ofertas"}
           </button>
         </div>
       )}
     </section>
   );
 }
-

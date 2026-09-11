@@ -27,7 +27,14 @@ export function normalizeImageSource(value = "") {
     if (estimateDataUrlBytes(raw) > FILE_SECURITY.maxInlineImageBytes) return "";
     return raw;
   }
-  return normalizeSafeUrl(raw);
+  const safeUrl = normalizeSafeUrl(raw);
+  if (!safeUrl) return "";
+  try {
+    const parsed = new URL(safeUrl);
+    return parsed.protocol === "https:" ? parsed.toString() : "";
+  } catch {
+    return "";
+  }
 }
 
 function readFileAsDataUrl(file) {

@@ -13,6 +13,12 @@ const PASSWORD_HASH_KEY_LENGTH = 64;
 const MAX_JSON_BODY_BYTES = Math.max(64 * 1024, Number(process.env.MAX_JSON_BODY_BYTES) || (4 * 1024 * 1024));
 const MAX_INLINE_IMAGE_BYTES = Math.max(48 * 1024, Number(process.env.MAX_INLINE_IMAGE_BYTES) || (380 * 1024));
 const BODY_PARSE_ERROR_KEY = "__adriegoBodyParseError";
+const INLINE_IMAGE_PATTERN = /^data:image\/(jpeg|png|webp);base64,([A-Za-z0-9+/]+={0,2})$/i;
+const configuredMetricsSampleRate = Number(process.env.SECURITY_METRICS_SUCCESS_SAMPLE_RATE);
+const SECURITY_METRICS_SUCCESS_SAMPLE_RATE = Math.min(1, Math.max(
+  0,
+  Number.isFinite(configuredMetricsSampleRate) ? configuredMetricsSampleRate : 0.1,
+));
 
 function loadLocalEnvFile() {
   const nodeEnv = String(process.env.NODE_ENV || "").toLowerCase();
@@ -115,20 +121,26 @@ function normalizeImageSource(value = "") {
   const raw = String(value || "").trim();
   if (!raw) return "";
   if (raw.startsWith("data:image/")) {
-    if (estimateDataUrlBytes(raw) > MAX_INLINE_IMAGE_BYTES) return "";
+    const estimatedBytes = estimateDataUrlBytes(raw);
+    if (estimatedBytes <= 0 || estimatedBytes > MAX_INLINE_IMAGE_BYTES) return "";
     return raw;
   }
-  return normalizeSafeUrl(raw);
+  const safeUrl = normalizeSafeUrl(raw);
+  if (!safeUrl) return "";
+  try {
+    const parsed = new URL(safeUrl);
+    return parsed.protocol === "https:" ? parsed.toString() : "";
+  } catch {
+    return "";
+  }
 }
 
 function estimateDataUrlBytes(value = "") {
   const raw = String(value || "").trim();
-  const separatorIndex = raw.indexOf(",");
-  if (separatorIndex <= 0) return 0;
-  const metadata = raw.slice(0, separatorIndex).toLowerCase();
-  if (!metadata.startsWith("data:image/") || !metadata.includes(";base64")) return 0;
-  const base64Payload = raw.slice(separatorIndex + 1).replace(/\s+/g, "");
-  if (!base64Payload) return 0;
+  const match = raw.match(INLINE_IMAGE_PATTERN);
+  if (!match) return -1;
+  const base64Payload = match[2];
+  if (base64Payload.length % 4 !== 0) return -1;
   const padding = base64Payload.endsWith("==")
     ? 2
     : base64Payload.endsWith("=")
@@ -153,7 +165,16 @@ function parseJsonBody(rawBody, options = {}) {
     : MAX_JSON_BODY_BYTES;
 
   if (!rawBody) return {};
-  if (typeof rawBody === "object") return rawBody;
+  if (typeof rawBody === "object") {
+    try {
+      if (Buffer.byteLength(JSON.stringify(rawBody), "utf8") > maxBytes) {
+        return { [BODY_PARSE_ERROR_KEY]: "payload-too-large" };
+      }
+      return rawBody;
+    } catch {
+      return { [BODY_PARSE_ERROR_KEY]: "invalid-json" };
+    }
+  }
   if (typeof rawBody !== "string") return {};
 
   if (Buffer.byteLength(rawBody, "utf8") > maxBytes) {
@@ -313,20 +334,21 @@ async function persistApiMetricEvent(endpoint = "", event = "request", payload =
   if (!normalizedEndpoint) return;
   const metricKey = getSecurityMetricRedisKey(normalizedEndpoint);
   const increments = [];
+  const weight = Math.max(1, Math.floor(Number(payload.sampleWeight) || 1));
 
   if (event === "request") {
     const method = normalizeLine(payload.method || "").toUpperCase() || "UNKNOWN";
-    increments.push(["requests", 1], [`method:${method}`, 1]);
+    increments.push(["requests", weight], [`method:${method}`, weight]);
   } else if (event === "response") {
     if (payload.includeRequest) {
       const method = normalizeLine(payload.method || "").toUpperCase() || "UNKNOWN";
-      increments.push(["requests", 1], [`method:${method}`, 1]);
+      increments.push(["requests", weight], [`method:${method}`, weight]);
     }
     const status = Math.max(100, Math.min(599, Number(payload.status) || 200));
-    increments.push(["responses", 1], [`status:${status}`, 1]);
-    if (status >= 400) increments.push(["errors", 1]);
+    increments.push(["responses", weight], [`status:${status}`, weight]);
+    if (status >= 400) increments.push(["errors", weight]);
     if (Number.isFinite(Number(payload.durationMs))) {
-      increments.push(["totalDurationMs", Math.max(0, Math.round(Number(payload.durationMs)))]);
+      increments.push(["totalDurationMs", Math.max(0, Math.round(Number(payload.durationMs) * weight))]);
     }
   } else {
     const field = {
@@ -391,7 +413,13 @@ function recordApiMetric(endpoint = "", event = "request", payload = {}) {
   }
 
   if (isKvConfigured() && payload.persist !== false) {
-    void persistApiMetricEvent(endpoint, event, payload).catch((error) => {
+    const status = Number(payload.status) || 200;
+    const isSuccessfulResponse = event === "response" && status < 400;
+    if (isSuccessfulResponse && Math.random() >= SECURITY_METRICS_SUCCESS_SAMPLE_RATE) return;
+    const persistedPayload = isSuccessfulResponse && SECURITY_METRICS_SUCCESS_SAMPLE_RATE > 0
+      ? { ...payload, sampleWeight: Math.round(1 / SECURITY_METRICS_SUCCESS_SAMPLE_RATE) }
+      : payload;
+    void persistApiMetricEvent(endpoint, event, persistedPayload).catch((error) => {
       logSecurityEvent(endpoint, "metrics-persistence-failed", {
         message: normalizeLine(error?.message || "unknown-error").slice(0, 160),
       });
@@ -578,9 +606,16 @@ function parseHostPort(rawHost = "") {
 }
 
 function isPrivateIpv4(hostname = "") {
-  const match = String(hostname || "").match(/^(\d{1,3})(?:\.(\d{1,3})){3}$/);
-  if (!match) return false;
-  const parts = String(hostname).split(".").map((item) => Number(item));
+  const rawParts = String(hostname || "").split(".");
+  if (
+    rawParts.length !== 4
+    || rawParts.some((item) => (
+      item.length < 1
+      || item.length > 3
+      || Array.from(item).some((character) => character < "0" || character > "9")
+    ))
+  ) return false;
+  const parts = rawParts.map((item) => Number(item));
   if (parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return false;
   if (parts[0] === 10) return true;
   if (parts[0] === 127) return true;
@@ -671,7 +706,7 @@ function isSameHostRequest(req, value = "") {
 }
 
 function isOriginAllowed(req, allowedOrigins) {
-  if (!allowedOrigins.length) return true;
+  if (!allowedOrigins.length) return isDevelopmentEnvironment();
   const origin = String(req.headers?.origin || "").trim();
   const referer = String(req.headers?.referer || "").trim();
   const candidates = [origin, referer].filter(Boolean);

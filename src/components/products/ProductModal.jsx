@@ -9,6 +9,7 @@ import {
   RotateCcw,
   ShieldCheck,
   ShoppingBag,
+  Check,
 } from "lucide-react";
 import { motion as Motion, AnimatePresence } from "framer-motion";
 import { ANIMATION } from "../../constants/animation";
@@ -31,6 +32,7 @@ export function ProductModal({
   onClose,
   onChange,
   onAddToCart,
+  onOpenCart,
   cartEditMode = false,
   isAdmin,
   onEditProduct,
@@ -40,6 +42,9 @@ export function ProductModal({
   const resolvedSelection = product ? getSelectionForColor(product, selection) : null;
   const [imageIndex, setImageIndex] = useState(0);
   const [imagePreviewOpen, setImagePreviewOpen] = useState(false);
+  const [showImageHint, setShowImageHint] = useState(true);
+  const [descriptionExpanded, setDescriptionExpanded] = useState(false);
+  const [cartFeedback, setCartFeedback] = useState(null);
   const [previewScale, setPreviewScale] = useState(1);
   const [previewZoomOrigin, setPreviewZoomOrigin] = useState("50% 50%");
   const [previewPan, setPreviewPan] = useState({ x: 0, y: 0 });
@@ -64,14 +69,27 @@ export function ProductModal({
   const currentImages = product ? getImagesForColor(product, resolvedSelection?.color) : [];
   const safeImageIndex = currentImages.length ? Math.min(imageIndex, currentImages.length - 1) : 0;
   const activeImage = currentImages[safeImageIndex] || currentImages[0] || FALLBACK_IMAGE;
+  const activeImageView = product?.imageViewsByColor?.[resolvedSelection?.color]?.[safeImageIndex] || "";
   const discount = product ? discountPercent(product.price, product.oldPrice) : 0;
   const sizesForSelectedColor = product ? getSizesForColor(product, resolvedSelection?.color) : [];
   const selectedStock = product ? getStockForVariant(product, resolvedSelection?.color, resolvedSelection?.size) : 0;
   const stockStatus = getStockStatus(selectedStock);
   const isLowStock = selectedStock > 0 && selectedStock <= 2;
   const hasMultipleImages = currentImages.length > 1;
+  const hasLongDescription = String(product?.description || "").trim().length > 145;
   const previewZoomed = previewScale > 1.01;
   const isTouchLikePointer = (pointerType) => pointerType === "touch" || pointerType === "pen";
+
+  useEffect(() => {
+    const timerId = window.setTimeout(() => setShowImageHint(false), 2600);
+    return () => window.clearTimeout(timerId);
+  }, []);
+
+  useEffect(() => {
+    if (!cartFeedback) return undefined;
+    const timerId = window.setTimeout(() => setCartFeedback(null), 4500);
+    return () => window.clearTimeout(timerId);
+  }, [cartFeedback]);
   const clampPreviewPan = (pan, scale, element) => {
     const maxX = Math.max(0, (element.offsetWidth * (scale - 1)) / 2);
     const maxY = Math.max(0, (element.offsetHeight * (scale - 1)) / 2);
@@ -491,12 +509,14 @@ export function ProductModal({
                 />
               </button>
             </AnimatePresence>
-            <div className="product-modal-zoom-wrap">
-              <button type="button" className="badge badge-light modal-zoom-toggle" onClick={openImagePreview} aria-label="Abrir imagen del producto">
-                <span className="pointer-instruction">Haz clic para ampliar</span>
-                <span className="touch-instruction">Toca para ampliar</span>
-              </button>
-            </div>
+            {showImageHint && (
+              <div className="product-modal-zoom-wrap">
+                <button type="button" className="badge badge-light modal-zoom-toggle" onClick={openImagePreview} aria-label="Abrir imagen del producto">
+                  <span className="pointer-instruction">Haz clic para ampliar</span>
+                  <span className="touch-instruction">Toca para ampliar</span>
+                </button>
+              </div>
+            )}
             {hasMultipleImages && (
               <>
                 <button
@@ -563,7 +583,26 @@ export function ProductModal({
               </div>
             </div>
 
-            <p className="product-modal-description muted">{product.description}</p>
+            <div className={`product-modal-description-wrap${descriptionExpanded ? " is-expanded" : ""}`}>
+              <p className="product-modal-description muted">{product.description}</p>
+              {hasLongDescription && (
+                <button
+                  type="button"
+                  className="product-modal-description-toggle"
+                  onClick={() => setDescriptionExpanded((expanded) => !expanded)}
+                  aria-expanded={descriptionExpanded}
+                >
+                  {descriptionExpanded ? "Ver menos" : "Ver descripción completa"}
+                </button>
+              )}
+            </div>
+
+            {(activeImageView || hasMultipleImages) && (
+              <div className="product-modal-view-note" role="status">
+                <strong>{activeImageView ? `Vista ${activeImageView}` : "Galería del producto"}</strong>
+                <span>{hasMultipleImages ? "Desliza las fotos para apreciar el corte y el color." : "Revisa la foto para apreciar el corte y el color."}</span>
+              </div>
+            )}
 
             <div className="product-modal-variant-panel">
               <fieldset className="product-modal-option-group">
@@ -634,7 +673,10 @@ export function ProductModal({
                 onClick={(event) => {
                   if (selectedStock > 0) {
                     triggerHaptic("medium");
-                    onAddToCart(product, { sourceElement: event.currentTarget, image: activeImage });
+                    const added = onAddToCart(product, { sourceElement: event.currentTarget, image: activeImage, inlineFeedback: !cartEditMode });
+                    if (!cartEditMode && added !== false) {
+                      setCartFeedback({ name: product.name });
+                    }
                   }
                 }}
                 disabled={selectedStock <= 0}
@@ -660,11 +702,37 @@ export function ProductModal({
               )}
             </div>
 
+            <AnimatePresence initial={false}>
+              {cartFeedback && (
+                <Motion.div
+                  className="product-modal-cart-feedback"
+                  initial={{ opacity: 0, y: -7 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -5 }}
+                  transition={{ duration: 0.18, ease: ANIMATION.easeOut }}
+                  role="status"
+                  aria-live="polite"
+                >
+                  <span className="product-modal-cart-feedback-icon" aria-hidden="true"><Check size={15} /></span>
+                  <span className="product-modal-cart-feedback-copy">
+                    <strong>Añadido al carrito</strong>
+                    <span>{cartFeedback.name}</span>
+                  </span>
+                  <button type="button" className="product-modal-cart-feedback-action" onClick={onOpenCart}>
+                    Ver carrito
+                  </button>
+                  <button type="button" className="product-modal-cart-feedback-dismiss" onClick={() => setCartFeedback(null)} aria-label="Cerrar confirmación">
+                    <X size={14} />
+                  </button>
+                </Motion.div>
+              )}
+            </AnimatePresence>
+
             <div className="product-modal-trust-strip">
               <div className="product-modal-trust-item">
                 <Truck size={17} strokeWidth={1.5} className="trust-icon" />
                 <span className="trust-title">Envíos Seguros</span>
-                <span className="trust-subtitle">Por WhatsApp</span>
+                <span className="trust-subtitle">Coordina tu horario por WhatsApp</span>
               </div>
               <div className="product-modal-trust-divider" aria-hidden="true" />
               <div className="product-modal-trust-item">

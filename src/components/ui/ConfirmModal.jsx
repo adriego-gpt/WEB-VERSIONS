@@ -32,7 +32,10 @@ export function ConfirmModal({
   const descriptionId = useId();
 
   const onCancelRef = useRef(onCancel);
-  onCancelRef.current = onCancel;
+
+  useEffect(() => {
+    onCancelRef.current = onCancel;
+  }, [onCancel]);
 
   useEffect(() => {
     if (!open) return undefined;

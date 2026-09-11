@@ -1,7 +1,6 @@
 import { isValidEmail } from '../../utils';
 import React, { useState, useMemo, useCallback, useEffect } from 'react';
-import { motion as Motion, AnimatePresence } from 'framer-motion';
-import { RotateCcw, Plus, Package, UserRound, Navigation, ShieldCheck, Search, PencilLine, Mail, Copy, Trash2, CheckCircle2, Star, Link, Eye, AlertCircle, AlertTriangle, Play, RefreshCw, Upload, Image as ImageIcon, MapPin, SearchX, Clock, CreditCard, Tag, Tags, X, Image, ChevronDown, SlidersHorizontal, ZoomIn, MessageCircle, ExternalLink, Truck } from 'lucide-react';
+import { RotateCcw, Plus, Package, UserRound, Navigation, ShieldCheck, Search, PencilLine, Mail, Copy, Trash2, CheckCircle2, Star, Link, Eye, EyeOff, AlertCircle, AlertTriangle, Play, RefreshCw, Upload, Image as ImageIcon, MapPin, SearchX, Clock, CreditCard, Tag, Tags, X, Image, ChevronDown, SlidersHorizontal, ZoomIn, MessageCircle, ExternalLink, Truck } from 'lucide-react';
 import { ShowcaseProductCard } from "../catalog/ShowcaseProductCard";
 import { CatalogProductCard } from "../catalog/CatalogProductCard";
 import { ProductDraftPreview } from '../products/ProductDraftPreview';
@@ -12,13 +11,14 @@ import { OfferManagerPanel } from './OfferManagerPanel';
 import { ProductEditorPanel } from './ProductEditorPanel';
 import { AdminSectionHeader } from './AdminSectionHeader';
 import { BankAccountsPanel } from './BankAccountsPanel';
+import { CatalogImportPanel } from './CatalogImportPanel';
 import { ImageLightbox } from '../ui/ImageLightbox';
 import { OrderStatusProgress } from '../orders/OrderStatusProgress';
-import { normalizeOrderStatusForOrder, formatOrderDate, getOrderStatusOptions } from '../../domain/orders/status';
+import { normalizeOrderStatusForOrder, formatOrderDate, getOrderStatusMeta, getOrderStatusOptions } from '../../domain/orders/status';
 import { getImagesForColor } from '../../domain/products/variants';
-import { useModalA11y } from '../../hooks/useModalA11y';
+import { pruneSelection } from '../../domain/admin/selection';
 import {
-  ANIMATION, STORAGE_KEYS, PASSWORD_SECURITY, AUTH_FORM_DEFAULTS,
+  STORAGE_KEYS, PASSWORD_SECURITY, AUTH_FORM_DEFAULTS,
   AUTH_FIELD_LIMITS, FILE_SECURITY, PRODUCT_FORM_LIMITS, FALLBACK_IMAGE,
   PRODUCT_TYPE_OPTIONS, OFFER_TAB_VALUE, ADMIN_ORDER_DATE_FILTERS,
   ADMIN_ORDER_DELIVERY_FILTERS, ADMIN_ORDER_STATUS_FILTERS, TOAST_DURATION_MS,
@@ -37,24 +37,53 @@ function getOrderAgeMinutes(createdAt) {
   return Math.max(0, Math.round((Date.now() - createdMs) / 60000));
 }
 
+function formatOrderAge(minutes = 0) {
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ${minutes % 60}m`;
+  const days = Math.floor(hours / 24);
+  const remHours = hours % 24;
+  return remHours > 0 ? `${days}d ${remHours}h` : `${days}d`;
+}
+
 function getOrderSlaMeta(order = {}) {
   const status = normalizeOrderStatusForOrder(order.status, order.deliveryType);
   const ageMinutes = getOrderAgeMinutes(order.createdAt);
+  const formattedAge = formatOrderAge(ageMinutes);
 
   if (status === "Pendiente") {
-    if (ageMinutes >= 90) return { tone: "danger", label: "SLA crítico", ageMinutes };
-    if (ageMinutes >= 30) return { tone: "warning", label: "SLA en riesgo", ageMinutes };
-    return { tone: "success", label: "SLA saludable", ageMinutes };
+    if (ageMinutes >= 90) return { tone: "danger", label: "SLA crítico", ageMinutes, formattedAge };
+    if (ageMinutes >= 30) return { tone: "warning", label: "SLA en riesgo", ageMinutes, formattedAge };
+    return { tone: "success", label: "SLA saludable", ageMinutes, formattedAge };
   }
   if (status === "Confirmado" || status === "Preparando") {
-    if (ageMinutes >= 24 * 60) return { tone: "danger", label: "Retrasado", ageMinutes };
-    return { tone: "warning", label: "En tiempo esperado", ageMinutes };
+    if (ageMinutes >= 24 * 60) return { tone: "danger", label: "Retrasado", ageMinutes, formattedAge };
+    return { tone: "warning", label: "En tiempo esperado", ageMinutes, formattedAge };
   }
-  return { tone: "neutral", label: "SLA inactivo", ageMinutes };
+  return { tone: "neutral", label: "SLA inactivo", ageMinutes, formattedAge };
 }
 
 function getCurrentImageForProduct(product, selectedColor) {
   return getImagesForColor(product, selectedColor)[0] || FALLBACK_IMAGE;
+}
+
+function loadInventoryMovements() {
+  if (typeof window === "undefined") return [];
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem("adriego_admin_inventory_movements_v1") || "[]");
+    return Array.isArray(parsed) ? parsed.slice(0, 50) : [];
+  } catch {
+    return [];
+  }
+}
+
+function PromotionTabs({ activeTab, onChange }) {
+  return (
+    <nav className="admin-promotion-tabs" aria-label="Secciones de promociones">
+      <button className={activeTab === "ofertas" ? "active" : ""} type="button" onClick={() => onChange("ofertas")}>Ofertas</button>
+      <button className={activeTab === "cupones" ? "active" : ""} type="button" onClick={() => onChange("cupones")}>Cupones</button>
+    </nav>
+  );
 }
 
 
@@ -65,6 +94,8 @@ export function AdminPanelModal({
   setAdminTab,
   editorMessage,
   editorError,
+  realtimeSyncStatus,
+  retryRealtimeSync,
   adminProductCount,
   adminColorVariantCount,
   adminPhotoCount,
@@ -78,6 +109,10 @@ export function AdminPanelModal({
   adminCatalogQuery,
   setAdminCatalogQuery,
   onSaveOffers,
+  onImportCatalog,
+  onCreatePhotoDraft,
+  onAdjustInventory,
+  physicalStockEvents = [],
   offersSaving,
   adminCatalogProducts,
   products,
@@ -86,6 +121,7 @@ export function AdminPanelModal({
   handleDeleteProduct,
   bulkDeleteCatalogProducts,
   bulkSetCatalogFeatured,
+  bulkSetCatalogVisibility,
   toggleProductPublicVisibility,
   productForm,
   productDraftRecovery,
@@ -106,6 +142,10 @@ export function AdminPanelModal({
   handleColorFieldChange,
   removeColorVariant,
   handleColorFilesUpload,
+  onMigrateLegacyImages,
+  onMigrateAllLegacyImages,
+  catalogImageUploadStateByColor,
+  cancelCatalogImageUpload,
   addImageField,
   handleColorImageChange,
   removeImageField,
@@ -135,13 +175,16 @@ export function AdminPanelModal({
   clearAdminOrderFilters,
   adminOrderCustomerOptions,
   updateOrderStatus,
+  bulkUpdateOrderStatus,
   updateOrderGuide,
   updateOrderCourier,
+  updateOrderInternalNote,
+  orderPatchStateById,
+  retryOrderPatch,
   updateOrderPaymentProof,
   clearOrderPaymentProof,
   handleOrderProofUpload,
   deleteOrder,
-  onOpenOrderReference,
   onCopyOrderCode,
   liveOrdersEnabled,
   setLiveOrdersEnabled,
@@ -169,10 +212,14 @@ export function AdminPanelModal({
   saveManagedProductType,
   deleteManagedProductType,
   toggleManagedProductTypeActive,
+  bulkSetManagedProductTypesActive,
+  bulkDeleteManagedProductTypes,
   handleManagedFilterTagDraftChange,
   saveManagedFilterTag,
   deleteManagedFilterTag,
   toggleManagedFilterTagActive,
+  bulkSetManagedFilterTagsActive,
+  bulkDeleteManagedFilterTags,
   coupons,
   couponDraft,
   couponEditorMessage,
@@ -204,7 +251,7 @@ export function AdminPanelModal({
   copyAdminUserResetLink,
   requestDestructiveConfirmation,
 }) {
-  const containerRef = useModalA11y(open, onClose);
+  const [catalogPhotoFiles, setCatalogPhotoFiles] = useState([]);
   const [offerDraftById, setOfferDraftById] = useState({});
   const [offerDirtyById, setOfferDirtyById] = useState({});
   const [editingUserId, setEditingUserId] = useState("");
@@ -223,9 +270,170 @@ export function AdminPanelModal({
   const [adminUserCopyResetBusyId, setAdminUserCopyResetBusyId] = useState("");
   const [selectedCatalogProductIds, setSelectedCatalogProductIds] = useState([]);
   const [catalogBulkBusy, setCatalogBulkBusy] = useState(false);
-  const [expandedOrderId, setExpandedOrderId] = useState("");
+  const [selectedInventoryProductIds, setSelectedInventoryProductIds] = useState([]);
+  const [inventoryBulkBusy, setInventoryBulkBusy] = useState(false);
+  const [selectedOrderIds, setSelectedOrderIds] = useState([]);
+  const [orderBulkStatus, setOrderBulkStatus] = useState("Preparando");
+  const [orderBulkBusy, setOrderBulkBusy] = useState(false);
+  const [orderBulkFeedback, setOrderBulkFeedback] = useState(null);
+  const [expandedOrderId, setExpandedOrderId] = useState(null);
+  const [catalogQuickView, setCatalogQuickView] = useState("all");
   const [showOrderFilters, setShowOrderFilters] = useState(false);
+  const [orderQuickView, setOrderQuickView] = useState("pending");
   const [proofPreview, setProofPreview] = useState(null);
+  const [inventoryProductId, setInventoryProductId] = useState("");
+  const [inventoryVariantKey, setInventoryVariantKey] = useState("");
+  const [inventoryDelta, setInventoryDelta] = useState("");
+  const [inventoryReason, setInventoryReason] = useState("");
+  const [inventoryFeedback, setInventoryFeedback] = useState(null);
+  const [inventoryBusy, setInventoryBusy] = useState(false);
+  const [inventoryMovements, setInventoryMovements] = useState(loadInventoryMovements);
+  const visibleInventoryMovements = useMemo(() => {
+    const byId = new Map();
+    [...inventoryMovements, ...physicalStockEvents].forEach((movement) => {
+      if (movement?.id && !byId.has(String(movement.id))) byId.set(String(movement.id), movement);
+    });
+    return [...byId.values()].sort((left, right) => new Date(right.createdAt || 0) - new Date(left.createdAt || 0)).slice(0, 20);
+  }, [inventoryMovements, physicalStockEvents]);
+  const inventoryProduct = useMemo(
+    () => products.find((product) => String(product.id) === String(inventoryProductId)) || null,
+    [inventoryProductId, products],
+  );
+  const matchesOrderView = (order, view) => {
+    const status = normalizeOrderStatusForOrder(order.status, order.deliveryType);
+    if (view === "pending") return status === "Pendiente";
+    if (view === "risk") return ["warning", "danger"].includes(getOrderSlaMeta(order).tone);
+    if (view === "preparing") return ["Confirmado", "Preparando"].includes(status);
+    if (view === "sent") return status === "Enviado";
+    if (view === "pickup") return order.deliveryType === "pickup";
+    return true;
+  };
+  const operationalOrderHistory = useMemo(
+    () => filteredOrderHistory.filter((order) => matchesOrderView(order, orderQuickView)),
+    [filteredOrderHistory, orderQuickView],
+  );
+  const selectedInventorySet = useMemo(() => new Set(selectedInventoryProductIds.map(String)), [selectedInventoryProductIds]);
+  const selectedOrderSet = useMemo(() => new Set(selectedOrderIds.map(String)), [selectedOrderIds]);
+  const operationalOrderIds = useMemo(() => operationalOrderHistory.map((order) => String(order.id)), [operationalOrderHistory]);
+
+  const toggleOrderExpand = (orderId) => {
+    setExpandedOrderId((current) => (String(current) === String(orderId) ? null : orderId));
+  };
+
+  useEffect(() => {
+    const existingIds = new Set(products.map((product) => String(product.id)));
+    setSelectedInventoryProductIds((previous) => pruneSelection(previous, existingIds));
+  }, [products]);
+
+  useEffect(() => {
+    const visibleIds = new Set(operationalOrderIds);
+    setSelectedOrderIds((previous) => pruneSelection(previous, visibleIds));
+  }, [operationalOrderIds]);
+
+  const toggleInventorySelection = (productId) => {
+    const id = String(productId);
+    setSelectedInventoryProductIds((previous) => previous.includes(id) ? previous.filter((item) => item !== id) : [...previous, id]);
+  };
+
+  const toggleAllInventoryProducts = () => {
+    const ids = products.map((product) => String(product.id));
+    setSelectedInventoryProductIds(ids.every((id) => selectedInventorySet.has(id)) ? [] : ids);
+  };
+
+  const runInventoryBulkAction = async (runner) => {
+    if (!selectedInventorySet.size || inventoryBulkBusy) return;
+    setInventoryBulkBusy(true);
+    try {
+      const result = await runner([...selectedInventorySet]);
+      if (result?.ok) setSelectedInventoryProductIds([]);
+    } finally {
+      setInventoryBulkBusy(false);
+    }
+  };
+
+  const toggleOrderSelection = (orderId) => {
+    const id = String(orderId);
+    setOrderBulkFeedback(null);
+    if (!selectedOrderSet.has(id) && selectedOrderSet.size >= 25) {
+      setOrderBulkFeedback({ tone: "error", message: "Puedes procesar hasta 25 pedidos por lote." });
+      return;
+    }
+    setSelectedOrderIds((previous) => previous.includes(id) ? previous.filter((item) => item !== id) : [...previous, id]);
+  };
+
+  const toggleAllVisibleOrders = () => {
+    const limitedIds = operationalOrderIds.slice(0, 25);
+    const allSelected = limitedIds.length > 0 && limitedIds.every((id) => selectedOrderSet.has(id));
+    setSelectedOrderIds(allSelected ? [] : limitedIds);
+    setOrderBulkFeedback(operationalOrderIds.length > 25 && !allSelected
+      ? { tone: "warning", message: "Seleccionamos los primeros 25 pedidos visibles para proteger la operación." }
+      : null);
+  };
+
+  const applyBulkOrderStatus = async () => {
+    if (!selectedOrderSet.size || orderBulkBusy) return;
+    if (orderBulkStatus === "Cancelado") {
+      const confirmed = await requestDestructiveConfirmation({
+        title: `¿Cancelar ${selectedOrderSet.size} pedido${selectedOrderSet.size === 1 ? "" : "s"}?`,
+        description: "El stock reservado puede reintegrarse. Revisa los pedidos seleccionados antes de continuar.",
+      });
+      if (!confirmed) return;
+    }
+    setOrderBulkBusy(true);
+    setOrderBulkFeedback(null);
+    try {
+      const result = await bulkUpdateOrderStatus([...selectedOrderSet], orderBulkStatus);
+      if (result?.ok) {
+        setSelectedOrderIds([]);
+        setOrderBulkFeedback({ tone: "success", message: `${result.updated} pedido(s) actualizados.` });
+      } else {
+        setOrderBulkFeedback({ tone: "error", message: result?.message || "No pudimos completar la acción masiva." });
+      }
+    } catch {
+      setOrderBulkFeedback({ tone: "error", message: "La conexión falló. Los pedidos siguen seleccionados para que puedas reintentar." });
+    } finally {
+      setOrderBulkBusy(false);
+    }
+  };
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem("adriego_admin_inventory_movements_v1", JSON.stringify(inventoryMovements.slice(0, 50)));
+    } catch {
+      // The catalog adjustment is still saved remotely; only this local audit view is optional.
+    }
+  }, [inventoryMovements]);
+
+  const submitInventoryMovement = async (event) => {
+    event.preventDefault();
+    if (inventoryBusy) return;
+    let variant = [];
+    try { variant = JSON.parse(inventoryVariantKey); } catch { variant = []; }
+    setInventoryBusy(true);
+    setInventoryFeedback(null);
+    try {
+      const result = await onAdjustInventory({
+        productId: inventoryProductId,
+        color: variant[0],
+        size: variant[1],
+        delta: Number(inventoryDelta),
+        reason: inventoryReason,
+      });
+      if (!result?.ok) {
+        setInventoryFeedback({ tone: "error", message: result?.message || "No se pudo guardar el movimiento." });
+        return;
+      }
+      setInventoryMovements((current) => [result.movement, ...current].slice(0, 50));
+      setInventoryDelta("");
+      setInventoryReason("");
+      setInventoryFeedback({ tone: "success", message: "Movimiento guardado y stock sincronizado." });
+    } catch {
+      setInventoryFeedback({ tone: "error", message: "La conexión falló. No se cambió el stock; puedes reintentar." });
+    } finally {
+      setInventoryBusy(false);
+    }
+  };
 
   const createOfferDraftFromProduct = useCallback((product) => {
     const offerMode = normalizeOfferDiscountMode(product.offerDiscountMode);
@@ -247,35 +455,42 @@ export function AdminPanelModal({
 
   const tabGroups = [
     {
-      label: "Operación",
+      label: "Hoy",
       tabs: [
-        { id: "resumen", label: "Resumen" },
-        { id: "pedidos", label: "Pedidos" },
-        { id: "usuarios", label: "Usuarios" },
+        { id: "resumen", label: "Resumen", description: "Prioridades, alertas y actividad de la tienda.", icon: CheckCircle2 },
       ],
     },
     {
-      label: "Catálogo",
+      label: "Vender",
       tabs: [
-        { id: "catalogo", label: "Productos" },
-        { id: "producto", label: productForm.id ? "Editar producto" : "Nuevo producto" },
-        { id: "ofertas", label: "Ofertas" },
-        { id: "taxonomias", label: "Tipos y filtros" },
-        { id: "cupones", label: "Cupones" },
+        { id: "catalogo", label: "Catálogo", description: "Busca, filtra y administra todos los productos.", icon: Package },
+        { id: "producto", label: productForm.id ? "Editar producto" : "Nuevo producto", description: "Información, variantes, fotografías y publicación.", icon: Plus },
+        { id: "importar", label: "Importar", description: "Carga y valida catálogos CSV sin modificar datos por error.", icon: Upload },
+        { id: "inventario", label: "Inventario", description: "Controla existencias y registra cada movimiento.", icon: Package, badge: adminLowStockCount + adminOutOfStockCount },
+        { id: "ofertas", label: "Ofertas", description: "Configura precios promocionales y cambios pendientes.", icon: Star },
+        { id: "cupones", label: "Cupones", description: "Crea reglas, vigencias y simulaciones de descuento.", icon: Tag },
+      ],
+    },
+    {
+      label: "Clientes",
+      tabs: [
+        { id: "pedidos", label: "Pedidos", description: "Prioriza, prepara y da seguimiento a las órdenes.", icon: Truck, badge: adminPendingOrders },
+        { id: "usuarios", label: "Clientes", description: "Consulta cuentas y datos necesarios para atender pedidos.", icon: UserRound },
       ],
     },
     {
       label: "Tienda",
       tabs: [
-        { id: "cuentas", label: "Cuentas bancarias" },
-        { id: "contacto", label: "Contacto" },
-        { id: "portada", label: "Portada y Envíos" },
+        { id: "taxonomias", label: "Tipos y tags", description: "Organiza los datos maestros usados por el catálogo.", icon: Tags },
+        { id: "portada", label: "Portada y Envíos", description: "Edita la presentación, entrega y retiro de la tienda.", icon: Image },
+        { id: "cuentas", label: "Cuentas bancarias", description: "Administra las cuentas visibles al confirmar pedidos.", icon: CreditCard },
+        { id: "contacto", label: "Contacto", description: "Actualiza WhatsApp, ubicación y canales de atención.", icon: MapPin },
       ],
     },
     {
       label: "Sistema",
       tabs: [
-        { id: "seguridad", label: "Seguridad" },
+        { id: "seguridad", label: "Seguridad", description: "Revisa actividad, límites y cuentas administrativas.", icon: ShieldCheck },
       ],
     },
   ];
@@ -303,12 +518,6 @@ export function AdminPanelModal({
     () => new Set(selectedCatalogProductIds.map((entry) => String(entry))),
     [selectedCatalogProductIds],
   );
-  const selectedVisibleCatalogCount = useMemo(
-    () => visibleCatalogProductIds.filter((id) => selectedCatalogSet.has(id)).length,
-    [selectedCatalogSet, visibleCatalogProductIds],
-  );
-  const allVisibleCatalogSelected = visibleCatalogProductIds.length > 0 && selectedVisibleCatalogCount === visibleCatalogProductIds.length;
-
   const startEditingUser = (user) => {
     const safeUser = user || {};
     const userId = String(safeUser.id || "");
@@ -339,13 +548,14 @@ export function AdminPanelModal({
   const saveEditingUser = async () => {
     if (!editingUserId || adminUserSaveBusy) return;
     setAdminUserSaveBusy(true);
-    const result = await saveAdminUser({
-      userId: editingUserId,
-      ...adminUserDraft,
-    });
-    setAdminUserSaveBusy(false);
-    if (result?.ok) {
-      cancelEditingUser();
+    try {
+      const result = await saveAdminUser({
+        userId: editingUserId,
+        ...adminUserDraft,
+      });
+      if (result?.ok) cancelEditingUser();
+    } finally {
+      setAdminUserSaveBusy(false);
     }
   };
 
@@ -359,12 +569,14 @@ export function AdminPanelModal({
     });
     if (!confirmed) return;
     setAdminUserDeleteBusyId(userId);
-    await removeAdminUser(userId);
-    setAdminUserDeleteBusyId("");
-    if (editingUserId === userId) {
-      cancelEditingUser();
+    try {
+      const result = await removeAdminUser(userId);
+      if (!result?.ok) return;
+      if (editingUserId === userId) cancelEditingUser();
+      if (expandedUserId === userId) setExpandedUserId("");
+    } finally {
+      setAdminUserDeleteBusyId("");
     }
-    if (expandedUserId === userId) setExpandedUserId("");
   };
 
   const sendResetLinkToUser = async (user) => {
@@ -409,14 +621,16 @@ export function AdminPanelModal({
     });
   };
 
-  const toggleSelectAllVisibleCatalogProducts = () => {
-    if (!visibleCatalogProductIds.length) return;
+  const toggleSelectAllVisibleCatalogProducts = (requestedIds = visibleCatalogProductIds) => {
+    const targetIds = requestedIds.map((id) => String(id)).filter(Boolean);
+    if (!targetIds.length) return;
     setSelectedCatalogProductIds((previous) => {
       const set = new Set(previous.map((entry) => String(entry)));
-      if (allVisibleCatalogSelected) {
-        visibleCatalogProductIds.forEach((id) => set.delete(id));
+      const allTargetsSelected = targetIds.every((id) => set.has(id));
+      if (allTargetsSelected) {
+        targetIds.forEach((id) => set.delete(id));
       } else {
-        visibleCatalogProductIds.forEach((id) => set.add(id));
+        targetIds.forEach((id) => set.add(id));
       }
       return [...set];
     });
@@ -447,7 +661,7 @@ export function AdminPanelModal({
   };
 
   useEffect(() => {
-    setSelectedCatalogProductIds((previous) => previous.filter((id) => visibleCatalogProductIds.includes(String(id))));
+    setSelectedCatalogProductIds((previous) => pruneSelection(previous, visibleCatalogProductIds));
   }, [visibleCatalogProductIds]);
 
   if (!open) return null;
@@ -506,10 +720,14 @@ export function AdminPanelModal({
         offerDiscountValue: draft.offerDiscountValue,
       };
     });
-    const result = await onSaveOffers(payload);
-    if (result?.ok) {
-      setOfferDraftById({});
-      setOfferDirtyById({});
+    try {
+      const result = await onSaveOffers(payload);
+      if (result?.ok) {
+        setOfferDraftById({});
+        setOfferDirtyById({});
+      }
+    } catch {
+      // Keep every pending draft so the administrator can retry without re-entering values.
     }
   };
 
@@ -541,30 +759,18 @@ export function AdminPanelModal({
     orderDateFilter !== "all",
     Boolean(orderCustomerFilter.trim()),
   ].filter(Boolean).length;
+  const activeTabMeta = tabGroups.flatMap((group) => group.tabs).find((tab) => tab.id === adminTab)
+    || tabGroups[0].tabs[0];
 
   return (
     <>
-    <AnimatePresence>
-      <Motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="modal-backdrop" onClick={onClose}>
-        <Motion.div
-          ref={containerRef}
-          role="dialog"
-          aria-modal="true"
-          aria-label="Panel de administración"
-          initial={{ opacity: 0, y: 24, scale: 0.98 }}
-          animate={{ opacity: 1, y: 0, scale: 1 }}
-          exit={{ opacity: 0, y: 18, scale: 0.98 }}
-          transition={{ duration: ANIMATION.base }}
-          className="admin-modal-shell"
-          onClick={(event) => event.stopPropagation()}
-        >
-          <button type="button" className="icon-btn admin-modal-close-top" onClick={onClose} aria-label="Cerrar panel admin">
-            <X size={18} />
-          </button>
+      <main className="admin-workspace-root" aria-label="Panel de administración">
+        <a className="admin-skip-link" href="#admin-main-content">Saltar al contenido</a>
+        <div className="admin-modal-shell">
           <div className="admin-sidebar-nav">
             <div className="admin-sidebar-heading">
-              <h3>Administración</h3>
-              <p>Acciones de tienda y operación.</p>
+              <h3>Adriego Admin</h3>
+              <p>Tu centro de operación.</p>
             </div>
             <nav className="admin-nav-groups" aria-label="Secciones administrativas">
               {tabGroups.map((group) => (
@@ -572,18 +778,57 @@ export function AdminPanelModal({
                   <p className="admin-nav-group-label">{group.label}</p>
                   <div className="admin-nav-group-items">
                     {group.tabs.map((tab) => (
-                      <button key={tab.id} className={`admin-tab-btn ${adminTab === tab.id ? "active" : ""}`} onClick={() => setAdminTab(tab.id)}>{tab.label}</button>
+                        <button type="button"
+                          key={tab.id}
+                          className={`admin-tab-btn ${adminTab === tab.id ? "active" : ""}`}
+                          onClick={() => setAdminTab(tab.id)}
+                          aria-current={adminTab === tab.id ? "page" : undefined}
+                        >
+                          {React.createElement(tab.icon, { size: 16, "aria-hidden": true })}
+                          <span>{tab.label}</span>
+                          {Number(tab.badge) > 0 && <em aria-label={`${tab.badge} pendientes`}>{Math.min(tab.badge, 99)}</em>}
+                        </button>
                     ))}
                   </div>
                 </div>
               ))}
             </nav>
-            <button className="btn btn-outline admin-panel-close-btn" onClick={onClose}><X size={16} />Cerrar panel</button>
+            <button type="button" className="btn btn-outline admin-panel-close-btn" onClick={onClose}><ExternalLink size={16} />Volver a la tienda</button>
           </div>
 
-          <div className="admin-modal-content">
-            {(editorMessage || editorError) && (
+          <div className="admin-modal-content" id="admin-main-content" tabIndex="-1">
+            <header className="admin-workspace-topbar">
               <div>
+                <strong>{activeTabMeta.label}</strong>
+                <span>{activeTabMeta.description}</span>
+              </div>
+              <div className="admin-topbar-actions">
+                <span
+                  className={`admin-sync-status is-${realtimeSyncStatus?.state || "checking"}`}
+                  role="status"
+                  title={realtimeSyncStatus?.message || "Estado de sincronización"}
+                >
+                  <i aria-hidden="true" />
+                  {realtimeSyncStatus?.state === "synced"
+                    ? "Sincronizado"
+                    : realtimeSyncStatus?.state === "offline"
+                      ? "Sin conexión"
+                      : realtimeSyncStatus?.state === "deferred"
+                        ? "Cambios pendientes"
+                      : realtimeSyncStatus?.state === "error"
+                        ? "Error de sincronización"
+                        : "Comprobando…"}
+                </span>
+                {(realtimeSyncStatus?.state === "offline" || realtimeSyncStatus?.state === "error") && (
+                  <button type="button" className="admin-sync-retry" onClick={retryRealtimeSync}>
+                    <RefreshCw size={13} /> Reintentar
+                  </button>
+                )}
+                <button type="button" className="btn btn-outline" onClick={onClose}><ExternalLink size={16} />Ver tienda</button>
+              </div>
+            </header>
+            {(editorMessage || editorError) && (
+              <div aria-live="polite" aria-atomic="true">
                 {editorMessage && <div className="status-message status-success">{editorMessage}</div>}
                 {editorError && <div className="status-message status-error" style={{ marginTop: editorMessage ? 10 : 0 }}>{editorError}</div>}
               </div>
@@ -597,74 +842,149 @@ export function AdminPanelModal({
                     description="Inventario, ventas, pedidos y seguridad en una sola vista."
                     actions={(
                       <>
-                      <button className="btn btn-soft" onClick={() => refreshAdminUsers({ force: true, preferCache: false })} disabled={adminUsersBusy}>
+                      <button type="button" className="btn btn-soft" onClick={() => refreshAdminUsers({ force: true, preferCache: false })} disabled={adminUsersBusy}>
                         <RotateCcw size={16} />
-                        {adminUsersBusy ? "Usuarios..." : "Usuarios"}
+                        {adminUsersBusy ? "Usuarios…" : "Usuarios"}
                       </button>
-                      <button className="btn btn-soft" onClick={() => refreshSecurityMetrics({ force: true, preferCache: false })} disabled={securityMetricsBusy}>
+                      <button type="button" className="btn btn-soft" onClick={() => refreshSecurityMetrics({ force: true, preferCache: false })} disabled={securityMetricsBusy}>
                         <RotateCcw size={16} />
-                        {securityMetricsBusy ? "Seguridad..." : "Seguridad"}
+                        {securityMetricsBusy ? "Seguridad…" : "Seguridad"}
                       </button>
                       </>
                     )}
                   />
 
                   <div className="admin-kpi-grid" style={{ marginTop: 18 }}>
-                    <div className="admin-kpi-card">
+                    <div
+                      className="admin-kpi-card is-interactive"
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => { setAdminCatalogQuery(""); setCatalogQuickView("all"); setAdminTab("catalogo"); }}
+                      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setAdminCatalogQuery(""); setCatalogQuickView("all"); setAdminTab("catalogo"); } }}
+                    >
                       <p className="admin-kpi-title">Productos</p>
                       <strong className="admin-kpi-value">{adminProductCount}</strong>
-                      <p className="admin-kpi-hint">{adminOutOfStockCount} sin stock · {adminLowStockCount} stock bajo</p>
+                      <div className="admin-kpi-actions-row">
+                        <button
+                          type="button"
+                          className="admin-kpi-pill is-danger"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setAdminCatalogQuery("");
+                            setCatalogQuickView("out");
+                            setAdminTab("catalogo");
+                          }}
+                          title="Filtrar productos sin stock en el catálogo"
+                        >
+                          {adminOutOfStockCount} sin stock
+                        </button>
+                        <button
+                          type="button"
+                          className="admin-kpi-pill is-warning"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setAdminCatalogQuery("");
+                            setCatalogQuickView("low");
+                            setAdminTab("catalogo");
+                          }}
+                          title="Filtrar productos con stock bajo en el catálogo"
+                        >
+                          {adminLowStockCount} stock bajo
+                        </button>
+                      </div>
                     </div>
-                    <div className="admin-kpi-card">
+
+                    <div
+                      className="admin-kpi-card is-interactive"
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => { setAdminCatalogQuery(""); setCatalogQuickView("all"); setAdminTab("catalogo"); }}
+                      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setAdminCatalogQuery(""); setCatalogQuickView("all"); setAdminTab("catalogo"); } }}
+                    >
                       <p className="admin-kpi-title">Cobertura de catálogo</p>
                       <strong className="admin-kpi-value">{adminColorVariantCount}</strong>
-                      <p className="admin-kpi-hint">{adminPhotoCount} fotos cargadas</p>
+                      <p className="admin-kpi-hint">{adminPhotoCount} fotos cargadas · Ver catálogo</p>
                     </div>
-                    <div className="admin-kpi-card">
+
+                    <div
+                      className="admin-kpi-card is-interactive"
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => { setOrderQuickView("pending"); setAdminTab("pedidos"); }}
+                      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setOrderQuickView("pending"); setAdminTab("pedidos"); } }}
+                    >
                       <p className="admin-kpi-title">Pedidos pendientes</p>
                       <strong className="admin-kpi-value">{adminPendingOrders}</strong>
-                      <p className="admin-kpi-hint">{adminOrdersToday} pedidos hoy</p>
+                      <p className="admin-kpi-hint">{adminOrdersToday} pedidos hoy · Ver pendientes</p>
                     </div>
-                    <div className="admin-kpi-card">
+
+                    <div
+                      className="admin-kpi-card is-interactive"
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => setAdminTab("usuarios")}
+                      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setAdminTab("usuarios"); } }}
+                    >
                       <p className="admin-kpi-title">Usuarios registrados</p>
                       <strong className="admin-kpi-value">{adminRegisteredUsers}</strong>
-                      <p className="admin-kpi-hint">Gestiona cuentas en la pestaña Usuarios</p>
+                      <p className="admin-kpi-hint">Gestionar cuentas de clientes</p>
                     </div>
-                    <div className="admin-kpi-card">
+
+                    <div
+                      className="admin-kpi-card is-interactive"
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => { setOrderQuickView("all"); setAdminTab("pedidos"); }}
+                      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setOrderQuickView("all"); setAdminTab("pedidos"); } }}
+                    >
                       <p className="admin-kpi-title">Ventas acumuladas</p>
                       <strong className="admin-kpi-value" style={{ fontSize: 20 }}>{currency(adminRevenueTotal)}</strong>
                       <p className="admin-kpi-hint">Ticket promedio: {currency(adminAverageOrderTotal)}</p>
                     </div>
-                    <div className="admin-kpi-card">
+
+                    <div
+                      className="admin-kpi-card is-interactive"
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => setAdminTab("seguridad")}
+                      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setAdminTab("seguridad"); } }}
+                    >
                       <p className="admin-kpi-title">Eventos de seguridad</p>
                       <strong className="admin-kpi-value">{securityTotals.rateLimited + securityTotals.csrfRejected + securityTotals.errors}</strong>
-                      <p className="admin-kpi-hint">Rate-limit + CSRF + errores</p>
+                      <p className="admin-kpi-hint">Ver panel de seguridad</p>
                     </div>
-                    <div className="admin-kpi-card">
-                      <p className="admin-kpi-title">Ultima lectura</p>
+
+                    <div
+                      className="admin-kpi-card is-interactive"
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => setAdminTab("seguridad")}
+                      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setAdminTab("seguridad"); } }}
+                    >
+                      <p className="admin-kpi-title">Última lectura</p>
                       <strong className="admin-kpi-value" style={{ fontSize: 16 }}>{formatAdminTimestamp(securityMetricsUpdatedAt || securityMetrics?.generatedAt)}</strong>
                       <p className="admin-kpi-hint">Monitoreo en tiempo real</p>
                     </div>
                   </div>
 
                   <div className="admin-quick-actions" style={{ marginTop: 18 }}>
-                    <button className="btn btn-primary" onClick={() => { resetEditor(); setAdminTab("producto"); }}>
+                    <button type="button" className="btn btn-primary" onClick={() => { resetEditor(); setAdminTab("producto"); }}>
                       <Plus size={16} />
                       Nuevo producto
                     </button>
-                    <button className="btn btn-outline" onClick={() => setAdminTab("pedidos")}>
+                    <button type="button" className="btn btn-outline" onClick={() => setAdminTab("pedidos")}>
                       <Package size={16} />
                       Revisar pedidos
                     </button>
-                    <button className="btn btn-outline" onClick={() => setAdminTab("usuarios")}>
+                    <button type="button" className="btn btn-outline" onClick={() => setAdminTab("usuarios")}>
                       <UserRound size={16} />
                       Gestionar usuarios
                     </button>
-                    <button className="btn btn-outline" onClick={() => setAdminTab("contacto")}>
+                    <button type="button" className="btn btn-outline" onClick={() => setAdminTab("contacto")}>
                       <Navigation size={16} />
                       Editar contacto
                     </button>
-                    <button className="btn btn-outline" onClick={() => setAdminTab("seguridad")}>
+                    <button type="button" className="btn btn-outline" onClick={() => setAdminTab("seguridad")}>
                       <ShieldCheck size={16} />
                       Ver seguridad
                     </button>
@@ -682,9 +1002,9 @@ export function AdminPanelModal({
                     meta={<span className="admin-count-label">{visibleAdminUsers.length} visibles</span>}
                     actions={(
                       <>
-                      <button className="btn btn-soft" onClick={() => refreshAdminUsers({ force: true, preferCache: false })} disabled={adminUsersBusy}>
+                      <button type="button" className="btn btn-soft" onClick={() => refreshAdminUsers({ force: true, preferCache: false })} disabled={adminUsersBusy}>
                         <RotateCcw size={16} />
-                        {adminUsersBusy ? "Actualizando..." : "Actualizar"}
+                        {adminUsersBusy ? "Actualizando…" : "Actualizar"}
                       </button>
                       </>
                     )}
@@ -708,7 +1028,7 @@ export function AdminPanelModal({
 
                   <div className="admin-list admin-users-list">
                     {visibleAdminUsers.length === 0 ? (
-                      <div className="empty-admin-note">{adminUsersBusy ? "Cargando usuarios..." : "No hay usuarios que coincidan con la búsqueda."}</div>
+                      <div className="empty-admin-note">{adminUsersBusy ? "Cargando usuarios…" : "No hay usuarios que coincidan con la búsqueda."}</div>
                     ) : visibleAdminUsers.map((user) => {
                       const userId = String(user.id || "");
                       const isEditing = editingUserId === userId;
@@ -754,20 +1074,20 @@ export function AdminPanelModal({
                               <div className="admin-actions admin-user-actions">
                                 {!isEditing ? (
                                   <>
-                                    <button className="btn btn-soft" onClick={() => startEditingUser(user)}><PencilLine size={16} />Editar datos</button>
+                                    <button type="button" className="btn btn-soft" onClick={() => startEditingUser(user)}><PencilLine size={16} />Editar datos</button>
                                     <details className="admin-row-menu">
                                       <summary className="btn btn-outline">Más acciones<ChevronDown size={14} /></summary>
                                       <div className="admin-row-menu-popover">
-                                        <button className="btn btn-soft" onClick={() => { void sendResetLinkToUser(user); }} disabled={!canResetPassword || isResetting || isCopyingReset} title={canResetPassword ? "Enviar correo de restablecimiento" : "El usuario no tiene un correo válido"}><Mail size={16} />{isResetting ? "Enviando..." : "Enviar restablecimiento"}</button>
-                                        <button className="btn btn-soft" onClick={() => { void copyResetLinkForUser(user); }} disabled={!canResetPassword || isCopyingReset || isResetting} title={canResetPassword ? "Generar y copiar enlace de restablecimiento" : "El usuario no tiene un correo válido"}><Copy size={16} />{isCopyingReset ? "Copiando..." : "Copiar enlace"}</button>
-                                        <button className="btn btn-danger" onClick={() => { void deleteUserFromAdmin(user); }} disabled={isDeleting}><Trash2 size={16} />{isDeleting ? "Eliminando..." : "Eliminar usuario"}</button>
+                                        <button type="button" className="btn btn-soft" onClick={() => { void sendResetLinkToUser(user); }} disabled={!canResetPassword || isResetting || isCopyingReset} title={canResetPassword ? "Enviar correo de restablecimiento" : "El usuario no tiene un correo válido"}><Mail size={16} />{isResetting ? "Enviando…" : "Enviar restablecimiento"}</button>
+                                        <button type="button" className="btn btn-soft" onClick={() => { void copyResetLinkForUser(user); }} disabled={!canResetPassword || isCopyingReset || isResetting} title={canResetPassword ? "Generar y copiar enlace de restablecimiento" : "El usuario no tiene un correo válido"}><Copy size={16} />{isCopyingReset ? "Copiando…" : "Copiar enlace"}</button>
+                                        <button type="button" className="btn btn-danger" onClick={() => { void deleteUserFromAdmin(user); }} disabled={isDeleting}><Trash2 size={16} />{isDeleting ? "Eliminando…" : "Eliminar usuario"}</button>
                                       </div>
                                     </details>
                                   </>
                                 ) : (
                                   <>
-                                    <button className="btn btn-primary" onClick={() => { void saveEditingUser(); }} disabled={adminUserSaveBusy}><ShieldCheck size={16} />{adminUserSaveBusy ? "Guardando..." : "Guardar cambios"}</button>
-                                    <button className="btn btn-outline" onClick={cancelEditingUser}><X size={16} />Cancelar</button>
+                                    <button type="button" className="btn btn-primary" onClick={() => { void saveEditingUser(); }} disabled={adminUserSaveBusy}><ShieldCheck size={16} />{adminUserSaveBusy ? "Guardando…" : "Guardar cambios"}</button>
+                                    <button type="button" className="btn btn-outline" onClick={cancelEditingUser}><X size={16} />Cancelar</button>
                                   </>
                                 )}
                               </div>
@@ -787,8 +1107,9 @@ export function AdminPanelModal({
                   products={adminCatalogProducts}
                   query={adminCatalogQuery}
                   onQueryChange={setAdminCatalogQuery}
+                  quickView={catalogQuickView}
+                  onQuickViewChange={setCatalogQuickView}
                   selectedSet={selectedCatalogSet}
-                  allVisibleSelected={allVisibleCatalogSelected}
                   bulkBusy={catalogBulkBusy}
                   getProductImage={getCurrentImageForProduct}
                   onCreate={() => { resetEditor(); setAdminTab("producto"); }}
@@ -816,15 +1137,83 @@ export function AdminPanelModal({
                     );
                   }}
                   onToggleVisibility={toggleProductPublicVisibility}
-                  onEdit={(product) => { startEditingProduct(product); setAdminTab("producto"); }}
+                  onEdit={startEditingProduct}
                   onDuplicate={duplicateProduct}
                   onDelete={handleDeleteProduct}
                 />
               </div>
             )}
 
+              <div className="admin-tab-panel" hidden={adminTab !== "importar"} style={adminTab !== "importar" ? { display: "none" } : undefined}>
+              <CatalogImportPanel
+                products={products}
+                onImport={onImportCatalog}
+                onCreatePhotoDraft={onCreatePhotoDraft}
+                photoFiles={catalogPhotoFiles}
+                onPhotoFilesChange={setCatalogPhotoFiles}
+              />
+              </div>
+            {adminTab === "inventario" && (
+              <div className="admin-tab-panel">
+                <section className="admin-workspace admin-inventory-workspace">
+                  <AdminSectionHeader title="Inventario" description="Detecta agotados y stock bajo; abre el producto para ajustar sus variantes con seguridad." meta={<span className="admin-count-label">{adminOutOfStockCount + adminLowStockCount} requieren atención</span>} />
+                  <div className="inventory-summary-strip">
+                    <button type="button" onClick={() => { setAdminCatalogQuery(""); setCatalogQuickView("all"); setAdminTab("catalogo"); }}>
+                      <strong>{adminProductCount}</strong><span>Productos</span>
+                    </button>
+                    <button type="button" className="is-warning" onClick={() => { setAdminCatalogQuery(""); setCatalogQuickView("low"); setAdminTab("catalogo"); }}>
+                      <strong>{adminLowStockCount}</strong><span>Stock bajo</span>
+                    </button>
+                    <button type="button" className="is-danger" onClick={() => { setAdminCatalogQuery(""); setCatalogQuickView("out"); setAdminTab("catalogo"); }}>
+                      <strong>{adminOutOfStockCount}</strong><span>Agotados</span>
+                    </button>
+                  </div>
+                  <form className="inventory-adjustment-form" onSubmit={submitInventoryMovement}>
+                    <div className="inventory-adjustment-heading"><strong>Registrar movimiento</strong><span>Entrada positiva o salida negativa. Cada cambio se sincroniza por separado.</span></div>
+                    <label><span>Producto</span><select className="select" value={inventoryProductId} onChange={(event) => { setInventoryProductId(event.target.value); setInventoryVariantKey(""); }}><option value="">Seleccionar producto</option>{products.map((product) => <option key={product.id} value={product.id}>{product.name}</option>)}</select></label>
+                    <label><span>Variante</span><select className="select" value={inventoryVariantKey} disabled={!inventoryProduct} onChange={(event) => setInventoryVariantKey(event.target.value)}><option value="">Seleccionar variante</option>{(inventoryProduct?.variants || []).map((variant) => <option key={`${variant.color}-${variant.size}`} value={JSON.stringify([variant.color, variant.size])}>{variant.color} / {variant.size} · {variant.stock || 0} disponibles</option>)}</select></label>
+                    <label><span>Cantidad</span><input className="input" type="number" step="1" placeholder="Ej. 5 o -2" value={inventoryDelta} onChange={(event) => setInventoryDelta(event.target.value)} /></label>
+                    <label className="inventory-reason-field"><span>Motivo</span><input className="input" maxLength={120} placeholder="Ej. Conteo físico o devolución" value={inventoryReason} onChange={(event) => setInventoryReason(event.target.value)} /></label>
+                    <button className="btn btn-primary" type="submit" disabled={inventoryBusy}>{inventoryBusy ? "Guardando…" : "Guardar movimiento"}</button>
+                    {inventoryFeedback && <div className={`status-message status-${inventoryFeedback.tone}`} role="status" aria-live="polite">{inventoryFeedback.message}</div>}
+                  </form>
+                  {visibleInventoryMovements.length > 0 && <div className="inventory-movement-log"><strong>Movimientos recientes</strong>{visibleInventoryMovements.slice(0, 12).map((movement) => <div key={movement.id}><span>{new Intl.DateTimeFormat("es-EC", { dateStyle: "short", timeStyle: "short" }).format(new Date(movement.createdAt))}</span><b>{movement.productName} · {movement.color}/{movement.size}</b><em className={movement.delta > 0 ? "is-positive" : "is-negative"}>{movement.delta > 0 ? "+" : ""}{movement.delta}</em><span>{movement.reason}{movement.status === "reverted" ? " · Deshecho" : ""}</span></div>)}</div>}
+                  {products.length > 0 && (
+                    <div className={`inventory-bulk-bar${selectedInventorySet.size ? " has-selection" : ""}`}>
+                      <label className="admin-selection-control">
+                        <input type="checkbox" checked={products.every((product) => selectedInventorySet.has(String(product.id)))} onChange={toggleAllInventoryProducts} />
+                        <span>{selectedInventorySet.size ? `${selectedInventorySet.size} seleccionados` : "Seleccionar inventario"}</span>
+                      </label>
+                      {selectedInventorySet.size > 0 && (
+                        <div className="inventory-bulk-actions">
+                          <button className="btn btn-soft" type="button" disabled={inventoryBulkBusy} onClick={() => runInventoryBulkAction((ids) => bulkSetCatalogVisibility(ids, true))}><Eye size={15} />Publicar</button>
+                          <button className="btn btn-outline" type="button" disabled={inventoryBulkBusy} onClick={() => runInventoryBulkAction((ids) => bulkSetCatalogVisibility(ids, false))}><EyeOff size={15} />Ocultar</button>
+                          <button className="btn btn-danger" type="button" disabled={inventoryBulkBusy} onClick={async () => {
+                            const count = selectedInventorySet.size;
+                            const confirmed = await requestDestructiveConfirmation({
+                              title: `¿Eliminar ${count} producto${count === 1 ? "" : "s"}?`,
+                              description: "Se eliminarán del catálogo y del inventario. Esta acción no se puede deshacer.",
+                            });
+                            if (confirmed) void runInventoryBulkAction(bulkDeleteCatalogProducts);
+                          }}><Trash2 size={15} />Eliminar</button>
+                          {inventoryBulkBusy && <span className="bulk-action-progress" role="status" aria-live="polite">Procesando acción...</span>}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  <div className="inventory-product-list">
+                    {products.map((product) => {
+                      const stock = (product.variants || []).reduce((total, variant) => total + Math.max(0, Number(variant.stock) || 0), 0);
+                      return <article key={product.id} className={selectedInventorySet.has(String(product.id)) ? "is-selected" : ""}><label className="inventory-row-selector" aria-label={`Seleccionar ${product.name}`}><input type="checkbox" checked={selectedInventorySet.has(String(product.id))} onChange={() => toggleInventorySelection(product.id)} /></label><div><strong>{product.name}</strong><span>{product.sku || "Sin SKU"} · {(product.variants || []).length} variantes</span></div><span className={`inventory-stock${stock === 0 ? " is-danger" : stock <= 5 ? " is-warning" : ""}`}>{stock} unidades</span><button className="btn btn-outline" type="button" onClick={() => startEditingProduct(product)}><PencilLine size={15} />Ajustar</button></article>;
+                    })}
+                  </div>
+                </section>
+              </div>
+            )}
+
             {adminTab === "ofertas" && (
               <div className="admin-tab-panel">
+                <PromotionTabs activeTab={adminTab} onChange={setAdminTab} />
                 <OfferManagerPanel
                   products={adminCatalogProducts}
                   query={adminCatalogQuery}
@@ -839,7 +1228,7 @@ export function AdminPanelModal({
                   onUpdateDraft={updateOfferDraft}
                   onReset={resetOfferDrafts}
                   onSave={() => { void handleSaveOffersDraft(); }}
-                  onEditProduct={(product) => { startEditingProduct(product); setAdminTab("producto"); }}
+                  onEditProduct={startEditingProduct}
                 />
               </div>
             )}
@@ -871,6 +1260,10 @@ export function AdminPanelModal({
                     onColorFieldChange={handleColorFieldChange}
                     onRemoveColor={removeColorVariant}
                     onColorFilesUpload={handleColorFilesUpload}
+                    onMigrateLegacyImages={onMigrateLegacyImages}
+                    onMigrateAllLegacyImages={onMigrateAllLegacyImages}
+                    imageUploadStateByColor={catalogImageUploadStateByColor}
+                    onCancelImageUpload={cancelCatalogImageUpload}
                     onAddImageField={addImageField}
                     onColorImageChange={handleColorImageChange}
                     onRemoveImageField={removeImageField}
@@ -901,7 +1294,7 @@ export function AdminPanelModal({
                         <p className="muted" style={{ textTransform: "uppercase", letterSpacing: ".25em", fontSize: 13 }}>{productForm.id ? "Edicion" : "Alta"}</p>
                         <h4 style={{ margin: "6px 0 0", fontSize: 28 }}>{productForm.id ? "Editar producto" : "Agregar producto"}</h4>
                       </div>
-                      {productForm.id && (<button className="btn btn-outline" onClick={resetEditor}><X size={16} />Cancelar edicion</button>)}
+                      {productForm.id && (<button type="button" className="btn btn-outline" onClick={resetEditor}><X size={16} />Cancelar edicion</button>)}
                     </div>
                     <div className="admin-grid" style={{ marginTop: 18 }}>
                       <input className="input" placeholder="Nombre del producto" value={productForm.name} onChange={(event) => handleProductFieldChange("name", event.target.value)} />
@@ -1048,7 +1441,7 @@ export function AdminPanelModal({
                                 ))}
                                 {!!color.images.filter(Boolean).length && (
                                   <div className="mini-thumb-row">
-                                    {color.images.filter(Boolean).map((image, index) => <img key={`${color.uid}-thumb-${index}`} src={image} alt={`${color.name || "color"} ${index + 1}`} className="mini-thumb" loading="lazy" decoding="async" />)}
+                                    {color.images.filter(Boolean).map((image, index) => <img key={`${color.uid}-thumb-${index}`} src={image} alt={`${color.name || "color"} ${index + 1}`} className="mini-thumb" width="64" height="64" loading="lazy" decoding="async" />)}
                                   </div>
                                 )}
                               </div>
@@ -1111,6 +1504,8 @@ export function AdminPanelModal({
                   onSave={saveManagedProductType}
                   onDelete={deleteManagedProductType}
                   onToggleActive={toggleManagedProductTypeActive}
+                  onBulkSetActive={bulkSetManagedProductTypesActive}
+                  onBulkDelete={bulkDeleteManagedProductTypes}
                 />
                 <ManagedEntitiesEditor
                   title="Filtros y tags"
@@ -1126,27 +1521,32 @@ export function AdminPanelModal({
                   onSave={saveManagedFilterTag}
                   onDelete={deleteManagedFilterTag}
                   onToggleActive={toggleManagedFilterTagActive}
+                  onBulkSetActive={bulkSetManagedFilterTagsActive}
+                  onBulkDelete={bulkDeleteManagedFilterTags}
                 />
               </div>
             )}
 
             {adminTab === "cupones" && (
-              <CouponManagerPanel
-                coupons={coupons}
-                couponDraft={couponDraft}
-                couponEditorMessage={couponEditorMessage}
-                couponEditorError={couponEditorError}
-                products={products}
-                productTypeOptions={productTypeOptions}
-                onCouponDraftFieldChange={handleCouponDraftFieldChange}
-                onToggleCouponDraftProduct={toggleCouponDraftProduct}
-                onToggleCouponDraftProductType={toggleCouponDraftProductType}
-                onSaveCoupon={saveCoupon}
-                onResetCouponDraft={resetCouponDraft}
-                onEditCoupon={startEditingCoupon}
-                onToggleCouponActive={toggleCouponActive}
-                onDeleteCoupon={deleteCoupon}
-              />
+              <div className="admin-tab-panel">
+                <PromotionTabs activeTab={adminTab} onChange={setAdminTab} />
+                <CouponManagerPanel
+                  coupons={coupons}
+                  couponDraft={couponDraft}
+                  couponEditorMessage={couponEditorMessage}
+                  couponEditorError={couponEditorError}
+                  products={products}
+                  productTypeOptions={productTypeOptions}
+                  onCouponDraftFieldChange={handleCouponDraftFieldChange}
+                  onToggleCouponDraftProduct={toggleCouponDraftProduct}
+                  onToggleCouponDraftProductType={toggleCouponDraftProductType}
+                  onSaveCoupon={saveCoupon}
+                  onResetCouponDraft={resetCouponDraft}
+                  onEditCoupon={startEditingCoupon}
+                  onToggleCouponActive={toggleCouponActive}
+                  onDeleteCoupon={deleteCoupon}
+                />
+              </div>
             )}
 
             {adminTab === "cuentas" && (
@@ -1210,9 +1610,9 @@ export function AdminPanelModal({
                     <input className="input" placeholder="Enlace de Facebook" value={contactDraft.facebook} onChange={(event) => setContactDraft((previous) => ({ ...previous, facebook: event.target.value }))} />
                     <input className="input" placeholder="Enlace de TikTok" value={contactDraft.tiktok} onChange={(event) => setContactDraft((previous) => ({ ...previous, tiktok: event.target.value }))} />
                     <div className="admin-full">
-                      <button className="btn btn-primary" onClick={saveContactConfiguration} disabled={contactSaveBusy || bankQrUploadBusy} aria-busy={contactSaveBusy}>
+                      <button type="button" className="btn btn-primary" onClick={saveContactConfiguration} disabled={contactSaveBusy || bankQrUploadBusy} aria-busy={contactSaveBusy}>
                         <ShieldCheck size={16} />
-                        {contactSaveBusy ? "Guardando..." : "Guardar contacto"}
+                        {contactSaveBusy ? "Guardando…" : "Guardar contacto"}
                       </button>
                     </div>
                     {contactSyncFeedback?.message && (
@@ -1367,14 +1767,14 @@ export function AdminPanelModal({
                     <div className="admin-full">
                       <div className="slides-toolbar" style={{ margin: "14px 0 12px" }}>
                         <h5 style={{ margin: 0, fontSize: 18, fontWeight: 700 }}>Slides del hero</h5>
-                        <button className="btn btn-soft" onClick={addHeroSlide}><Plus size={16} />Agregar slide</button>
+                        <button type="button" className="btn btn-soft" onClick={addHeroSlide}><Plus size={16} />Agregar slide</button>
                       </div>
                       <div className="admin-slide-list">
                         {(storeDraft.heroSlides || []).map((slide, index) => (
                           <details key={slide.id} className="admin-slide-editor">
                             <summary>
                               {slide.image
-                                ? <img src={slide.image} alt="" loading="lazy" decoding="async" />
+                                ? <img src={slide.image} alt="" width="48" height="44" loading="lazy" decoding="async" />
                                 : <span className="admin-slide-placeholder"><ImageIcon size={17} /></span>}
                               <span>
                                 <strong>{slide.title || `Slide ${index + 1}`}</strong>
@@ -1385,7 +1785,7 @@ export function AdminPanelModal({
                             <div className="admin-slide-editor-body">
                               <div className="admin-actions">
                                 <label className="btn btn-outline admin-file-btn"><Upload size={16} />Subir imagen<input type="file" accept="image/*" onChange={(event) => handleStoreSlideImageUpload(slide.id, event)} /></label>
-                                <button className="btn btn-outline" onClick={() => removeHeroSlide(slide.id)} disabled={(storeDraft.heroSlides || []).length === 1}><Trash2 size={16} />Quitar</button>
+                                <button type="button" className="btn btn-outline" onClick={() => removeHeroSlide(slide.id)} disabled={(storeDraft.heroSlides || []).length === 1}><Trash2 size={16} />Quitar</button>
                               </div>
                               <input className="input" placeholder="Título del slide" value={slide.title || ""} onChange={(event) => setStoreDraft((previous) => ({ ...previous, heroSlides: (previous.heroSlides || []).map((entry) => entry.id === slide.id ? { ...entry, title: event.target.value } : entry) }))} />
                               <textarea className="textarea" placeholder="Subtítulo del slide" value={slide.subtitle || ""} onChange={(event) => setStoreDraft((previous) => ({ ...previous, heroSlides: (previous.heroSlides || []).map((entry) => entry.id === slide.id ? { ...entry, subtitle: event.target.value } : entry) }))} />
@@ -1402,7 +1802,7 @@ export function AdminPanelModal({
                     </div>
 
                     <div className="admin-full" style={{ marginTop: 12 }}>
-                      <button className="btn btn-primary" onClick={saveStoreConfiguration}>
+                      <button type="button" className="btn btn-primary" onClick={saveStoreConfiguration}>
                         <ShieldCheck size={16} />Guardar ajustes, tarifas y portada
                       </button>
                     </div>
@@ -1429,9 +1829,9 @@ export function AdminPanelModal({
                         />
                         Actualización en vivo
                       </label>
-                      <button className="btn btn-soft" onClick={() => refreshOrdersFromServer({ force: true, preferCache: false, notifyAdminOnNew: false })} disabled={liveOrdersRefreshing}>
+                      <button type="button" className="btn btn-soft" onClick={() => refreshOrdersFromServer({ force: true, preferCache: false, notifyAdminOnNew: false })} disabled={liveOrdersRefreshing}>
                         <RotateCcw size={16} />
-                        {liveOrdersRefreshing ? "Actualizando..." : "Actualizar"}
+                        {liveOrdersRefreshing ? "Actualizando…" : "Actualizar"}
                       </button>
                       </>
                     )}
@@ -1456,6 +1856,12 @@ export function AdminPanelModal({
                     </div>
                   )}
 
+                  <div className="admin-quick-views admin-order-quick-views" aria-label="Vistas operativas de pedidos">
+                    {[["pending", "Pendientes"], ["risk", "En riesgo"], ["preparing", "Preparando"], ["sent", "Enviados"], ["pickup", "Retiro"], ["all", "Todos"]].map(([value, label]) => (
+                      <button key={value} type="button" aria-pressed={orderQuickView === value} className={orderQuickView === value ? "active" : ""} onClick={() => setOrderQuickView(value)}>{label} <span>{filteredOrderHistory.filter((order) => matchesOrderView(order, value)).length}</span></button>
+                    ))}
+                  </div>
+
                   <div className="admin-order-tools">
                     <label className="admin-order-search">
                       <Search size={18} aria-hidden="true" />
@@ -1466,7 +1872,7 @@ export function AdminPanelModal({
                         onChange={(event) => setOrderSearch(event.target.value)}
                       />
                     </label>
-                    <button
+                    <button type="button"
                       className={`btn btn-outline admin-filter-toggle${activeOrderFilterCount > 0 ? " has-filters" : ""}`}
                       type="button"
                       onClick={() => setShowOrderFilters((current) => !current)}
@@ -1538,14 +1944,37 @@ export function AdminPanelModal({
                   )}
 
                   <div className="admin-order-results-meta">
-                    <strong>{filteredOrderHistory.length} {filteredOrderHistory.length === 1 ? "pedido" : "pedidos"}</strong>
+                    <strong>{operationalOrderHistory.length} {operationalOrderHistory.length === 1 ? "pedido" : "pedidos"}</strong>
                     <span>Actualizado {formatAdminTimestamp(liveOrdersUpdatedAt)}</span>
                   </div>
 
+                  {operationalOrderHistory.length > 0 && (
+                    <div className={`order-bulk-bar${selectedOrderSet.size ? " has-selection" : ""}`}>
+                      <label className="admin-selection-control">
+                        <input type="checkbox" checked={operationalOrderIds.length > 0 && operationalOrderIds.slice(0, 25).every((id) => selectedOrderSet.has(id))} onChange={toggleAllVisibleOrders} />
+                        <span>{selectedOrderSet.size ? `${selectedOrderSet.size} seleccionados` : "Seleccionar visibles"}</span>
+                      </label>
+                      {selectedOrderSet.size > 0 && (
+                        <div className="order-bulk-actions">
+                          <select className="select" aria-label="Nuevo estado para los pedidos seleccionados" value={orderBulkStatus} onChange={(event) => setOrderBulkStatus(event.target.value)}>
+                            <option value="Confirmado">Confirmar</option>
+                            <option value="Preparando">Marcar preparando</option>
+                            <option value="Enviado">Enviado / listo para retiro</option>
+                            <option value="Entregado">Marcar entregado</option>
+                            <option value="Cancelado">Cancelar pedidos</option>
+                          </select>
+                          <button className="btn btn-primary" type="button" disabled={orderBulkBusy} onClick={() => { void applyBulkOrderStatus(); }}>{orderBulkBusy ? "Actualizando…" : "Aplicar estado"}</button>
+                          <button className="btn btn-outline" type="button" disabled={orderBulkBusy} onClick={() => setSelectedOrderIds([])}>Limpiar</button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {orderBulkFeedback && <div className={`status-message status-${orderBulkFeedback.tone} order-bulk-feedback`} role="status" aria-live="polite">{orderBulkFeedback.message}</div>}
+
                   <div className="admin-order-list">
-                    {filteredOrderHistory.length === 0 ? (
+                    {operationalOrderHistory.length === 0 ? (
                       <div className="empty-admin-note">No hay pedidos que coincidan con la búsqueda.</div>
-                    ) : filteredOrderHistory.map((order) => {
+                    ) : operationalOrderHistory.map((order) => {
                       const orderSla = getOrderSlaMeta(order);
                       const normalizedOrderStatus = normalizeOrderStatusForOrder(order.status, order.deliveryType);
                       const isPickupOrder = order.deliveryType === "pickup";
@@ -1567,13 +1996,30 @@ export function AdminPanelModal({
                       }
                       const isExpanded = expandedOrderId === order.id;
                       const detailsId = `admin-order-${order.id}-details`;
+                      const patchState = orderPatchStateById?.[order.id];
+                      const nextOrderAction = (() => {
+                        if (normalizedOrderStatus === "Pendiente") return { label: "Confirmar pedido", status: "Confirmado" };
+                        if (normalizedOrderStatus === "Confirmado") return { label: "Empezar preparación", status: "Preparando" };
+                        if (normalizedOrderStatus === "Preparando") {
+                          return isPickupOrder
+                            ? { label: "Marcar listo para retiro", status: "Listo para retiro" }
+                            : { label: "Registrar envío", status: "Enviado" };
+                        }
+                        if (normalizedOrderStatus === "Listo para retiro" || normalizedOrderStatus === "Enviado") {
+                          return { label: "Marcar entregado", status: "Entregado" };
+                        }
+                        return null;
+                      })();
                       return (
                         <article key={order.id} className={`admin-order-row${isExpanded ? " is-expanded" : ""}`}>
                           <div className="admin-order-row-summary">
+                            <label className="admin-order-selector" aria-label={`Seleccionar pedido ${order.code}`}>
+                              <input type="checkbox" checked={selectedOrderSet.has(String(order.id))} onChange={() => toggleOrderSelection(order.id)} />
+                            </label>
                             <button
                               className="admin-order-disclosure"
                               type="button"
-                              onClick={() => setExpandedOrderId((current) => (current === order.id ? "" : order.id))}
+                              onClick={() => toggleOrderExpand(order.id)}
                               aria-expanded={isExpanded}
                               aria-controls={detailsId}
                             >
@@ -1584,22 +2030,15 @@ export function AdminPanelModal({
                               <span className="admin-order-row-meta">
                                 {formatOrderDate(order.createdAt)} · {order.itemCount} {order.itemCount === 1 ? "artículo" : "artículos"} · {isDeliveryOrder ? "Domicilio" : "Retiro"}
                               </span>
-                              <span className={`admin-order-sla is-${orderSla.tone}`}>{orderSla.label} · {orderSla.ageMinutes} min</span>
+                              <span className={`admin-order-sla is-${orderSla.tone}`}>{orderSla.label} · {orderSla.formattedAge || `${orderSla.ageMinutes} min`}</span>
                             </button>
                             <div className="admin-order-row-controls">
-                              <select
-                                className="select admin-order-status-select"
-                                aria-label={`Estado del pedido ${order.code}`}
-                                value={normalizedOrderStatus}
-                                onChange={(event) => updateOrderStatus(order.id, event.target.value)}
-                              >
-                                {orderStatusOptions.map((status) => <option key={status} value={status}>{status}</option>)}
-                              </select>
-                              <strong className="admin-order-row-total">{currency(order.total || order.subtotal)}</strong>
+                              <span className={`order-status-pill ${getOrderStatusMeta(normalizedOrderStatus).tone}`}>{normalizedOrderStatus}</span>
+                              <strong className="admin-order-row-total">{currency(order.total ?? order.subtotal)}</strong>
                               <button
                                 className="icon-btn admin-order-expand-btn"
                                 type="button"
-                                onClick={() => setExpandedOrderId((current) => (current === order.id ? "" : order.id))}
+                                onClick={() => toggleOrderExpand(order.id)}
                                 aria-expanded={isExpanded}
                                 aria-controls={detailsId}
                                 aria-label={isExpanded ? `Ocultar detalle de ${order.code}` : `Ver detalle de ${order.code}`}
@@ -1611,36 +2050,30 @@ export function AdminPanelModal({
 
                           {isExpanded && (
                             <div id={detailsId} className="admin-order-details">
+                              {/* Cabecera del Detalle de la Orden */}
                               <div className="admin-order-detail-toolbar">
+                                <div className="admin-order-detail-heading">
+                                  <h4>Pedido {order.code}</h4>
+                                  <p>{order.customerName || "Cliente"} · {formatOrderDate(order.createdAt)}</p>
+                                </div>
                                 <div className="admin-order-detail-actions">
+                                  {nextOrderAction && (
+                                    <button type="button" className="btn btn-primary" onClick={() => updateOrderStatus(order.id, nextOrderAction.status)}>
+                                      {nextOrderAction.label}
+                                    </button>
+                                  )}
                                   <button type="button" className="btn btn-outline" onClick={() => onCopyOrderCode(order.code)}>
                                     <Copy size={14} />Copiar código
                                   </button>
-                                  <button className="btn btn-outline" onClick={() => onOpenOrderReference(order)}>
-                                    <Eye size={15} />Referencia visual
-                                  </button>
+                                  <select className="select admin-order-status-select" aria-label={`Estado del pedido ${order.code}`} value={normalizedOrderStatus} onChange={(event) => updateOrderStatus(order.id, event.target.value)}>
+                                    {orderStatusOptions.map((status) => <option key={status} value={status}>{status}</option>)}
+                                  </select>
+                                  <span className={`badge ${stockReservationState === "released" ? "badge-warning" : "badge-light"}`}>
+                                    Stock {stockReservationState === "released" ? "liberado" : "reservado"}
+                                  </span>
                                 </div>
-                                <span className={`badge ${stockReservationState === "released" ? "badge-warning" : "badge-light"}`}>
-                                  Stock {stockReservationState === "released" ? "liberado" : "reservado"}
-                                </span>
                               </div>
 
-                              <div className="order-money-block">
-                                <div><span className="muted">Subtotal</span><strong>{currency(order.subtotal)}</strong></div>
-                                {order.discountAmount > 0 && <div><span className="muted">Descuento</span><strong>-{currency(order.discountAmount)}</strong></div>}
-                                {order.shippingCost > 0 ? (
-                                  <div><span className="muted">{order.shippingLabel || "Costo de envío"}</span><strong>+{currency(order.shippingCost)}</strong></div>
-                                ) : isDeliveryOrder ? (
-                                  <div><span className="muted">Envío</span><strong style={{ color: "var(--success, #16a34a)" }}>GRATIS</strong></div>
-                                ) : null}
-                                {order.paymentFeeAmount > 0 && <div><span className="muted">Comisión tarjeta</span><strong>+{currency(order.paymentFeeAmount)}</strong></div>}
-                                <div><span className="muted">Total</span><strong>{currency(order.total || order.subtotal)}</strong></div>
-                                <div><span className="muted">Forma de pago</span><strong>{order.paymentMethodLabel || (order.paymentMethod === "card_link" ? "Tarjeta por enlace" : "Transferencia")}</strong></div>
-                                {order.paymentBankAccount?.bankName && <div><span className="muted">Banco elegido</span><strong>{order.paymentBankAccount.bankName}</strong></div>}
-                                {order.couponCode && <div><span className="muted">Cupón</span><strong>{order.couponCode}</strong></div>}
-                              </div>
-
-                              <OrderStatusProgress status={order.status} deliveryType={order.deliveryType} />
                               {isCancelledOrder && (
                                 <div className={`order-stock-sync-note ${stockReservationState === "released" ? "is-ok" : "is-warning"}`}>
                                   {stockReservationState === "released"
@@ -1649,143 +2082,224 @@ export function AdminPanelModal({
                                 </div>
                               )}
 
-                              {isDeliveryOrder ? (
-                                <div className="admin-delivery-highlight">
-                                  <div className="admin-delivery-highlight-head">
-                                    <div className="admin-delivery-badge-group">
-                                      <span className="badge badge-warning">Envío a domicilio</span>
-                                      <strong className="admin-delivery-city-title">{order.deliveryCity || "Ciudad no definida"}</strong>
+                              <div className="admin-order-sections-grid">
+                                {/* Tarjeta Financiera y Pago */}
+                                <section className="admin-order-card admin-order-money-card">
+                                  <div className="admin-order-card-header">
+                                    <CreditCard size={16} />
+                                    <h6>Resumen de Pago</h6>
+                                  </div>
+                                  <div className="admin-order-finances-list">
+                                    <div className="admin-order-finance-row"><span>Subtotal</span><strong>{currency(order.subtotal)}</strong></div>
+                                    {order.discountAmount > 0 && <div className="admin-order-finance-row is-discount"><span>Descuento</span><strong>-{currency(order.discountAmount)}</strong></div>}
+                                    {order.shippingCost > 0 ? (
+                                      <div className="admin-order-finance-row"><span>{order.shippingLabel || "Envío"}</span><strong>+{currency(order.shippingCost)}</strong></div>
+                                    ) : isDeliveryOrder ? (
+                                      <div className="admin-order-finance-row is-free-shipping"><span>Envío</span><strong>GRATIS</strong></div>
+                                    ) : null}
+                                    {order.paymentFeeAmount > 0 && <div className="admin-order-finance-row"><span>Comisión tarjeta</span><strong>+{currency(order.paymentFeeAmount)}</strong></div>}
+                                    <div className="admin-order-finance-row admin-order-total-row"><span>Total</span><strong>{currency(order.total ?? order.subtotal)}</strong></div>
+                                  </div>
+                                  <div className="admin-order-payment-meta">
+                                    <div className="admin-order-payment-badge">
+                                      <span className="muted">Forma de pago:</span>
+                                      <strong>{order.paymentMethodLabel || (order.paymentMethod === "card_link" ? "Tarjeta por enlace" : "Transferencia")}</strong>
                                     </div>
-                                    {deliveryPhone && (
-                                      <a
-                                        href={`https://wa.me/593${String(deliveryPhone || "").replace(/\D/g, "").replace(/^0+/, "")}`}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        className="btn btn-outline admin-delivery-wa-btn"
-                                      >
-                                        <MessageCircle size={14} />
-                                        <span>WhatsApp Repartidor / Cliente</span>
-                                      </a>
+                                    {order.paymentBankAccount?.bankName && (
+                                      <div className="admin-order-payment-badge">
+                                        <span className="muted">Banco:</span>
+                                        <strong>{order.paymentBankAccount.bankName}</strong>
+                                      </div>
+                                    )}
+                                    {order.couponCode && (
+                                      <div className="admin-order-payment-badge">
+                                        <span className="muted">Cupón:</span>
+                                        <strong>{order.couponCode}</strong>
+                                      </div>
                                     )}
                                   </div>
-                                  <div className="admin-delivery-destination-box">
-                                    <p className="admin-delivery-address-label">Dirección exacta:</p>
-                                    <p className="admin-delivery-address">{order.deliveryAddress || "Dirección no registrada"}</p>
-                                  </div>
-                                  <div className="admin-delivery-grid">
-                                    <p><span>Referencia</span><strong>{order.deliveryReference || "Sin referencia"}</strong></p>
-                                    <p><span>Destinatario</span><strong>{deliveryContactName}</strong></p>
-                                    <p><span>Cédula / RUC</span><strong>{order.deliveryIdNumber || "No registrada"}</strong></p>
-                                    <p><span>Teléfono</span><strong>{deliveryPhone || "Sin teléfono"}</strong></p>
-                                  </div>
-                                </div>
-                              ) : (
-                                <div className="admin-pickup-summary">
-                                  <strong>Retiro en local</strong>
-                                  <p>{order.pickupAddress || "Sin dirección de retiro registrada"}</p>
-                                  {order.pickupNote && <p className="muted">Referencia: {order.pickupNote}</p>}
-                                </div>
-                              )}
+                                </section>
 
-                              {isPickupOrder && (
-                                <div className="pickup-order-panel">
-                                  <div>
-                                    <p className="pickup-order-panel-title">Preparación para retiro</p>
-                                    <p className="pickup-order-panel-text">
-                                      {normalizedOrderStatus === "Entregado"
-                                        ? "Entrega confirmada al cliente."
-                                        : (normalizedOrderStatus === "Listo para retiro"
-                                          ? "Pedido listo. Confirma cuando el cliente lo retire."
-                                          : "Cuando esté preparado, márcalo como listo para retiro.")}
-                                    </p>
+                                {/* Tarjeta de Destino y Entrega */}
+                                <section className="admin-order-card admin-order-shipping-card">
+                                  <div className="admin-order-card-header">
+                                    <Truck size={16} />
+                                    <h6>{isDeliveryOrder ? "Envío a Domicilio" : "Retiro en Local"}</h6>
                                   </div>
-                                  <div className="pickup-order-panel-actions">
-                                    {canMarkPickupReady && <button className="btn btn-soft" onClick={() => updateOrderStatus(order.id, "Listo para retiro")}>Marcar listo</button>}
-                                    {canConfirmPickup && <button className="btn btn-primary" onClick={() => updateOrderStatus(order.id, "Entregado")}>Confirmar entrega</button>}
-                                    {!canMarkPickupReady && !canConfirmPickup && <span className="badge badge-light">{normalizedOrderStatus}</span>}
-                                  </div>
-                                </div>
-                              )}
+                                  {isDeliveryOrder ? (
+                                    <div className="admin-order-shipping-content">
+                                      <div className="admin-order-shipping-destination">
+                                        <span className="admin-order-city-pill">{order.deliveryCity || "Ciudad sin definir"}</span>
+                                        {deliveryPhone && (
+                                          <a
+                                            href={`https://wa.me/593${String(deliveryPhone || "").replace(/\D/g, "").replace(/^0+/, "")}`}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="btn btn-outline admin-delivery-wa-btn"
+                                          >
+                                            <MessageCircle size={14} />
+                                            <span>WhatsApp</span>
+                                          </a>
+                                        )}
+                                      </div>
+                                      <div className="admin-order-address-box">
+                                        <p className="admin-order-address-text">{order.deliveryAddress || "Sin dirección registrada"}</p>
+                                        {order.deliveryReference && <p className="admin-order-ref-text">Ref: {order.deliveryReference}</p>}
+                                      </div>
+                                      <div className="admin-order-recipient-grid">
+                                        <div><span className="muted">Destinatario</span><strong>{deliveryContactName}</strong></div>
+                                        <div><span className="muted">Cédula / RUC</span><strong>{order.deliveryIdNumber || "No registrada"}</strong></div>
+                                        <div><span className="muted">Teléfono</span><strong>{deliveryPhone || "Sin teléfono"}</strong></div>
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    <div className="admin-order-pickup-content">
+                                      <div className="admin-order-address-box">
+                                        <p className="admin-order-address-text">{order.pickupAddress || "Sin dirección de retiro registrada"}</p>
+                                        {order.pickupNote && <p className="admin-order-ref-text">Ref: {order.pickupNote}</p>}
+                                      </div>
+                                      <div className="pickup-order-panel-actions">
+                                        {canMarkPickupReady && <button type="button" className="btn btn-soft" onClick={() => updateOrderStatus(order.id, "Listo para retiro")}>Marcar listo para retiro</button>}
+                                        {canConfirmPickup && <button type="button" className="btn btn-primary" onClick={() => updateOrderStatus(order.id, "Entregado")}>Confirmar entrega</button>}
+                                        {!canMarkPickupReady && !canConfirmPickup && <span className="badge badge-light">{normalizedOrderStatus}</span>}
+                                      </div>
+                                    </div>
+                                  )}
+                                </section>
 
-                              <div className="admin-order-fulfillment-grid">
-                                <label className="entity-field">
-                                  <span>Courier / Transporte</span>
-                                  <input
-                                    className="input"
-                                    placeholder="Ej. Servientrega, LaarCourier, Cooperativa..."
-                                    value={effectiveCourier}
-                                    onChange={(event) => updateOrderCourier?.(order.id, event.target.value)}
-                                  />
-                                </label>
-                                <label className="entity-field">
-                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                    <span>Guía de rastreo</span>
-                                    {effectiveGuide && getCourierTrackingUrl(effectiveCourier, effectiveGuide) && (
-                                      <a
-                                        href={getCourierTrackingUrl(effectiveCourier, effectiveGuide)}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        className="admin-inline-track-link"
-                                        style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '0.8rem', color: 'var(--color-primary)' }}
-                                      >
-                                        <ExternalLink size={12} />
-                                        <span>Rastrear online</span>
-                                      </a>
-                                    )}
+                                {/* Tarjeta de Logística y Comprobante */}
+                                <section className="admin-order-card admin-order-fulfillment-card">
+                                  <div className="admin-order-card-header">
+                                    <MapPin size={16} />
+                                    <h6>Rastreo y Comprobante</h6>
                                   </div>
-                                  <input
-                                    className="input"
-                                    placeholder="Número de guía"
-                                    value={effectiveGuide}
-                                    onChange={(event) => updateOrderGuide(order.id, event.target.value)}
-                                  />
-                                </label>
-                                <div className="admin-order-payment-proof">
-                                  <label className="entity-field">
-                                    <span>Comprobante de pago</span>
-                                    <input className="input" placeholder="URL del comprobante" value={order.paymentProof || ""} onChange={(event) => updateOrderPaymentProof(order.id, event.target.value)} />
-                                  </label>
-                                  <div className="admin-order-detail-actions">
-                                    <label className="btn btn-outline admin-file-btn">
-                                      <Plus size={16} />Subir imagen
-                                      <input type="file" accept="image/*" onChange={(event) => handleOrderProofUpload(order.id, event)} />
+                                  <div className="admin-order-logistics-grid">
+                                    <label className="entity-field">
+                                      <span>Courier / Transporte</span>
+                                      <input
+                                        className="input"
+                                        placeholder="Ej. Servientrega, LaarCourier..."
+                                        value={effectiveCourier}
+                                        onChange={(event) => updateOrderCourier?.(order.id, event.target.value)}
+                                      />
                                     </label>
-                                    {order.paymentProof && <button className="btn btn-outline" onClick={() => clearOrderPaymentProof(order.id)}><Trash2 size={16} />Quitar imagen</button>}
+                                    <label className="entity-field">
+                                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                        <span>Guía de rastreo</span>
+                                        {effectiveGuide && getCourierTrackingUrl(effectiveCourier, effectiveGuide) && (
+                                          <a
+                                            href={getCourierTrackingUrl(effectiveCourier, effectiveGuide)}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="admin-inline-track-link"
+                                          >
+                                            <ExternalLink size={12} />
+                                            <span>Rastrear</span>
+                                          </a>
+                                        )}
+                                      </div>
+                                      <input
+                                        className="input"
+                                        placeholder="Número de guía"
+                                        value={effectiveGuide}
+                                        onChange={(event) => updateOrderGuide(order.id, event.target.value)}
+                                      />
+                                    </label>
                                   </div>
-                                  {order.paymentProof ? (
-                                    <button
-                                      type="button"
-                                      className="image-preview-trigger"
-                                      onClick={() => setProofPreview({
-                                        src: normalizeImageSource(order.paymentProof) || FALLBACK_IMAGE,
-                                        alt: `Comprobante ${order.code}`,
-                                        title: `Comprobante · ${order.code}`,
-                                      })}
-                                    >
-                                      <img src={normalizeImageSource(order.paymentProof) || FALLBACK_IMAGE} alt="" className="preview-image" loading="lazy" decoding="async" />
-                                      <span><ZoomIn size={15} />Abrir comprobante completo</span>
-                                    </button>
-                                  ) : null}
-                                </div>
+
+                                  <div className="admin-order-proof-section">
+                                    <div className="admin-order-proof-header">
+                                      <span className="muted">Comprobante de pago</span>
+                                      <div className="admin-actions">
+                                        <label className="btn btn-outline btn-sm admin-file-btn">
+                                          <Plus size={14} />{order.paymentProof ? "Cambiar foto" : "Subir comprobante"}
+                                          <input type="file" accept="image/*" onChange={(event) => handleOrderProofUpload(order.id, event)} />
+                                        </label>
+                                        {order.paymentProof && <button type="button" className="icon-btn admin-danger-icon" onClick={() => clearOrderPaymentProof(order.id)} title="Quitar comprobante"><Trash2 size={14} /></button>}
+                                      </div>
+                                    </div>
+                                    {order.paymentProof ? (
+                                      <button
+                                        type="button"
+                                        className="admin-proof-attachment"
+                                        onClick={() => setProofPreview({
+                                          src: normalizeImageSource(order.paymentProof) || FALLBACK_IMAGE,
+                                          alt: `Comprobante ${order.code}`,
+                                          title: `Comprobante · ${order.code}`,
+                                        })}
+                                      >
+                                        <img src={normalizeImageSource(order.paymentProof) || FALLBACK_IMAGE} alt="" width="52" height="52" loading="lazy" decoding="async" />
+                                        <span><strong>Comprobante adjunto</strong><small><ZoomIn size={13} />Ver en tamaño completo</small></span>
+                                      </button>
+                                    ) : (
+                                      <p className="helper-text" style={{ margin: "6px 0 0" }}>Sin comprobante de transferencia adjunto.</p>
+                                    )}
+                                    <details className="admin-proof-advanced">
+                                      <summary>Opciones avanzadas (URL directa)</summary>
+                                      <label className="entity-field">
+                                        <span>URL del comprobante</span>
+                                        <input className="input" placeholder="https://…" value={order.paymentProof || ""} onChange={(event) => updateOrderPaymentProof(order.id, event.target.value)} />
+                                      </label>
+                                    </details>
+                                  </div>
+                                </section>
+
+                                {/* Tarjeta de Nota Interna */}
+                                <section className="admin-order-card admin-order-notes-card">
+                                  <div className="admin-order-card-header">
+                                    <PencilLine size={16} />
+                                    <h6>Nota Interna <small style={{ fontWeight: "normal", color: "#888" }}>(solo admin)</small></h6>
+                                    {patchState?.status && (
+                                      <span className={`admin-note-status is-${patchState.status}`}>
+                                        {patchState.status === "pending" && "Guardando..."}
+                                        {patchState.status === "saved" && "Guardado"}
+                                        {patchState.status === "error" && (
+                                          <>
+                                            Error al guardar
+                                            <button type="button" className="btn btn-outline btn-sm" style={{ marginLeft: 6, padding: "2px 6px", fontSize: 10 }} onClick={() => retryOrderPatch(order.id)}>Reintentar</button>
+                                          </>
+                                        )}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <textarea
+                                    className="textarea"
+                                    maxLength={600}
+                                    value={order.internalNote || ""}
+                                    onChange={(event) => updateOrderInternalNote(order.id, event.target.value)}
+                                    placeholder="Añade recordatorios, indicaciones de empaque o notas de entrega..."
+                                    style={{ minHeight: "72px" }}
+                                  />
+                                </section>
                               </div>
 
-                              <div className="admin-order-items-section">
+                              {/* Sección de Productos / Artículos */}
+                              <section className="admin-order-items-section">
                                 <div className="admin-order-items-heading">
-                                  <strong>Productos</strong>
+                                  <strong>Prendas en este pedido</strong>
                                   <span>{order.itemCount} {order.itemCount === 1 ? "artículo" : "artículos"}</span>
                                 </div>
                                 <div className="admin-order-items">
                                   {order.items.map((item) => (
                                     <div key={item.key} className="admin-order-item-row">
-                                      <span>{item.name} · {item.color} · {item.size} ×{item.quantity}</span>
-                                      <strong>{currency(item.price * item.quantity)}</strong>
+                                      <img src={normalizeImageSource(item.image) || FALLBACK_IMAGE} alt="" width="48" height="60" loading="lazy" decoding="async" />
+                                      <div className="admin-order-item-info">
+                                        <strong>{item.name}</strong>
+                                        <span>{item.color} · Talla {item.size} · {item.quantity} {item.quantity === 1 ? "unidad" : "unidades"}</span>
+                                      </div>
+                                      <div className="admin-order-item-pricing">
+                                        <strong>{currency(item.price * item.quantity)}</strong>
+                                        {item.quantity > 1 && <small>{currency(item.price)} c/u</small>}
+                                      </div>
                                     </div>
                                   ))}
                                 </div>
-                              </div>
+                              </section>
 
                               <div className="admin-order-danger-actions">
-                                <button className="btn btn-danger" onClick={() => deleteOrder(order.id)}><Trash2 size={16} />Eliminar pedido</button>
+                                <button type="button" className="btn btn-outline admin-danger-icon" onClick={() => deleteOrder(order.id)}>
+                                  <Trash2 size={15} />Eliminar pedido definitivamente
+                                </button>
                               </div>
                             </div>
                           )}
@@ -1805,13 +2319,13 @@ export function AdminPanelModal({
                     description="Monitorea bloqueos, tráfico y errores para detectar actividad inusual."
                     actions={(
                       <>
-                      <button className="btn btn-soft" onClick={() => refreshSecurityMetrics({ force: true, preferCache: false })} disabled={securityMetricsBusy}>
+                      <button type="button" className="btn btn-soft" onClick={() => refreshSecurityMetrics({ force: true, preferCache: false })} disabled={securityMetricsBusy}>
                         <RotateCcw size={16} />
-                        {securityMetricsBusy ? "Actualizando..." : "Actualizar"}
+                        {securityMetricsBusy ? "Actualizando…" : "Actualizar"}
                       </button>
-                      <button className="btn btn-outline" onClick={resetSecurityMetricsData} disabled={securityMetricsResetBusy}>
+                      <button type="button" className="btn btn-outline" onClick={resetSecurityMetricsData} disabled={securityMetricsResetBusy}>
                         <Trash2 size={16} />
-                        {securityMetricsResetBusy ? "Reiniciando..." : "Reiniciar metricas"}
+                        {securityMetricsResetBusy ? "Reiniciando…" : "Reiniciar métricas"}
                       </button>
                       </>
                     )}
@@ -1875,9 +2389,8 @@ export function AdminPanelModal({
               </div>
             )}
           </div>
-        </Motion.div>
-      </Motion.div>
-    </AnimatePresence>
+        </div>
+      </main>
     <ImageLightbox
       open={Boolean(proofPreview)}
       src={proofPreview?.src || ""}

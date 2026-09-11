@@ -125,7 +125,7 @@ export function BankAccountsPanel({
                   >
                     <div className="bank-account-editor-identity">
                       <span className="bank-account-admin-logo" aria-hidden="true">
-                        {logoImage ? <img src={logoImage} alt="" /> : <Landmark size={20} />}
+                        {logoImage ? <img src={logoImage} alt="" width="44" height="44" /> : <Landmark size={20} />}
                       </span>
                       <div>
                         <h4 id={`bank-account-title-${account.id}`}>{accountTitle}</h4>
@@ -185,13 +185,13 @@ export function BankAccountsPanel({
                       </label>
                       <div className="bank-account-media-actions">
                         <label className="btn btn-outline admin-file-btn" aria-disabled={bankQrUploadBusy}>
-                          <Upload size={16} />{bankQrUploadBusy ? "Procesando..." : "Subir logo"}
+                          <Upload size={16} />{bankQrUploadBusy ? "Procesando…" : "Subir logo"}
                           <input type="file" accept="image/*" onChange={(event) => handleBankImageUpload(account.id, "bankLogoImage", event)} disabled={bankQrUploadBusy} />
                         </label>
                         {account.bankLogoImage ? <button type="button" className="btn btn-soft" onClick={() => updateBankAccount(account.id, "bankLogoImage", "")}>Quitar logo</button> : null}
                       </div>
                       <div className="bank-account-logo-preview" aria-label={logoImage ? `Vista previa del logo de ${accountTitle}` : "Logo no configurado"}>
-                        {logoImage ? <img src={logoImage} alt={`Logo de ${accountTitle}`} /> : <><Landmark size={22} /><span>Sin logo</span></>}
+                        {logoImage ? <img src={logoImage} alt={`Logo de ${accountTitle}`} width="160" height="86" /> : <><Landmark size={22} /><span>Sin logo</span></>}
                       </div>
                     </section>
 
@@ -206,14 +206,14 @@ export function BankAccountsPanel({
                       </label>
                       <div className="bank-account-media-actions">
                         <label className="btn btn-outline admin-file-btn" aria-disabled={bankQrUploadBusy}>
-                          <Upload size={16} />{bankQrUploadBusy ? "Procesando..." : "Subir QR"}
+                          <Upload size={16} />{bankQrUploadBusy ? "Procesando…" : "Subir QR"}
                           <input type="file" accept="image/*" onChange={(event) => handleBankImageUpload(account.id, "bankQrImage", event)} disabled={bankQrUploadBusy} />
                         </label>
                         {account.bankQrImage ? <button type="button" className="btn btn-soft" onClick={() => updateBankAccount(account.id, "bankQrImage", "")}>Quitar QR</button> : null}
                       </div>
                       {qrImage ? (
                         <button type="button" className="bank-account-qr-preview" onClick={() => setPreviewAccountId(account.id)} aria-label={`Abrir QR de ${accountTitle}`}>
-                          <img src={qrImage} alt={`QR de ${accountTitle}`} />
+                          <img src={qrImage} alt={`QR de ${accountTitle}`} width="160" height="86" />
                           <span><ZoomIn size={14} />Abrir imagen</span>
                         </button>
                       ) : <div className="bank-account-logo-preview"><Landmark size={22} /><span>Sin QR</span></div>}
@@ -230,8 +230,8 @@ export function BankAccountsPanel({
 
         <div className="bank-accounts-save-row">
           <p>Una cuenta se publica cuando tiene banco, número, titular y QR.</p>
-          <button className="btn btn-primary" onClick={saveContactConfiguration} disabled={contactSaveBusy || bankQrUploadBusy} aria-busy={contactSaveBusy}>
-            {bankQrUploadBusy ? "Procesando imagen..." : (contactSaveBusy ? "Guardando..." : "Guardar cuentas bancarias")}
+          <button type="button" className="btn btn-primary" onClick={saveContactConfiguration} disabled={contactSaveBusy || bankQrUploadBusy} aria-busy={contactSaveBusy}>
+            {bankQrUploadBusy ? "Procesando imagen…" : (contactSaveBusy ? "Guardando…" : "Guardar cuentas bancarias")}
           </button>
         </div>
         {contactSyncFeedback?.message ? (

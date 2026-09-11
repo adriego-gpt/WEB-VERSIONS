@@ -178,7 +178,7 @@ export function OrderSuccessRedirectModal({
                   <div className="order-success-summary-item" style={{ textAlign: "right" }}>
                     <span className="muted">Total</span>
                     <strong className="order-success-total-value">
-                      {currency(order.total || order.subtotal)}
+                      {currency(order.total ?? order.subtotal)}
                     </strong>
                   </div>
                 </div>

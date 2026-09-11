@@ -144,7 +144,7 @@ export function formatTelegramOrderMessage(order = {}) {
   }
 
   lines.push(
-    `💵 *TOTAL A PAGAR:* *${currency(order.total || order.subtotal)}*`,
+    `💵 *TOTAL A PAGAR:* *${currency(order.total ?? order.subtotal)}*`,
     "━━━━━━━━━━━━━━━━━━━━",
     order.paymentProof ? "📸 *Comprobante de pago:* Adjunto en el pedido" : "⏳ *Comprobante:* Pendiente",
   );

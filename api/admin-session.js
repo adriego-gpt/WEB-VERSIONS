@@ -116,7 +116,7 @@ export default async function handler(req, res) {
   }
 
   const { username, email, passwordAlgorithm, passwordSalt, passwordHash, sessionSecret } = readEnvConfig();
-  if (!username || !email || !passwordSalt || !passwordHash || !sessionSecret) {
+  if ((!username && !email) || !passwordSalt || !passwordHash || !sessionSecret) {
     res.status(500).json({ ok: false, message: "Admin auth no configurado" });
     return;
   }
@@ -261,7 +261,8 @@ export default async function handler(req, res) {
     return;
   }
 
-  const matchesAdmin = identifier === username.toLowerCase() || identifier === email;
+  const matchesAdmin = (Boolean(username) && identifier === username.toLowerCase())
+    || (Boolean(email) && identifier === email);
   const passwordOk = matchesAdmin && verifyPassword(password, {
     passwordAlgorithm,
     passwordSalt,
@@ -280,7 +281,7 @@ export default async function handler(req, res) {
   }
 
   clearFailures(ip);
-  const session = buildSession(username, sessionSecret);
+  const session = buildSession(username || email, sessionSecret);
   res.setHeader("Set-Cookie", buildSessionCookie(COOKIE_NAME, session.token, SESSION_TTL_MS / 1000));
   res.status(200).json({
     ok: true,

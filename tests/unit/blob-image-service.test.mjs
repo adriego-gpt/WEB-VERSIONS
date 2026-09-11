@@ -1,13 +1,19 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import fs from "node:fs/promises";
 import {
   buildProductImagePathname,
   dataUrlToBlob,
-  normalizePublicBlobUrl,
+  normalizeImageKitUrl,
   uploadPreparedCatalogImage,
 } from "../../src/services/blobImageService.js";
 
-test("Blob image service", async (t) => {
+test("ImageKit image service", async (t) => {
+  await t.test("allows the direct ImageKit upload endpoint in the page CSP", async () => {
+    const html = await fs.readFile(new URL("../../index.html", import.meta.url), "utf8");
+    assert.match(html, /connect-src[^;]*https:\/\/upload\.imagekit\.io/);
+    assert.doesNotMatch(html, /connect-src[^;]*public\.blob\.vercel-storage\.com/);
+  });
   await t.test("converts an optimized data URL into a small image Blob", () => {
     const imageBlob = dataUrlToBlob("data:image/png;base64,iVBORw0KGgo=");
     assert.equal(imageBlob.type, "image/png");
@@ -20,45 +26,78 @@ test("Blob image service", async (t) => {
     assert.equal(pathname.includes("user-file"), false);
   });
 
-  await t.test("accepts only HTTPS URLs from a public Vercel Blob store", () => {
-    const safeUrl = "https://store-id.public.blob.vercel-storage.com/catalog/products/photo.webp";
-    assert.equal(normalizePublicBlobUrl(safeUrl), safeUrl);
-    assert.equal(normalizePublicBlobUrl("https://example.com/photo.webp"), "");
-    assert.equal(normalizePublicBlobUrl("javascript:alert(1)"), "");
+  await t.test("accepts only HTTPS URLs belonging to the configured ImageKit endpoint", () => {
+    const endpoint = "https://ik.imagekit.io/adriego";
+    const safeUrl = `${endpoint}/catalog/products/photo.webp`;
+    assert.equal(normalizeImageKitUrl(safeUrl, endpoint), safeUrl);
+    assert.equal(normalizeImageKitUrl("https://ik.imagekit.io/another-store/photo.webp", endpoint), "");
+    assert.equal(normalizeImageKitUrl("javascript:alert(1)", endpoint), "");
   });
 
-  await t.test("uploads the compressed Blob with CSRF headers and returns only the safe URL", async () => {
+  await t.test("authorizes and uploads the compressed image without exposing a private key", async () => {
     const imageBlob = new Blob([new Uint8Array([1, 2, 3])], { type: "image/webp" });
-    let captured = null;
-    const expectedUrl = "https://store-id.public.blob.vercel-storage.com/catalog/products/photo-random.webp";
+    let capturedAuth = null;
+    let capturedUpload = null;
+    const endpoint = "https://ik.imagekit.io/adriego";
+    const expectedUrl = `${endpoint}/catalog/products/photo-random.webp`;
     const result = await uploadPreparedCatalogImage(imageBlob, {
-      csrfToken: "csrf-token-for-test",
       pathname: "catalog/products/2026-08/test-image-1234567890.webp",
-      uploadFn: async (...args) => {
-        captured = args;
+      authorizeFn: async (payload) => {
+        capturedAuth = payload;
+        return {
+          ok: true,
+          type: "imagekit.upload-auth",
+          publicKey: "public_key",
+          token: "one-time-token",
+          signature: "signed-token",
+          expire: 2_000_000_000,
+          urlEndpoint: endpoint,
+        };
+      },
+      uploadFn: async (blob, options) => {
+        capturedUpload = { blob, options };
         return { url: expectedUrl };
       },
     });
 
     assert.equal(result, expectedUrl);
-    assert.equal(captured[0], "catalog/products/2026-08/test-image-1234567890.webp");
-    assert.equal(captured[1], imageBlob);
-    assert.equal(captured[2].access, "public");
-    assert.equal(captured[2].handleUploadUrl, "/api/catalog-state?action=image-upload");
-    assert.equal(captured[2].headers["X-CSRF-Token"], "csrf-token-for-test");
-    assert.equal(captured[2].headers["X-Requested-With"], "XMLHttpRequest");
+    assert.equal(capturedAuth.contentType, "image/webp");
+    assert.equal(capturedAuth.size, imageBlob.size);
+    assert.equal(capturedAuth.fileName, "test-image-1234567890.webp");
+    assert.equal(capturedUpload.blob, imageBlob);
+    assert.equal(capturedUpload.options.token, "one-time-token");
+    assert.equal(capturedUpload.options.privateKey, undefined);
   });
 
   await t.test("reports a failed upload without replacing any existing image", async () => {
     const imageBlob = new Blob([new Uint8Array([1])], { type: "image/jpeg" });
     await assert.rejects(
       uploadPreparedCatalogImage(imageBlob, {
-        csrfToken: "csrf-token-for-test",
+        authorizeFn: async () => ({
+          ok: true,
+          publicKey: "public_key",
+          token: "token",
+          signature: "signature",
+          expire: 2_000_000_000,
+          urlEndpoint: "https://ik.imagekit.io/adriego",
+        }),
         uploadFn: async () => {
           throw new Error("network down");
         },
       }),
       /imagen anterior no fue modificada/i,
     );
+  });
+
+  await t.test("reports a rejected authorization without attempting the external upload", async () => {
+    const imageBlob = new Blob([new Uint8Array([1, 2])], { type: "image/jpeg" });
+    let uploadCalled = false;
+    await assert.rejects(uploadPreparedCatalogImage(imageBlob, {
+      authorizeFn: async () => ({ ok: false, status: 503, message: "ImageKit no configurado" }),
+      uploadFn: async () => {
+        uploadCalled = true;
+      },
+    }), /ImageKit no configurado/i);
+    assert.equal(uploadCalled, false);
   });
 });

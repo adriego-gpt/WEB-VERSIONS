@@ -206,7 +206,7 @@ export class ErrorBoundary extends Component {
             {/* 💬 WhatsApp Concierge Fallback */}
             <div className="atelier-error-footer">
               <a
-                href="https://wa.me/?text=Hola%20Adriego%20Store%2C%20necesito%20asistencia%20con%20mi%20compra"
+                href="https://wa.me/593995049915?text=Hola%20Adriego%20Store%2C%20necesito%20asistencia%20con%20mi%20compra"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="atelier-error-contact-link"

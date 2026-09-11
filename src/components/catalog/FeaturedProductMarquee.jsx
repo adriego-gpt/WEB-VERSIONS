@@ -6,11 +6,20 @@ export function FeaturedProductMarquee({ products = [], catalogReady, onOpenDeta
   const sectionRef = useRef(null);
   const trackRef = useRef(null);
   const firstGroupRef = useRef(null);
+  const groupWidthRef = useRef(0);
 
-  const [isInView, setIsInView] = useState(true);
+  const [isInView, setIsInView] = useState(() => (
+    typeof window !== "undefined" && typeof window.IntersectionObserver === "undefined"
+  ));
   const [isHovered, setIsHovered] = useState(false);
   const [isInteracting, setIsInteracting] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
+  const [hasFocus, setHasFocus] = useState(false);
+  const [prefersReducedMotion, setPrefersReducedMotion] = useState(() => (
+    typeof window !== "undefined"
+    && typeof window.matchMedia === "function"
+    && window.matchMedia("(prefers-reduced-motion: reduce)").matches
+  ));
   const [isDocumentVisible, setIsDocumentVisible] = useState(() => (
     typeof document === "undefined" || !document.hidden
   ));
@@ -36,19 +45,28 @@ export function FeaturedProductMarquee({ products = [], catalogReady, onOpenDeta
     return list;
   }, [products]);
 
-  // Observer to pause auto-scroll only when far off-screen
+  // Start only when the runway is close to the viewport.
   useEffect(() => {
     const section = sectionRef.current;
-    if (!section || typeof IntersectionObserver === "undefined") return undefined;
+    if (!section) return undefined;
+    if (typeof IntersectionObserver === "undefined") return undefined;
 
     const observer = new IntersectionObserver(
       ([entry]) => {
         setIsInView(entry ? entry.isIntersecting : true);
       },
-      { rootMargin: "600px 0px", threshold: 0 },
+      { rootMargin: "160px 0px", threshold: 0 },
     );
     observer.observe(section);
     return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return undefined;
+    const mediaQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const syncPreference = () => setPrefersReducedMotion(mediaQuery.matches);
+    mediaQuery.addEventListener?.("change", syncPreference);
+    return () => mediaQuery.removeEventListener?.("change", syncPreference);
   }, []);
 
   // Pause when browser tab is hidden
@@ -60,13 +78,53 @@ export function FeaturedProductMarquee({ products = [], catalogReady, onOpenDeta
 
   const hasProducts = displayItems.length > 0;
 
-  // Ultra-smooth GPU-accelerated RAF animation loop
+  // Measure only when content or its responsive width changes, never on every frame.
+  useEffect(() => {
+    const group = firstGroupRef.current;
+    const track = trackRef.current;
+    if (!catalogReady || !group || !track || !hasProducts) {
+      groupWidthRef.current = 0;
+      return undefined;
+    }
+
+    const syncGroupWidth = () => {
+      const nextWidth = group.getBoundingClientRect().width;
+      groupWidthRef.current = Number.isFinite(nextWidth) ? nextWidth : 0;
+      if (groupWidthRef.current > 0 && offsetRef.current >= groupWidthRef.current) {
+        offsetRef.current %= groupWidthRef.current;
+        track.style.transform = `translate3d(${-offsetRef.current}px, 0, 0)`;
+      }
+    };
+
+    syncGroupWidth();
+    if (typeof ResizeObserver !== "undefined") {
+      const observer = new ResizeObserver(syncGroupWidth);
+      observer.observe(group);
+      return () => observer.disconnect();
+    }
+
+    window.addEventListener("resize", syncGroupWidth, { passive: true });
+    return () => window.removeEventListener("resize", syncGroupWidth);
+  }, [catalogReady, hasProducts, displayItems.length]);
+
+  const shouldAutoAnimate = (
+    catalogReady
+    && hasProducts
+    && isInView
+    && isDocumentVisible
+    && !prefersReducedMotion
+    && !isHovered
+    && !isInteracting
+    && !isDragging
+    && !hasFocus
+  );
+
+  // GPU transform loop with no layout reads in the hot path.
   useEffect(() => {
     const track = trackRef.current;
     if (!track || !hasProducts) return undefined;
 
-    const shouldAnimate = isInView && isDocumentVisible && !isHovered && !isInteracting && !isDragging;
-    if (!shouldAnimate) {
+    if (!shouldAutoAnimate) {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
       lastTimeRef.current = 0;
       return undefined;
@@ -80,7 +138,7 @@ export function FeaturedProductMarquee({ products = [], catalogReady, onOpenDeta
       const delta = Math.min((time - lastTimeRef.current) / 16.667, 2.0);
       lastTimeRef.current = time;
 
-      const groupWidth = firstGroupRef.current?.offsetWidth || 0;
+      const groupWidth = groupWidthRef.current;
       if (groupWidth > 0) {
         let nextOffset = offsetRef.current + speed * delta;
         if (nextOffset >= groupWidth) {
@@ -99,7 +157,7 @@ export function FeaturedProductMarquee({ products = [], catalogReady, onOpenDeta
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
       lastTimeRef.current = 0;
     };
-  }, [hasProducts, isInView, isDocumentVisible, isHovered, isInteracting, isDragging]);
+  }, [hasProducts, shouldAutoAnimate]);
 
   const scheduleResume = useCallback(() => {
     if (resumeTimerRef.current) clearTimeout(resumeTimerRef.current);
@@ -144,7 +202,7 @@ export function FeaturedProductMarquee({ products = [], catalogReady, onOpenDeta
       suppressClickRef.current = true;
     }
 
-    const groupWidth = firstGroupRef.current?.offsetWidth || 0;
+    const groupWidth = groupWidthRef.current;
     if (groupWidth > 0) {
       let newOffset = dragStartRef.current.startOffset - dx;
       while (newOffset < 0) newOffset += groupWidth;
@@ -203,10 +261,8 @@ export function FeaturedProductMarquee({ products = [], catalogReady, onOpenDeta
   return (
     <section id="destacados" ref={sectionRef} className="section-shell featured-runway-section" aria-labelledby="featured-runway-title">
       <div className="container featured-runway-header">
-        <div>
-          <h3 id="featured-runway-title">Productos destacados</h3>
-          <p>Explora la selección de la tienda.</p>
-        </div>
+        <h3 id="featured-runway-title">Productos destacados</h3>
+        <p>Explora la selección de la tienda.</p>
       </div>
 
       {!catalogReady ? (
@@ -215,17 +271,19 @@ export function FeaturedProductMarquee({ products = [], catalogReady, onOpenDeta
         </div>
       ) : hasProducts ? (
         <div
-          className={`featured-marquee ${isDragging ? "is-dragging" : ""}`}
+          className={`featured-marquee${isDragging ? " is-dragging" : ""}${shouldAutoAnimate ? " is-animating" : ""}`}
           onMouseEnter={onMouseEnter}
           onMouseLeave={onMouseLeave}
+          onFocusCapture={() => setHasFocus(true)}
+          onBlurCapture={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setHasFocus(false); }}
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
           onPointerCancel={onPointerCancel}
         >
           <div ref={trackRef} className="featured-marquee-track">
-            {[0, 1, 2].map((groupIndex) => {
-              const isDuplicate = groupIndex !== 1;
+            {[0, 1].map((groupIndex) => {
+              const isDuplicate = groupIndex !== 0;
               return (
                 <div
                   key={`group-${groupIndex}`}
@@ -233,14 +291,17 @@ export function FeaturedProductMarquee({ products = [], catalogReady, onOpenDeta
                   className="featured-marquee-group"
                   aria-hidden={isDuplicate ? "true" : undefined}
                 >
-                  {displayItems.map((product, itemIndex) => (
-                    <MemoShowcaseProductCard
-                      key={`grp-${groupIndex}-item-${itemIndex}-${product.id}`}
-                      product={product}
-                      onOpenDetail={handleCardClick}
-                      isDuplicate={isDuplicate}
-                    />
-                  ))}
+                  {displayItems.map((product, itemIndex) => {
+                    const isRepeatedItem = itemIndex >= products.length;
+                    return (
+                      <MemoShowcaseProductCard
+                        key={`grp-${groupIndex}-item-${itemIndex}-${product.id}`}
+                        product={product}
+                        onOpenDetail={handleCardClick}
+                        isDuplicate={isDuplicate || isRepeatedItem}
+                      />
+                    );
+                  })}
                 </div>
               );
             })}
@@ -256,5 +317,3 @@ export function FeaturedProductMarquee({ products = [], catalogReady, onOpenDeta
 export const MemoFeaturedProductMarquee = React.memo(FeaturedProductMarquee);
 
 export default MemoFeaturedProductMarquee;
-
-

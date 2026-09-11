@@ -31,6 +31,7 @@ function listAdminUsers(options = {}) {
       preferCache,
       maxAgeMs,
       persist: true,
+      allowStaleOnError: !force,
     },
   );
 }

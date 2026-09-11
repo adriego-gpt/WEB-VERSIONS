@@ -1,4 +1,5 @@
 import React, { Suspense, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { alignImageViews } from "./domain/products/imageViews.js";
 import {
   ShoppingBag,
   Plus,
@@ -69,6 +70,7 @@ import {
   updateAdminUserRecord,
 } from "./services/adminUsersService";
 import {
+  adoptCatalogVersion,
   createServerCheckoutOrder,
   deleteServerOrder,
   getCatalogState,
@@ -80,7 +82,9 @@ import {
   syncContactState,
   updateServerOrder,
 } from "./services/serverStateService";
-import { uploadCatalogProductImage } from "./services/blobImageService";
+import { dataUrlToBlob, uploadCatalogProductImage, uploadPreparedCatalogImage } from "./services/blobImageService";
+import { uploadCatalogImageFiles } from "./domain/admin/catalogImageUpload";
+import { isLegacyInlineCatalogImage, migrateLegacyCatalogImages } from "./domain/admin/legacyImageMigration";
 import { useBodyScrollLock } from "./hooks/useBodyScrollLock";
 import { useMobileNavGuards } from "./hooks/useMobileNavGuards";
 import { useSwipeGesture } from "./hooks/useSwipeGesture";
@@ -115,7 +119,6 @@ import {
   normalizePaymentMethod,
 } from "./domain/orders/payment";
 import { OrderStatusProgress } from "./components/orders/OrderStatusProgress";
-import { OrderReferenceStrip } from "./components/orders/OrderReferenceStrip";
 import { ProductDraftPreview } from "./components/products/ProductDraftPreview";
 import { MemoFeaturedProductMarquee as ExternalFeaturedProductMarquee } from "./components/catalog/FeaturedProductMarquee";
 import { MemoCatalogProductCard as ExternalMemoCatalogProductCard } from "./components/catalog/CatalogProductCard";
@@ -202,19 +205,59 @@ const { startTransition } = React;
 const UserAuthSheet = lazyWithRetry(() => import("./components/modals/AuthModals").then((module) => ({ default: module.UserAuthModal })));
 const ProfileModal = lazyWithRetry(() => import("./components/modals/AuthModals").then((module) => ({ default: module.ProfileModal })));
 const ExternalAdminPanelModal = lazyWithRetry(() => import("./components/admin/AdminPanelModal").then((module) => ({ default: module.AdminPanelModal || module.default })));
-const ADMIN_PANEL_HISTORY_KEY = "__adriegoAdminPanel";
 const MAX_RECENTLY_VIEWED_PRODUCTS = 4;
 const ProductModal = lazyWithRetry(() => import("./components/products/ProductModal"));
 const CartSummaryModal = lazyWithRetry(() => import("./components/cart/CartSummaryModal"));
 const FavoritesModal = lazyWithRetry(() => import("./components/cart/FavoritesModal"));
 const ProfileQuickMenu = lazyWithRetry(() => import("./components/cart/ProfileQuickMenu"));
 const OrdersModal = lazyWithRetry(() => import("./components/orders/OrdersModal"));
-const OrderReferenceModal = lazyWithRetry(() => import("./components/orders/OrderReferenceModal"));
 const LegalModal = lazyWithRetry(() => import("./components/modals/LegalModal").then((module) => ({ default: module.LegalModal })));
 const OrderSuccessRedirectModal = lazyWithRetry(() => import("./components/modals/OrderSuccessRedirectModal").then((module) => ({ default: module.OrderSuccessRedirectModal || module.default })));
 
 /** Module-level route set — avoids re-instantiation on every render (#11). */
-const KNOWN_DIRECT_ROUTES = new Set(["/", "/cuenta/restablecer", "/carrito", "/favoritos", "/pedidos", "/admin", "/buscar", "/error-preview"]);
+const KNOWN_DIRECT_ROUTES = new Set(["/", "/cuenta/restablecer", "/carrito", "/favoritos", "/pedidos", "/buscar", "/error-preview"]);
+const ADMIN_WORKSPACE_HISTORY_KEY = "__adriegoAdminWorkspace";
+const ORDERS_PAGE_HISTORY_KEY = "__adriegoOrdersPage";
+const MAX_IMPORT_SYNC_BYTES = 3_500_000;
+const ADMIN_ROUTE_TO_TAB = {
+  "/admin": "resumen", "/admin/hoy": "resumen", "/admin/catalogo": "catalogo",
+  "/admin/catalogo/nuevo": "producto", "/admin/importar": "importar", "/admin/inventario": "inventario",
+  "/admin/ofertas": "ofertas", "/admin/cupones": "cupones", "/admin/taxonomias": "taxonomias",
+  "/admin/pedidos": "pedidos", "/admin/clientes": "usuarios", "/admin/configuracion": "portada",
+  "/admin/cuentas": "cuentas", "/admin/contacto": "contacto", "/admin/seguridad": "seguridad",
+};
+const ADMIN_TAB_TO_ROUTE = {
+  resumen: "/admin/hoy", catalogo: "/admin/catalogo", producto: "/admin/catalogo/nuevo",
+  importar: "/admin/importar", inventario: "/admin/inventario", ofertas: "/admin/ofertas",
+  cupones: "/admin/cupones", taxonomias: "/admin/taxonomias", pedidos: "/admin/pedidos",
+  usuarios: "/admin/clientes", portada: "/admin/configuracion", cuentas: "/admin/cuentas",
+  contacto: "/admin/contacto", seguridad: "/admin/seguridad",
+};
+
+function resolveAdminTabFromPath(path = "") {
+  const normalized = String(path || "").replace(/\/+$/, "") || "/";
+  if (/^\/admin\/catalogo\/[^/]+$/.test(normalized)) return "producto";
+  return ADMIN_ROUTE_TO_TAB[normalized] || "resumen";
+}
+
+function isAdminRoute(path = "") {
+  return /^\/admin(?:\/|$)/.test(String(path || ""));
+}
+
+function RouteNotFound({ onReturnHome }) {
+  return (
+    <main className="route-not-found">
+      <section className="route-not-found-card" aria-labelledby="route-not-found-title">
+        <p className="eyebrow">ADRI[E]GO STORE</p>
+        <h1 id="route-not-found-title">No encontramos esa página</h1>
+        <p>El enlace puede haber cambiado o la prenda ya no está disponible. Regresa al catálogo para seguir explorando.</p>
+        <button type="button" className="btn btn-primary" onClick={onReturnHome}>
+          Volver al inicio <ArrowUpRight size={16} aria-hidden="true" />
+        </button>
+      </section>
+    </main>
+  );
+}
 
 /**
  * Safe error thrower for /error-preview route (#5).
@@ -760,6 +803,7 @@ function BrandSocialIcon({ icon, label, size = 15 }) {
 function createEmptyProductForm() {
   return {
     id: null,
+    sku: "",
     name: "",
     price: "",
     oldPrice: "",
@@ -769,9 +813,9 @@ function createEmptyProductForm() {
     filterTagsText: "",
     catalogColor: "Negro",
     featured: false,
-    rating: "5",
-    newArrival: true,
-    isPublic: true,
+    rating: "",
+    newArrival: false,
+    isPublic: false,
     offerEnabled: false,
     offerDiscountMode: "percent",
     offerDiscountValue: "0",
@@ -782,9 +826,9 @@ function createEmptyProductForm() {
         name: "Negro",
         hex: "#171717",
         images: [""],
+        imageViews: [""],
         sizes: [
-          { uid: createUid(), size: "S", stock: "5" },
-          { uid: createUid(), size: "M", stock: "3" },
+          { uid: createUid(), size: "Única", stock: "0" },
         ],
       },
     ],
@@ -811,6 +855,15 @@ function normalizeProduct(rawProduct) {
     colorNames.map((color) => {
       const safeImages = Array.isArray(imagesByColor[color]) ? imagesByColor[color].map((item) => normalizeImageSource(item)).filter(Boolean) : [];
       return [color, safeImages.length ? safeImages : [fallbackImage]];
+    }),
+  );
+  const imageViewsByColor = Object.fromEntries(
+    colorNames.map((color) => {
+      const images = safeImagesByColor[color] || [];
+      const rawViews = Array.isArray(rawProduct.imageViewsByColor?.[color])
+        ? rawProduct.imageViewsByColor[color]
+        : [];
+      return [color, alignImageViews(imagesByColor[color], rawViews, images, normalizeImageSource)];
     }),
   );
   const colorSwatches = Object.fromEntries(colorNames.map((color) => [
@@ -860,6 +913,7 @@ function normalizeProduct(rawProduct) {
   return {
     ...rawProduct,
     id: normalizeEntityId(rawProduct.id || createUid()),
+    sku: sanitizeLine(rawProduct.sku || "").toUpperCase().slice(0, 60),
     basePrice,
     price: effectivePrice,
     oldPrice,
@@ -867,6 +921,7 @@ function normalizeProduct(rawProduct) {
     category: sanitizeLine(rawProduct.category || "General"),
     productType: sanitizeLine(rawProduct.productType || "General"),
     imagesByColor: safeImagesByColor,
+    imageViewsByColor,
     colorSwatches,
     colors: colorNames,
     catalogColor,
@@ -1266,7 +1321,7 @@ function getSelectionForColor(product, preferredSelection = null) {
 }
 
 
-function groupVariantsByColor(variants = [], imagesByColor = {}, colorSwatches = {}) {
+function groupVariantsByColor(variants = [], imagesByColor = {}, colorSwatches = {}, imageViewsByColor = {}) {
   const colors = [...new Set([
     ...Object.keys(imagesByColor || {}),
     ...variants.map((variant) => variant.color),
@@ -1277,6 +1332,7 @@ function groupVariantsByColor(variants = [], imagesByColor = {}, colorSwatches =
     name: color,
     hex: normalizeProductColorHex(colorSwatches[color]) || getProductColorSwatch(color),
     images: imagesByColor[color]?.length ? [...imagesByColor[color]] : [""],
+    imageViews: imageViewsByColor[color]?.length ? [...imageViewsByColor[color]] : [],
     sizes: (() => {
       const entries = variants.filter((variant) => variant.color === color);
       if (!entries.length) {
@@ -1360,7 +1416,7 @@ function normalizeOrderRecord(order = {}) {
     createdAt: order.createdAt || new Date().toISOString(),
     subtotal,
     discountAmount,
-    total: Math.max(0, Number(order.total) || subtotal - discountAmount),
+    total: Math.max(0, Number(order.total ?? (subtotal - discountAmount))),
     couponCode: normalizeCode(order.couponCode || ""),
     couponDiscountType: order.couponDiscountType === "fixed" ? "fixed" : (order.couponDiscountType === "percentage" ? "percentage" : ""),
     couponDiscountValue: Math.max(0, Number(order.couponDiscountValue) || 0),
@@ -1431,6 +1487,7 @@ function createProductForm(product) {
       : (product.offerExtraDiscount != null ? product.offerExtraDiscount : 0));
   return {
     id: product.id,
+    sku: product.sku || "",
     name: product.name,
     price: String(product.basePrice != null ? product.basePrice : product.price),
     oldPrice: String(product.oldPrice),
@@ -1447,7 +1504,7 @@ function createProductForm(product) {
     offerDiscountMode: normalizedOfferMode,
     offerDiscountValue: String(fallbackOfferValue || 0),
     offerExtraDiscount: String(product.offerExtraDiscount || 0),
-    colorsData: groupVariantsByColor(product.variants || [], product.imagesByColor, product.colorSwatches),
+    colorsData: groupVariantsByColor(product.variants || [], product.imagesByColor, product.colorSwatches, product.imageViewsByColor),
   };
 }
 
@@ -1457,6 +1514,7 @@ function buildProductFromForm(form) {
       name: sanitizeLine(color.name),
       hex: normalizeProductColorHex(color.hex) || getProductColorSwatch(color.name),
       images: color.images.map((image) => normalizeImageSource(image)).filter(Boolean),
+      imageViews: alignImageViews(color.images, color.imageViews, color.images.map(normalizeImageSource).filter(Boolean), normalizeImageSource),
       sizes: (color.sizes || []).map((sizeRow) => ({
         size: sanitizeLine(sizeRow.size),
         stock: Math.max(0, Number(sizeRow.stock) || 0),
@@ -1520,6 +1578,7 @@ function buildProductFromForm(form) {
 
   const sizes = [...new Set(variants.map((variant) => variant.size))];
   const imagesByColor = Object.fromEntries(parsedColors.map((color) => [color.name, color.images]));
+  const imageViewsByColor = Object.fromEntries(parsedColors.map((color) => [color.name, color.imageViews]));
   const colorSwatches = Object.fromEntries(parsedColors.map((color) => [color.name, color.hex]));
   const catalogColor = parsedColors.some((color) => color.name === form.catalogColor)
     ? form.catalogColor
@@ -1540,6 +1599,7 @@ function buildProductFromForm(form) {
   return {
     value: {
       id: normalizeEntityId(form.id || createUid()),
+      sku: sanitizeLine(form.sku || "").toUpperCase().slice(0, 60),
       name: safeName,
       basePrice: safePrice,
       price: safePrice,
@@ -1548,6 +1608,7 @@ function buildProductFromForm(form) {
       productType: sanitizeLine(form.productType) || "General",
       description: sanitizeParagraph(form.description),
       imagesByColor,
+      imageViewsByColor,
       colorSwatches,
       colors: parsedColors.map((color) => color.name),
       catalogColor,
@@ -1594,13 +1655,17 @@ export default function App() {
   const [selections, setSelections] = useState({});
   const [cart, setCart] = useState(() => normalizeStoredCart(readStorage(STORAGE_KEYS.cart, [])));
   const [favorites, setFavorites] = useState(() => normalizeStoredFavorites(readStorage(STORAGE_KEYS.favorites, [])));
+  const managedCatalogDirtyRef = useRef(false);
   const [recentlyViewedProductIds, setRecentlyViewedProductIds] = useState(() => (
     normalizeRecentlyViewedProductIds(readStorage(STORAGE_KEYS.recentlyViewedProducts, []))
   ));
+  const recentlyViewedProductIdsRef = useRef(recentlyViewedProductIds);
   const [orderHistory, setOrderHistory] = useState([]);
+  const [physicalStockEvents, setPhysicalStockEvents] = useState([]);
   const [coupons, setCoupons] = useState([]);
   const [currentUser, setCurrentUser] = useState(null);
   const [adminSession, setAdminSession] = useState(null);
+  const [adminSessionReady, setAdminSessionReady] = useState(false);
   const [productTypeRecords, setProductTypeRecords] = useState(() => buildManagedEntities(
     [],
     PRODUCT_TYPE_OPTIONS,
@@ -1624,6 +1689,12 @@ export default function App() {
   const [heroIndex, setHeroIndex] = useState(0);
   const [showAdminPanel, setShowAdminPanel] = useState(false);
   const [destructiveConfirmation, setDestructiveConfirmation] = useState(null);
+  const [catalogConflict, setCatalogConflict] = useState(null);
+  const [catalogConflictBusy, setCatalogConflictBusy] = useState(false);
+  const [realtimeSyncStatus, setRealtimeSyncStatus] = useState({ state: "checking", updatedAt: "", message: "" });
+  const [realtimeSyncRetryKey, setRealtimeSyncRetryKey] = useState(0);
+  const [catalogImageUploadStateByColor, setCatalogImageUploadStateByColor] = useState({});
+  const catalogImageUploadControllersRef = useRef(new Map());
   const [showMobileNav, setShowMobileNav] = useState(false);
   const [adminTab, setAdminTab] = useState("resumen");
   const [showCartSummary, setShowCartSummary] = useState(false);
@@ -1635,7 +1706,6 @@ export default function App() {
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [profileModalSection, setProfileModalSection] = useState("datos");
   const [authMode, setAuthMode] = useState("login");
-  const [referenceOrder, setReferenceOrder] = useState(null);
   const [authError, setAuthError] = useState("");
   const [authBusy, setAuthBusy] = useState(false);
   const [authPasswordVisible, setAuthPasswordVisible] = useState(false);
@@ -1669,6 +1739,7 @@ export default function App() {
   const [orderDeliveryFilter, setOrderDeliveryFilter] = useState("all");
   const [orderDateFilter, setOrderDateFilter] = useState("all");
   const [orderCustomerFilter, setOrderCustomerFilter] = useState("");
+  const [orderPatchStateById, setOrderPatchStateById] = useState({});
   const [liveOrdersEnabled, setLiveOrdersEnabled] = useState(true);
   const [liveOrdersRefreshing, setLiveOrdersRefreshing] = useState(false);
   const [liveOrdersUpdatedAt, setLiveOrdersUpdatedAt] = useState("");
@@ -1704,6 +1775,7 @@ export default function App() {
   const [adminUsersSearch, setAdminUsersSearch] = useState("");
   const [adminUsersUpdatedAt, setAdminUsersUpdatedAt] = useState("");
   const [toast, setToast] = useState(null);
+  const [guestOrderId, setGuestOrderId] = useState("");
   const [orderLiveAlert, setOrderLiveAlert] = useState(null);
   const [catalogReady, setCatalogReady] = useState(false);
   const [storageBackend, setStorageBackend] = useState("");
@@ -1731,7 +1803,6 @@ export default function App() {
   const storeSettingsRef = useRef(storeSettings);
   const productTypeRecordsRef = useRef(productTypeRecords);
   const filterTagRecordsRef = useRef(filterTagRecords);
-  const catalogSyncTimeoutRef = useRef(null);
   const catalogSyncQueueRef = useRef(Promise.resolve());
   const catalogSyncErrorShownRef = useRef(false);
   const orderPatchTimersRef = useRef(new Map());
@@ -1755,7 +1826,6 @@ export default function App() {
   const restoringCatalogRouteRef = useRef(false);
   const lastCatalogSearchSignatureRef = useRef("");
   const destructiveConfirmationResolverRef = useRef(null);
-  const adminPanelHistoryEntryRef = useRef(false);
 
   const discardProductDraft = useCallback(() => {
     removeStoredProductDraft();
@@ -1824,18 +1894,15 @@ export default function App() {
   }, [discardProductDraft, productForm.id, products]);
 
   const closeAdminPanel = useCallback(() => {
-    if (
-      typeof window !== "undefined"
-      && adminPanelHistoryEntryRef.current
-      && window.history.state?.[ADMIN_PANEL_HISTORY_KEY]
-    ) {
-      adminPanelHistoryEntryRef.current = false;
-      setShowAdminPanel(false);
-      window.history.back();
-      return;
-    }
-    adminPanelHistoryEntryRef.current = false;
     setShowAdminPanel(false);
+    if (typeof window !== "undefined" && isAdminRoute(window.location.pathname)) {
+      if (window.history.state?.[ADMIN_WORKSPACE_HISTORY_KEY]) {
+        window.history.back();
+        return;
+      }
+      window.history.replaceState({}, document.title, "/");
+      setPathname("/");
+    }
   }, []);
 
   const requestDestructiveConfirmation = useCallback((request) => new Promise((resolve) => {
@@ -1880,7 +1947,7 @@ export default function App() {
   }, [adminTab, closeAdminPanel, hasUnsavedProductChanges, requestProductExitDecision]);
 
   const requestAdminTabChange = useCallback(async (requestedTab) => {
-    const nextTab = requestedTab === "inventario" ? "resumen" : requestedTab;
+    const nextTab = requestedTab;
     if (adminTab === "producto" && nextTab !== "producto" && hasUnsavedProductChanges) {
       const decision = await requestProductExitDecision({
         title: "¿Cambiar de sección?",
@@ -1889,9 +1956,36 @@ export default function App() {
       if (decision === "stay") return;
     }
     setAdminTab(nextTab);
+    if (typeof window !== "undefined") {
+      const nextRoute = ADMIN_TAB_TO_ROUTE[nextTab] || "/admin/hoy";
+      if (window.location.pathname !== nextRoute) {
+        window.history.replaceState(window.history.state || {}, document.title, nextRoute);
+        setPathname(nextRoute);
+      }
+    }
   }, [adminTab, hasUnsavedProductChanges, requestProductExitDecision]);
 
   const normalizedPathname = pathname.replace(/\/+$/, "") || "/";
+  const adminRouteActive = isAdminRoute(normalizedPathname);
+  const openOrdersPage = useCallback(() => {
+    setShowProfileQuickMenu(false);
+    setShowMobileNav(false);
+    setShowOrdersModal(true);
+    if (typeof window !== "undefined" && window.location.pathname !== "/pedidos") {
+      window.history.pushState({ ...(window.history.state || {}), [ORDERS_PAGE_HISTORY_KEY]: true }, document.title, "/pedidos");
+      setPathname("/pedidos");
+    }
+  }, []);
+  const closeOrdersPage = useCallback(() => {
+    setShowOrdersModal(false);
+    if (typeof window === "undefined" || window.location.pathname !== "/pedidos") return;
+    if (window.history.state?.[ORDERS_PAGE_HISTORY_KEY]) {
+      window.history.back();
+      return;
+    }
+    window.history.replaceState({}, document.title, "/");
+    setPathname("/");
+  }, []);
   const productRouteMatch = normalizedPathname.match(/^\/producto\/([^/]+)$/);
   const productRouteSlug = productRouteMatch ? decodeRouteSegment(productRouteMatch[1]) : "";
   const isResetRoute = normalizedPathname === "/cuenta/restablecer";
@@ -1949,9 +2043,41 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (!showAdminPanel || adminRouteActive) return;
+    setShowAdminPanel(false);
+  }, [adminRouteActive, showAdminPanel]);
+
+  useEffect(() => {
+    if (normalizedPathname === "/pedidos" || !showOrdersModal) return;
+    setShowOrdersModal(false);
+  }, [normalizedPathname, showOrdersModal]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !showAdminPanel) return undefined;
+    const currentAdminPath = normalizedPathname;
+    const guardAdminHistory = async () => {
+      const requestedPath = window.location.pathname || "/";
+      if (adminTab !== "producto" || !hasUnsavedProductChanges || requestedPath === currentAdminPath) return;
+      window.history.pushState({ [ADMIN_WORKSPACE_HISTORY_KEY]: true }, document.title, currentAdminPath);
+      setPathname(currentAdminPath);
+      const decision = await requestProductExitDecision({
+        title: "¿Salir del editor?",
+        description: "Tienes cambios sin publicar. Puedes guardar el borrador para continuar después o salir descartándolos.",
+      });
+      if (decision === "stay") return;
+      window.history.replaceState({}, document.title, requestedPath);
+      setPathname(requestedPath);
+      if (!isAdminRoute(requestedPath)) setShowAdminPanel(false);
+    };
+    window.addEventListener("popstate", guardAdminHistory);
+    return () => window.removeEventListener("popstate", guardAdminHistory);
+  }, [adminTab, hasUnsavedProductChanges, normalizedPathname, requestProductExitDecision, showAdminPanel]);
+
+  useEffect(() => {
     if (typeof document === "undefined") return;
     const isMissingRoute = normalizedPathname !== "/"
       && !isResetRoute
+      && !adminRouteActive
       && (!productRouteSlug || (catalogReady && !routedProduct));
     const robots = isResetRoute || isMissingRoute
       ? "noindex, nofollow"
@@ -1971,12 +2097,16 @@ export default function App() {
     const productImage = normalizeSafeUrl(
       routedProduct?.images?.[0] || routedProduct?.image || FALLBACK_IMAGE,
     ) || FALLBACK_IMAGE;
-    const title = isResetRoute
+    const title = adminRouteActive
+      ? "Administración | Adriego Store"
+      : isResetRoute
       ? "Restablecer contraseña | Adriego Store"
       : (isMissingRoute
         ? "Página no encontrada | Adriego Store"
         : (routedProduct ? `${productName} | Adriego Store` : "Adriego Store | Moda seleccionada"));
-    const description = routedProduct ? productDescription : "Descubre Adriego Store. Moda seleccionada con atención personalizada por WhatsApp.";
+    const description = adminRouteActive
+      ? "Espacio privado de administración de Adriego Store."
+      : routedProduct ? productDescription : "Descubre Adriego Store. Moda seleccionada con atención personalizada por WhatsApp.";
     document.title = title;
     upsertRouteMeta('meta[name="description"]', ["name", "description"], description);
     upsertRouteMeta('meta[property="og:title"]', ["property", "og:title"], title);
@@ -2032,7 +2162,7 @@ export default function App() {
       },
     });
     if (!existingSchema) document.head.appendChild(schema);
-  }, [catalogReady, isResetRoute, normalizedPathname, productRouteSlug, routedProduct]);
+  }, [adminRouteActive, catalogReady, isResetRoute, normalizedPathname, productRouteSlug, routedProduct]);
   const knownAdminOrderIdsRef = useRef(new Set());
   const adminOrdersHydratedRef = useRef(false);
   const checkoutAttemptRef = useRef({ signature: "", idempotencyKey: "" });
@@ -2262,12 +2392,13 @@ export default function App() {
     .filter((order) => {
       const matchesUserId = currentUser?.id && String(order.customerId || "") === String(currentUser.id);
       const matchesUserEmail = normalizeEmail(order.customerEmail || "") && normalizeEmail(order.customerEmail || "") === normalizeEmail(currentUser?.email || "");
-      return Boolean(matchesUserId || matchesUserEmail);
+      const matchesGuest = !currentUser?.id && guestOrderId && String(order.customerId || "") === guestOrderId;
+      return Boolean(matchesUserId || matchesUserEmail || matchesGuest);
     })
     .map((order) => ({
       order,
       text: normalizeSearchText(`${order.code} ${order.items.map((item) => `${item.name} ${item.color} ${item.size}`).join(" ")}`),
-    })), [orderHistory, currentUser?.id, currentUser?.email]);
+    })), [orderHistory, currentUser?.id, currentUser?.email, guestOrderId]);
 
   const adminProductSearchIndex = useMemo(() => productSearchIndex.map((entry) => ({
     product: entry.product,
@@ -2379,12 +2510,12 @@ export default function App() {
   ]);
 
   const customerOrders = useMemo(() => {
-    if (!currentUser?.id && !normalizeEmail(currentUser?.email || "")) return [];
+    if (!currentUser?.id && !normalizeEmail(currentUser?.email || "") && !guestOrderId) return [];
     const filtered = !normalizedUserOrderSearch
       ? customerOrderSearchIndex
       : customerOrderSearchIndex.filter((entry) => entry.text.includes(normalizedUserOrderSearch));
     return filtered.map((entry) => entry.order);
-  }, [customerOrderSearchIndex, currentUser, normalizedUserOrderSearch]);
+  }, [customerOrderSearchIndex, currentUser, normalizedUserOrderSearch, guestOrderId]);
 
   const footerWhatsAppLink = useMemo(() => contactSettings.whatsappLink || buildWhatsAppLink(contactSettings.whatsappNumber), [contactSettings.whatsappLink, contactSettings.whatsappNumber]);
   const footerEmailLink = useMemo(() => buildMailtoLink(contactSettings.email), [contactSettings.email]);
@@ -2440,43 +2571,6 @@ export default function App() {
     return () => window.removeEventListener("beforeunload", preventAccidentalUnload);
   }, [adminTab, hasUnsavedProductChanges, showAdminPanel]);
 
-  useEffect(() => {
-    if (!showAdminPanel || !isAdmin || typeof window === "undefined") return undefined;
-
-    const currentState = window.history.state && typeof window.history.state === "object"
-      ? window.history.state
-      : {};
-    if (!currentState[ADMIN_PANEL_HISTORY_KEY]) {
-      window.history.pushState({
-        ...currentState,
-        [ADMIN_PANEL_HISTORY_KEY]: true,
-      }, document.title, window.location.href);
-    }
-    adminPanelHistoryEntryRef.current = true;
-
-    const closeFromBrowserHistory = async () => {
-      if (!adminPanelHistoryEntryRef.current) return;
-      if (adminTab === "producto" && hasUnsavedProductChanges) {
-        const decision = await requestProductExitDecision({
-          title: "¿Salir del editor?",
-          description: "Tienes cambios sin publicar. Puedes guardar el borrador para continuar después o salir descartándolos.",
-        });
-        if (decision === "stay") {
-          const currentState = window.history.state && typeof window.history.state === "object"
-            ? window.history.state
-            : {};
-          window.history.pushState({ ...currentState, [ADMIN_PANEL_HISTORY_KEY]: true }, document.title, window.location.href);
-          adminPanelHistoryEntryRef.current = true;
-          return;
-        }
-      }
-      adminPanelHistoryEntryRef.current = false;
-      setShowAdminPanel(false);
-    };
-    window.addEventListener("popstate", closeFromBrowserHistory);
-    return () => window.removeEventListener("popstate", closeFromBrowserHistory);
-  }, [adminTab, hasUnsavedProductChanges, isAdmin, requestProductExitDecision, showAdminPanel]);
-
   const securityMetricsGeneratedAt = String(securityMetrics?.generatedAt || "");
   const mobileQuickActive = showCartSummary
     ? "carrito"
@@ -2506,12 +2600,12 @@ export default function App() {
   }, [orderHistory]);
   const adminRevenueTotal = useMemo(() => orderHistory.reduce((total, order) => {
     if (normalizeOrderStatusForOrder(order.status, order.deliveryType) === "Cancelado") return total;
-    return total + (Number(order.total || order.subtotal) || 0);
+    return total + (Number(order.total ?? order.subtotal) || 0);
   }, 0), [orderHistory]);
   const adminAverageOrderTotal = useMemo(() => {
     const validOrders = orderHistory.filter((order) => normalizeOrderStatusForOrder(order.status, order.deliveryType) !== "Cancelado");
     if (!validOrders.length) return 0;
-    return validOrders.reduce((total, order) => total + (Number(order.total || order.subtotal) || 0), 0) / validOrders.length;
+    return validOrders.reduce((total, order) => total + (Number(order.total ?? order.subtotal) || 0), 0) / validOrders.length;
   }, [orderHistory]);
 
   const adminCatalogProducts = useMemo(() => {
@@ -2722,16 +2816,11 @@ export default function App() {
     preferCache = true,
     notifyAdminOnNew = false,
   } = {}) => {
-    if (!currentUser?.id && !isAdmin) {
-      setOrderHistory([]);
-      setLiveOrdersUpdatedAt("");
-      setLiveOrdersRefreshing(false);
-      return false;
-    }
     if (!silent) {
       setLiveOrdersRefreshing(true);
     }
     const result = await listServerOrders({ force, preferCache });
+    setGuestOrderId(result.ok ? result.guestId || "" : "");
     if (!result.ok || !Array.isArray(result.orderHistory)) {
       if (!silent) {
         setToast({
@@ -2775,7 +2864,7 @@ export default function App() {
             totalNew,
             orderCode: orderLabel,
             customerName: sanitizeLine(firstOrder?.customerName || "Cliente"),
-            total: Number(firstOrder?.total || firstOrder?.subtotal || 0),
+            total: Number(firstOrder?.total ?? firstOrder?.subtotal ?? 0),
             createdAt: firstOrder?.createdAt || "",
             detectedAt: new Date().toISOString(),
           });
@@ -2816,7 +2905,16 @@ export default function App() {
 
     setLiveOrdersRefreshing(false);
     return true;
-  }, [currentUser?.id, isAdmin, showToastMessage]);
+  }, [isAdmin, showToastMessage]);
+
+  useEffect(() => {
+    if (!showOrdersModal) return undefined;
+    void refreshOrdersFromServer({ silent: true, force: true, preferCache: false });
+    const timer = window.setInterval(() => {
+      if (!document.hidden) void refreshOrdersFromServer({ silent: true, force: true, preferCache: false });
+    }, 30000);
+    return () => window.clearInterval(timer);
+  }, [showOrdersModal, refreshOrdersFromServer]);
 
   const getUserStateSignature = useCallback((nextCart = [], nextFavorites = []) => (
     buildUserStateSignature(nextCart, nextFavorites, {
@@ -2926,15 +3024,23 @@ export default function App() {
         })
       : [];
     const fallbackProducts = initialProducts.map(normalizeProduct);
-    const resolvedProducts = incomingProducts.length ? incomingProducts : fallbackProducts;
+    // An explicit empty array is authoritative: it means the administrator
+    // intentionally left the catalog empty. Only use bundled products when
+    // the server response does not contain a products array at all.
+    const resolvedProducts = Array.isArray(data.products) ? incomingProducts : fallbackProducts;
 
-    startTransition(() => {
+    {
+      // Commit hydration before catalogReady so saved selections are never
+      // pruned against the bundled placeholder catalog during startup.
       setProducts(resolvedProducts);
       if (Array.isArray(data.coupons)) {
         setCoupons(normalizeCouponList(data.coupons));
       }
       if (Array.isArray(data.orderHistory)) {
         setOrderHistory(data.orderHistory.map(normalizeOrderRecord));
+      }
+      if (Array.isArray(data.physicalStockEvents)) {
+        setPhysicalStockEvents(data.physicalStockEvents);
       }
       setStorageBackend(sanitizeLine(data.storageBackend || ""));
 
@@ -2957,7 +3063,7 @@ export default function App() {
         resolvedProducts.flatMap((product) => product.filterTags || []),
         "filter-tag",
       ));
-    });
+    }
   }, []);
 
   const syncCatalogSnapshot = useCallback(async (overrides = {}, { silent = false, reconcile = false } = {}) => {
@@ -2982,6 +3088,14 @@ export default function App() {
 
       const result = await syncCatalogState(payload);
       if (!result.ok) {
+        if (result.status === 409 && result.code === "CATALOG_VERSION_CONFLICT" && result.currentState) {
+          setCatalogConflict({
+            currentState: result.currentState,
+            currentVersion: Number(result.currentVersion || result.currentState.catalogVersion || 0),
+            localPayload: payload,
+          });
+          result.message = "El catálogo cambió en otra sesión. Elige qué versión conservar antes de continuar.";
+        }
         if (result.status === 413 || String(result.message || "").toLowerCase().includes("too large") || String(result.message || "").includes("PAYLOAD_TOO_LARGE")) {
           result.message = "El tamaño total del catálogo e imágenes supera el límite de 4.5MB permitido por Vercel. Reduce el tamaño de las fotos o utiliza enlaces externos (URLs).";
         }
@@ -3000,6 +3114,59 @@ export default function App() {
 
     return enqueueAsyncOperation(catalogSyncQueueRef, runSync);
   }, [applyCatalogStateFromServer, catalogReady, isAdmin, showToastMessage]);
+
+  useEffect(() => {
+    if (!managedCatalogDirtyRef.current) return;
+    managedCatalogDirtyRef.current = false;
+    void syncCatalogSnapshot({ products, productTypeRecords, filterTagRecords }).then((result) => {
+      if (!result.ok) setEditorError(result.message || "No se guardaron los cambios. Inténtalo nuevamente.");
+    });
+  }, [products, productTypeRecords, filterTagRecords, syncCatalogSnapshot]);
+
+  const resolveCatalogConflict = useCallback(async (decision) => {
+    const conflict = catalogConflict;
+    if (!conflict || catalogConflictBusy) return;
+
+    if (decision === "review") {
+      setCatalogConflict(null);
+      showToastMessage("Tus cambios locales siguen sin guardarse. Revísalos antes de volver a intentar.", "warning");
+      return;
+    }
+
+    if (decision === "server") {
+      adoptCatalogVersion(conflict.currentVersion);
+      applyCatalogStateFromServer(conflict.currentState);
+      setCatalogConflict(null);
+      setEditorError("");
+      showToastMessage("Se cargó la versión más reciente del servidor.", "success");
+      return;
+    }
+
+    setCatalogConflictBusy(true);
+    const result = await syncCatalogState(conflict.localPayload, {
+      baseCatalogVersion: conflict.currentVersion,
+    });
+    setCatalogConflictBusy(false);
+
+    if (result.ok) {
+      setCatalogConflict(null);
+      setEditorError("");
+      showToastMessage("Tus cambios reemplazaron la versión anterior del servidor.", "success");
+      return;
+    }
+
+    if (result.status === 409 && result.currentState) {
+      setCatalogConflict({
+        currentState: result.currentState,
+        currentVersion: Number(result.currentVersion || result.currentState.catalogVersion || 0),
+        localPayload: conflict.localPayload,
+      });
+      showToastMessage("El catálogo volvió a cambiar. Revisa nuevamente qué versión deseas conservar.", "warning");
+      return;
+    }
+
+    showToastMessage(result.message || "No pudimos resolver el conflicto. Tus cambios locales se conservaron.", "error");
+  }, [applyCatalogStateFromServer, catalogConflict, catalogConflictBusy, showToastMessage]);
 
   useEffect(() => {
     if (!heroSlides.length || typeof document === "undefined") return undefined;
@@ -3104,36 +3271,36 @@ export default function App() {
   }, [favorites]);
 
   useEffect(() => {
+    recentlyViewedProductIdsRef.current = recentlyViewedProductIds;
     saveStorage(STORAGE_KEYS.recentlyViewedProducts, recentlyViewedProductIds);
   }, [recentlyViewedProductIds]);
+
+  const rememberRecentlyViewedProduct = useCallback((rawProductId) => {
+    const productId = normalizeEntityId(rawProductId);
+    if (!productId) return;
+
+    const previous = recentlyViewedProductIdsRef.current;
+    const next = normalizeRecentlyViewedProductIds([
+      productId,
+      ...previous.filter((entry) => entry !== productId),
+    ]);
+    const unchanged = next.length === previous.length
+      && next.every((entry, index) => entry === previous[index]);
+    if (unchanged) return;
+
+    recentlyViewedProductIdsRef.current = next;
+    saveStorage(STORAGE_KEYS.recentlyViewedProducts, next);
+    setRecentlyViewedProductIds(next);
+  }, []);
 
   useEffect(() => {
     const productId = normalizeEntityId(selectedProduct?.id);
     if (!productId || selectedProduct?.isPublic === false) return;
-
-    setRecentlyViewedProductIds((previous) => {
-      const next = normalizeRecentlyViewedProductIds([
-        productId,
-        ...previous.filter((entry) => entry !== productId),
-      ]);
-      const unchanged = next.length === previous.length
-        && next.every((entry, index) => entry === previous[index]);
-      return unchanged ? previous : next;
-    });
-  }, [selectedProduct?.id, selectedProduct?.isPublic]);
-
-  useEffect(() => {
-    if (!catalogReady) return;
-    setRecentlyViewedProductIds((previous) => {
-      const next = previous.filter((productId) => {
-        const product = productsById.get(productId);
-        return Boolean(product) && product.isPublic !== false;
-      });
-      return next.length === previous.length ? previous : next;
-    });
-  }, [catalogReady, productsById]);
+    rememberRecentlyViewedProduct(productId);
+  }, [rememberRecentlyViewedProduct, selectedProduct?.id, selectedProduct?.isPublic]);
 
   const handleClearRecentlyViewed = useCallback(() => {
+    recentlyViewedProductIdsRef.current = [];
     setRecentlyViewedProductIds([]);
     saveStorage(STORAGE_KEYS.recentlyViewedProducts, []);
   }, []);
@@ -3297,14 +3464,23 @@ export default function App() {
           expiresAt: Number(result.session.expiresAt) || 0,
           issuedAt: Number(result.session.issuedAt) || Date.now(),
         });
-        return;
+      } else {
+        setAdminSession(null);
       }
-      setAdminSession(null);
+      setAdminSessionReady(true);
     })();
     return () => {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (!adminRouteActive || !adminSessionReady || isAdmin) return;
+    setAuthMode("login");
+    setAuthError("Inicia sesión como administrador para abrir este espacio.");
+    setShowProfileModal(false);
+    setShowUserAuth(true);
+  }, [adminRouteActive, adminSessionReady, isAdmin]);
 
   useEffect(() => {
     if (isAdmin) return;
@@ -3377,12 +3553,9 @@ export default function App() {
       setPathname("/");
     } else if (normalizedPathname === "/pedidos") {
       setShowOrdersModal(true);
-      window.history.replaceState({}, document.title, "/");
-      setPathname("/");
-    } else if (normalizedPathname === "/admin") {
+    } else if (adminRouteActive) {
       setShowAdminPanel(true);
-      window.history.replaceState({}, document.title, "/");
-      setPathname("/");
+      setAdminTab(resolveAdminTabFromPath(normalizedPathname));
     } else if (normalizedPathname === "/buscar") {
       if (typeof openCatalogSearch === "function") {
         openCatalogSearch();
@@ -3390,7 +3563,7 @@ export default function App() {
       window.history.replaceState({}, document.title, "/");
       setPathname("/");
     }
-  }, [normalizedPathname, openCatalogSearch]);
+  }, [adminRouteActive, normalizedPathname, openCatalogSearch]);
 
   useEffect(() => {
     if (!catalogReady) return;
@@ -3456,6 +3629,8 @@ export default function App() {
     refreshOrders: refreshOrdersFromServer,
     setCurrentUser,
     showAdminPanel,
+    onStatusChange: setRealtimeSyncStatus,
+    retryKey: realtimeSyncRetryKey,
   });
 
   useEffect(() => {
@@ -3515,40 +3690,6 @@ export default function App() {
     adminTab,
     adminUsersUpdatedAt,
     refreshAdminUsers,
-  ]);
-
-  useEffect(() => {
-    if (!catalogReady || !isAdmin) return undefined;
-    if (catalogSyncTimeoutRef.current) {
-      window.clearTimeout(catalogSyncTimeoutRef.current);
-    }
-    catalogSyncTimeoutRef.current = window.setTimeout(async () => {
-      const result = await syncCatalogSnapshot({}, { silent: true });
-      if (!result.ok) {
-        if (!catalogSyncErrorShownRef.current) {
-          showToastMessage("No pudimos sincronizar catalogo seguro con el servidor.", "warning");
-          catalogSyncErrorShownRef.current = true;
-        }
-        return;
-      }
-      catalogSyncErrorShownRef.current = false;
-    }, 700);
-    return () => {
-      if (catalogSyncTimeoutRef.current) {
-        window.clearTimeout(catalogSyncTimeoutRef.current);
-      }
-    };
-  }, [
-    catalogReady,
-    isAdmin,
-    products,
-    coupons,
-    contactSettings,
-    storeSettings,
-    productTypeRecords,
-    filterTagRecords,
-    showToastMessage,
-    syncCatalogSnapshot,
   ]);
 
   useEffect(() => {
@@ -3732,6 +3873,7 @@ export default function App() {
   }, [products, selectedProduct]);
 
   useEffect(() => {
+    if (!catalogReady) return;
     setCart((previous) => {
       const next = previous
         .map((item) => {
@@ -3762,7 +3904,7 @@ export default function App() {
 
       return unchanged ? previous : next;
     });
-  }, [products, productsById]);
+  }, [catalogReady, products, productsById]);
 
   useEffect(() => {
     setProductTypeRecords((previous) => products.reduce((records, product) => ensureManagedEntityExists(records, product.productType || "General", "product-type"), previous));
@@ -3770,7 +3912,7 @@ export default function App() {
   }, [products]);
 
   useEffect(() => {
-    if (isAdmin) return;
+    if (isAdmin || !catalogReady) return;
     setCart((previous) => {
       const normalized = normalizeStoredCart(previous);
       const filtered = normalized.filter((item) => {
@@ -3789,10 +3931,10 @@ export default function App() {
       });
       return unchanged ? previous : filtered;
     });
-  }, [productsById, isAdmin]);
+  }, [catalogReady, productsById, isAdmin]);
 
   useEffect(() => {
-    if (isAdmin) return;
+    if (isAdmin || !catalogReady) return;
     setFavorites((previous) => {
       const normalized = normalizeStoredFavorites(previous);
       const filtered = normalized.filter((favoriteId) => {
@@ -3803,7 +3945,7 @@ export default function App() {
       const unchanged = filtered.length === previous.length && filtered.every((item, index) => item === previous[index]);
       return unchanged ? previous : filtered;
     });
-  }, [productsById, isAdmin]);
+  }, [catalogReady, productsById, isAdmin]);
 
   useEffect(() => {
     if (productTypeFilter !== "Todos" && !productTypeOptions.includes(productTypeFilter)) {
@@ -3857,15 +3999,14 @@ export default function App() {
     const syncViewport = () => setIsMobileViewport(mediaQuery.matches);
     syncViewport();
     mediaQuery.addEventListener?.("change", syncViewport);
-    window.addEventListener("resize", syncViewport);
     return () => {
       mediaQuery.removeEventListener?.("change", syncViewport);
-      window.removeEventListener("resize", syncViewport);
     };
   }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") return undefined;
+    if (!isMobileViewport) return undefined;
     const sections = [
       { id: "inicio", tab: "inicio" },
       { id: "destacados", tab: "inicio" },
@@ -3874,6 +4015,7 @@ export default function App() {
     ];
 
     let ticking = false;
+    let frameId = null;
     const syncActiveSection = () => {
       if (showCartSummary || showFavoritesPanel) {
         ticking = false;
@@ -3895,7 +4037,7 @@ export default function App() {
     const handleScrollOrResize = () => {
       if (!ticking) {
         ticking = true;
-        window.requestAnimationFrame(syncActiveSection);
+        frameId = window.requestAnimationFrame(syncActiveSection);
       }
     };
 
@@ -3905,8 +4047,9 @@ export default function App() {
     return () => {
       window.removeEventListener("scroll", handleScrollOrResize);
       window.removeEventListener("resize", handleScrollOrResize);
+      if (frameId !== null) window.cancelAnimationFrame(frameId);
     };
-  }, [showCartSummary, showFavoritesPanel]);
+  }, [isMobileViewport, showCartSummary, showFavoritesPanel]);
 
   const shouldLockBody = Boolean(
     selectedProduct
@@ -3916,11 +4059,9 @@ export default function App() {
     || orderSuccessModal.open
     || showUserAuth
     || showProfileModal
-    || referenceOrder
     || legalModalState.open
     || destructiveConfirmation
     || (showMobileNav && isMobileViewport)
-    || (showAdminPanel && isAdmin)
   );
 
   useEffect(() => {
@@ -3983,7 +4124,7 @@ export default function App() {
         `• *Cliente:* ${order.customerName || "Cliente"}`,
         `• *Entrega:* ${deliveryMode}`,
         `• *Pago:* ${methodSummary}`,
-        `• *TOTAL:* *${currency(order.total || order.subtotal)}*`,
+        `• *TOTAL:* *${currency(order.total ?? order.subtotal)}*`,
         "",
         isCard
           ? "_Por favor envíenme el enlace seguro para pagar con tarjeta._"
@@ -4039,7 +4180,7 @@ export default function App() {
       `• *Forma de pago:* ${methodSummary}`,
       order.paymentFeeAmount > 0 ? `• *Comisión tarjeta (${order.paymentFeePercent}%):* +${currency(order.paymentFeeAmount)}` : "",
       order.paymentProof ? `• *Comprobante:* Adjuntado en la web` : "",
-      `• *TOTAL A PAGAR:* *${currency(order.total || order.subtotal)}*`,
+      `• *TOTAL A PAGAR:* *${currency(order.total ?? order.subtotal)}*`,
       "",
       `━━━━━━━━━━━━━━━━━━━━`,
       isCard
@@ -4102,7 +4243,7 @@ export default function App() {
       `• *Cliente:* ${order?.customerName || "Cliente"}`,
       `• *Estado:* ${statusSummary}`,
       `• *Entrega:* ${deliveryMode}`,
-      `• *Total:* ${currency(order?.total || order?.subtotal || 0)}`,
+      `• *Total:* ${currency(order?.total ?? order?.subtotal ?? 0)}`,
       `━━━━━━━━━━━━━━━━━━━━`,
       order?.deliveryType === "delivery"
         ? "_Hola, deseo consultar el estado de la entrega a mi domicilio._"
@@ -4186,6 +4327,7 @@ export default function App() {
       showToastMessage("Esta prenda ya no está disponible.", "info");
       return;
     }
+    rememberRecentlyViewedProduct(product.id);
     if (!options?.fromCartEdit) {
       setEditingCartItemKey(null);
     }
@@ -4252,7 +4394,7 @@ export default function App() {
   const addToCart = (product, animationMeta = null, selectionOverride = null) => {
     if (!isAdmin && product?.isPublic === false) {
       showToastMessage("Esta prenda ya no está disponible.", "info");
-      return;
+      return false;
     }
     const selection = getFallbackSelection(product, selectionOverride || selections[product.id] || {});
     if ((selections[product.id]?.color !== selection.color || selections[product.id]?.size !== selection.size) && selection.availableStock > 0) {
@@ -4265,6 +4407,18 @@ export default function App() {
     const chosenImage = getCurrentImageForProduct(product, selection.color);
     const availableStock = selection.availableStock;
     let cartWasUpdated = false;
+
+    if (!editingCartItemKey) {
+      const knownExistingItem = cart.find((item) => item.key === key);
+      if (availableStock <= 0) {
+        showToastMessage("Esa talla está agotada por ahora.", "error");
+        return false;
+      }
+      if (knownExistingItem && knownExistingItem.quantity >= availableStock) {
+        showToastMessage("Ya alcanzaste el stock disponible para esa talla.", "warning");
+        return false;
+      }
+    }
 
     setCart((previous) => {
       if (editingCartItemKey) {
@@ -4362,7 +4516,9 @@ export default function App() {
           showToastMessage("Ya alcanzaste el stock disponible para esa talla.", "warning");
           return previous;
         }
-        showToastMessage("Cantidad actualizada en tu carrito.", "success");
+        if (!animationMeta?.inlineFeedback) {
+          showToastMessage("Cantidad actualizada en tu carrito.", "success");
+        }
         cartWasUpdated = true;
         return previous.map((item) => item.key === key ? { ...item, quantity: item.quantity + 1 } : item);
       }
@@ -4370,7 +4526,9 @@ export default function App() {
         showToastMessage("Esa talla está agotada por ahora.", "error");
         return previous;
       }
-      showToastMessage(`"${product.name}" se agrego al carrito.`, "success");
+      if (!animationMeta?.inlineFeedback) {
+        showToastMessage(`"${product.name}" se agrego al carrito.`, "success");
+      }
       cartWasUpdated = true;
       return [
         ...previous,
@@ -4387,7 +4545,7 @@ export default function App() {
       ];
     });
 
-    if (!cartWasUpdated) return;
+    if (!cartWasUpdated) return false;
     trackAnalyticsEvent("cart_item_added", {
       product_id: String(product.id || ""),
       variant_size: String(selection.size || ""),
@@ -4399,6 +4557,7 @@ export default function App() {
       sourceElement: animationMeta?.sourceElement,
       image: animationMeta?.image || chosenImage,
     });
+    return true;
   };
 
   const updateQuantity = async (key, delta) => {
@@ -4507,6 +4666,11 @@ export default function App() {
     setAuthResetEmailLocked(false);
     setPostAuthDestination(null);
     setAuthForm((previous) => ({ ...previous, password: "", confirmPassword: "", resetToken: "" }));
+    if (!isAdmin && typeof window !== "undefined" && isAdminRoute(window.location.pathname)) {
+      window.history.replaceState({}, document.title, "/");
+      setPathname("/");
+      setShowAdminPanel(false);
+    }
   };
 
   const resetAuthForm = () => {
@@ -4634,6 +4798,10 @@ export default function App() {
       setOrderLiveAlert(null);
       setShowAdminPanel(true);
       setAdminTab("resumen");
+      if (typeof window !== "undefined") {
+        window.history.pushState({ [ADMIN_WORKSPACE_HISTORY_KEY]: true }, document.title, "/admin/hoy");
+        setPathname("/admin/hoy");
+      }
       if (closeMobileNav) {
         setShowMobileNav(false);
       }
@@ -4716,8 +4884,7 @@ export default function App() {
   };
 
   const openOrdersFromProfileMenu = () => {
-    setShowProfileQuickMenu(false);
-    setShowOrdersModal(true);
+    openOrdersPage();
   };
 
   const handleProfileFieldChange = (field, value) => {
@@ -5424,8 +5591,15 @@ export default function App() {
         setOrderLiveAlert(null);
         setShowUserAuth(false);
         setPostAuthDestination(null);
+        const requestedAdminPath = typeof window !== "undefined" && isAdminRoute(window.location.pathname)
+          ? window.location.pathname
+          : "/admin/hoy";
         setShowAdminPanel(true);
-        setAdminTab("resumen");
+        setAdminTab(resolveAdminTabFromPath(requestedAdminPath));
+        if (typeof window !== "undefined") {
+          window.history.replaceState({}, document.title, requestedAdminPath);
+          setPathname(requestedAdminPath);
+        }
         setAuthMode("login");
         setAuthError("");
         resetAuthForm();
@@ -5479,7 +5653,7 @@ export default function App() {
   const handleCheckoutViaWhatsApp = async (checkoutPayload = null) => {
     if (!cart.length || checkoutBusy) return;
 
-    if (!currentUser?.email) {
+    if (!currentUser?.email && !checkoutPayload?.guestCheckout) {
       setShowCartSummary(false);
       openUserAuth({
         mode: "login",
@@ -5501,7 +5675,13 @@ export default function App() {
       return availableStock <= 0 || Number(line.quantity || 0) > availableStock;
     });
     if (unavailableCartLine) {
-      showToastMessage("Algunas prendas de tu carrito ya no están disponibles. Revísalo antes de continuar.", "warning");
+      const product = productsById.get(normalizeEntityId(unavailableCartLine.id));
+      const availableStock = product ? getStockForVariant(product, unavailableCartLine.color, unavailableCartLine.size) : 0;
+      if (availableStock <= 0) {
+        showToastMessage(`La prenda "${unavailableCartLine.name}" (${unavailableCartLine.color} / ${unavailableCartLine.size}) está agotada. Quítala del carrito para continuar.`, "warning");
+      } else {
+        showToastMessage(`Solo quedan ${availableStock} unidad(es) de "${unavailableCartLine.name}" (${unavailableCartLine.color} / ${unavailableCartLine.size}). Ajusta tu carrito para continuar.`, "warning");
+      }
       setShowCartSummary(true);
       return;
     }
@@ -5575,6 +5755,7 @@ export default function App() {
     try {
       const checkoutRequest = {
         cart,
+        guestCheckout: !currentUser?.email && checkoutPayload?.guestCheckout === true,
         couponCode: activeCouponCode,
         paymentMethod,
         paymentProof,
@@ -5591,14 +5772,20 @@ export default function App() {
       checkoutAttemptRef.current = { signature: checkoutSignature, idempotencyKey };
       const response = await createServerCheckoutOrder({ ...checkoutRequest, idempotencyKey });
       if (!response.ok || !response.order) {
-        showToastMessage("No pudimos recibir tu pedido. Revisa tu carrito e inténtalo nuevamente.", "error");
+        const errorDetail = response?.message || "No pudimos recibir tu pedido. Revisa tu carrito e inténtalo nuevamente.";
+        showToastMessage(errorDetail, "error");
+        if (Array.isArray(response?.products)) {
+          setProducts(response.products.map(normalizeProduct));
+        }
+        setShowCartSummary(true);
         return;
       }
       checkoutAttemptRef.current = { signature: "", idempotencyKey: "" };
+      setGuestOrderId(response.guestId || "");
 
       trackAnalyticsEvent("order_created", {
         order_id: String(response.order.id || ""),
-        total: Number(response.order.total || response.order.subtotal || 0),
+        total: Number(response.order.total ?? response.order.subtotal ?? 0),
         discount_amount: Number(response.order.discountAmount || 0),
         item_count: Number(response.order.itemCount || cart.length),
         delivery_type: deliveryType,
@@ -5661,7 +5848,7 @@ export default function App() {
     if (launchResult.launched) {
       trackAnalyticsEvent("whatsapp_opened", {
         order_id: String(orderSuccessModal.order.id || ""),
-        total: Number(orderSuccessModal.order.total || orderSuccessModal.order.subtotal || 0),
+        total: Number(orderSuccessModal.order.total ?? orderSuccessModal.order.subtotal ?? 0),
         device_type: isMobileViewport ? "mobile" : "desktop",
         is_reopen: false,
       });
@@ -5691,10 +5878,11 @@ export default function App() {
     ));
   };
 
-  const resetEditor = () => {
+  const resetEditor = (options = {}) => {
+    const { returnToCatalog = false } = typeof options === "boolean" ? { returnToCatalog: options } : options;
     const emptyForm = createEmptyProductForm();
     emptyForm.productType = activeProductTypeNames[0] || "General";
-    emptyForm.isPublic = true;
+    emptyForm.isPublic = false;
     setProductForm(emptyForm);
     setProductFormBaseline(getProductFormSignature(emptyForm));
     discardProductDraft();
@@ -5704,6 +5892,14 @@ export default function App() {
     setCustomFilterTagInput("");
     setEditorMessage("");
     setEditorError("");
+    if (returnToCatalog || adminTab === "producto") {
+      setAdminTab("catalogo");
+      if (typeof window !== "undefined") {
+        const nextRoute = "/admin/catalogo";
+        window.history.replaceState(window.history.state || {}, document.title, nextRoute);
+        setPathname(nextRoute);
+      }
+    }
   };
 
   const startEditingProduct = (product) => {
@@ -5720,12 +5916,82 @@ export default function App() {
     setSelectedProduct(null);
     setShowAdminPanel(true);
     setAdminTab("producto");
+    if (typeof window !== "undefined") {
+      const nextRoute = `/admin/catalogo/${encodeURIComponent(normalizeEntityId(product.id))}`;
+      window.history.replaceState(window.history.state || {}, document.title, nextRoute);
+      setPathname(nextRoute);
+    }
     if (typeof document !== "undefined") {
       window.setTimeout(() => {
         document.getElementById("admin-editor")?.scrollIntoView({ behavior: "smooth", block: "start" });
         touchAdminSession();
       }, 80);
     }
+  };
+
+  const createProductFromPhotoBatch = async (draft = {}) => {
+    const colors = Array.isArray(draft.colors) ? draft.colors : [];
+    if (!draft.name || !colors.length) {
+      showToastMessage("No encontramos fotos válidas para crear este producto.", "error");
+      return { ok: false };
+    }
+    if (colors.length > PRODUCT_FORM_LIMITS.maxColors || colors.some((color) => (color.photos || []).length > PRODUCT_FORM_LIMITS.maxImagesPerColor)) {
+      showToastMessage(`Admite hasta ${PRODUCT_FORM_LIMITS.maxColors} colores y ${PRODUCT_FORM_LIMITS.maxImagesPerColor} fotos por color. Reduce la selección antes de subir.`, "error");
+      return { ok: false };
+    }
+
+    setEditorMessage(`Subiendo las fotos de “${draft.name}” a ImageKit...`);
+    setEditorError("");
+    const uploadedColors = [];
+    for (const color of colors) {
+      const files = (color.photos || []).map((photo) => photo.file).filter(Boolean).slice(0, PRODUCT_FORM_LIMITS.maxImagesPerColor);
+      const result = await uploadCatalogImageFiles(files, {
+        uploadOne: (file) => uploadCatalogProductImage(file),
+      });
+      if (result.failures.length || !result.urls.length) {
+        const detail = result.failures[0]?.message || "No se pudo subir una de las fotos.";
+        setEditorMessage("");
+        setEditorError(`${detail} Corrige la carga y vuelve a intentarlo.`);
+        showToastMessage(`No pudimos preparar “${draft.name}”.`, "error");
+        return { ok: false };
+      }
+      uploadedColors.push({
+        name: color.name,
+        images: result.urls,
+        imageViews: (color.photos || []).map((photo) => photo.view || ""),
+      });
+    }
+
+    const form = createEmptyProductForm();
+    form.name = sanitizeLine(draft.name);
+    form.productType = activeProductTypeNames[0] || "General";
+    form.catalogColor = uploadedColors[0]?.name || "";
+    form.isPublic = false;
+    form.colorsData = uploadedColors.map((color) => ({
+      uid: createUid(),
+      name: color.name,
+      hex: getProductColorSwatch(color.name),
+      images: color.images,
+      imageViews: color.imageViews,
+      sizes: [{ uid: createUid(), size: "", stock: "0" }],
+    }));
+    setProductForm(form);
+    const emptyBaseline = createEmptyProductForm();
+    emptyBaseline.productType = activeProductTypeNames[0] || "General";
+    emptyBaseline.isPublic = false;
+    setProductFormBaseline(getProductFormSignature(emptyBaseline));
+    setPreviewColor(form.catalogColor);
+    setPreviewImageIndex(0);
+    setEditorMessage("Fotos organizadas. Completa los datos físicos antes de publicar.");
+    setEditorError("");
+    setShowAdminPanel(true);
+    setAdminTab("producto");
+    if (typeof window !== "undefined") {
+      window.history.replaceState(window.history.state || {}, document.title, "/admin/catalogo/nuevo");
+      setPathname("/admin/catalogo/nuevo");
+    }
+    showToastMessage(`Fotos de “${form.name}” listas para completar.`, "success");
+    return { ok: true };
   };
 
   const openRecommendedProduct = (product) => {
@@ -5760,6 +6026,10 @@ export default function App() {
     setSelectedProduct(null);
     setShowAdminPanel(true);
     setAdminTab("producto");
+    if (typeof window !== "undefined") {
+      window.history.replaceState(window.history.state || {}, document.title, "/admin/catalogo/nuevo");
+      setPathname("/admin/catalogo/nuevo");
+    }
   };
 
   const handleDeleteProduct = async (productId) => {
@@ -5892,6 +6162,30 @@ export default function App() {
     return { ok: true, updated: updatedCount };
   };
 
+  const bulkSetCatalogVisibility = async (productIds = [], isPublic = true) => {
+    const idSet = new Set((Array.isArray(productIds) ? productIds : []).map((item) => normalizeEntityId(item)).filter(Boolean));
+    if (!idSet.size) return { ok: false, updated: 0, message: "No hay productos seleccionados." };
+    const previousProducts = productsRef.current;
+    let updatedCount = 0;
+    const nextProducts = previousProducts.map((product) => {
+      if (!idSet.has(normalizeEntityId(product.id)) || Boolean(product.isPublic !== false) === Boolean(isPublic)) return product;
+      updatedCount += 1;
+      return normalizeProduct({ ...product, isPublic: Boolean(isPublic) });
+    });
+    if (!updatedCount) return { ok: true, updated: 0 };
+    setProducts(nextProducts);
+    productsRef.current = nextProducts;
+    const result = await syncCatalogSnapshot({ products: nextProducts }, { silent: true });
+    if (!result.ok) {
+      setProducts(previousProducts);
+      productsRef.current = previousProducts;
+      showToastMessage(result.message || "No pudimos cambiar la visibilidad seleccionada.", "error");
+      return { ok: false, updated: 0, message: result.message };
+    }
+    showToastMessage(`${updatedCount} producto(s) ${isPublic ? "publicados" : "ocultados"}.`, "success");
+    return { ok: true, updated: updatedCount };
+  };
+
   const toggleProductPublicVisibility = async (productId, nextPublicValue = null) => {
     const normalizedProductId = normalizeEntityId(productId);
     if (!normalizedProductId) return { ok: false, message: "Producto invalido." };
@@ -5962,6 +6256,7 @@ export default function App() {
       setEditorError("Ingresa un nombre valido para el tipo de producto.");
       return;
     }
+    managedCatalogDirtyRef.current = true;
     setProductTypeRecords((previous) => ensureManagedEntity(previous, normalizedValue, "product-type"));
     setProductForm((previous) => ({ ...previous, productType: normalizedValue }));
     setCustomProductTypeInput("");
@@ -6005,6 +6300,7 @@ export default function App() {
       return;
     }
 
+    managedCatalogDirtyRef.current = true;
     setProductTypeRecords((previous) => previous.map((entry) => entry.id === recordId ? { ...entry, name: nextName, slug: nextSlug, draftName: nextName, draftSlug: nextSlug, active: true } : entry));
 
     if (record.name.toLowerCase() !== nextName.toLowerCase()) {
@@ -6018,6 +6314,7 @@ export default function App() {
   };
 
   const toggleManagedProductTypeActive = (recordId) => {
+    managedCatalogDirtyRef.current = true;
     setProductTypeRecords((previous) => previous.map((record) => record.id === recordId ? { ...record, active: !record.active } : record));
   };
 
@@ -6056,14 +6353,86 @@ export default function App() {
         : previous;
       return withFallback.filter((entry) => entry.id !== recordId);
     });
+    managedCatalogDirtyRef.current = true;
     setEditorMessage(`Tipo de producto "${record.name}" eliminado${effectiveReplacement ? ` y reasignado a "${effectiveReplacement}"` : ""}.`);
     setEditorError("");
+  };
+
+  const bulkSetManagedProductTypesActive = async (recordIds = [], active = true) => {
+    const idSet = new Set((Array.isArray(recordIds) ? recordIds : []).map(String));
+    if (!idSet.size) return { ok: false, message: "No hay tipos seleccionados." };
+    const confirmed = await requestDestructiveConfirmation({
+      title: `¿${active ? "Activar" : "Ocultar"} ${idSet.size} tipo${idSet.size === 1 ? "" : "s"}?`,
+      description: active
+        ? "Los tipos seleccionados volverán a estar disponibles en la administración."
+        : "Los productos conservarán su tipo, pero dejará de estar disponible para nuevas asignaciones.",
+    });
+    if (!confirmed) return { ok: false, cancelled: true };
+    const previousRecords = productTypeRecordsRef.current;
+    const nextRecords = previousRecords.map((record) => idSet.has(String(record.id)) ? { ...record, active: Boolean(active) } : record);
+    setProductTypeRecords(nextRecords);
+    productTypeRecordsRef.current = nextRecords;
+    const result = await syncCatalogSnapshot({ productTypeRecords: nextRecords }, { silent: true });
+    if (!result.ok) {
+      setProductTypeRecords(previousRecords);
+      productTypeRecordsRef.current = previousRecords;
+      showToastMessage(result.message || "No pudimos actualizar los tipos seleccionados.", "error");
+      return { ok: false, message: result.message };
+    }
+    showToastMessage(`${idSet.size} tipo(s) ${active ? "activados" : "ocultados"}.`, "success");
+    return { ok: true };
+  };
+
+  const bulkDeleteManagedProductTypes = async (recordIds = []) => {
+    const idSet = new Set((Array.isArray(recordIds) ? recordIds : []).map(String));
+    const currentRecords = productTypeRecordsRef.current;
+    const selectedRecords = currentRecords.filter((record) => idSet.has(String(record.id)));
+    if (!selectedRecords.length) return { ok: false, message: "No hay tipos seleccionados." };
+    const selectedNames = new Set(selectedRecords.map((record) => record.name.toLowerCase()));
+    const affectedCount = productsRef.current.filter((product) => selectedNames.has(normalizeOptionLabel(product.productType || "").toLowerCase())).length;
+    const replacementName = currentRecords.find((record) => !idSet.has(String(record.id)) && record.active)?.name
+      || (selectedNames.has("general") ? "Sin tipo" : "General");
+    const confirmed = await requestDestructiveConfirmation({
+      title: `¿Eliminar ${selectedRecords.length} tipo${selectedRecords.length === 1 ? "" : "s"}?`,
+      description: affectedCount > 0
+        ? `${affectedCount} producto(s) se reasignarán a “${replacementName}”. Esta acción no se puede deshacer.`
+        : "No están asociados a productos. Esta acción no se puede deshacer.",
+    });
+    if (!confirmed) return { ok: false, cancelled: true };
+
+    const previousProducts = productsRef.current;
+    const previousProductForm = productForm;
+    let nextRecords = currentRecords.filter((record) => !idSet.has(String(record.id)));
+    if (affectedCount > 0) nextRecords = ensureManagedEntity(nextRecords, replacementName, "product-type");
+    const nextProducts = previousProducts.map((product) => selectedNames.has(normalizeOptionLabel(product.productType || "").toLowerCase())
+      ? normalizeProduct({ ...product, productType: replacementName })
+      : product);
+    setProductTypeRecords(nextRecords);
+    productTypeRecordsRef.current = nextRecords;
+    setProducts(nextProducts);
+    productsRef.current = nextProducts;
+    setProductForm((previous) => selectedNames.has(normalizeOptionLabel(previous.productType || "").toLowerCase())
+      ? { ...previous, productType: replacementName }
+      : previous);
+    const result = await syncCatalogSnapshot({ products: nextProducts, productTypeRecords: nextRecords }, { silent: true });
+    if (!result.ok) {
+      setProductTypeRecords(currentRecords);
+      productTypeRecordsRef.current = currentRecords;
+      setProducts(previousProducts);
+      productsRef.current = previousProducts;
+      setProductForm(previousProductForm);
+      showToastMessage(result.message || "No pudimos eliminar los tipos seleccionados.", "error");
+      return { ok: false, message: result.message };
+    }
+    showToastMessage(`${selectedRecords.length} tipo(s) eliminados.`, "success");
+    return { ok: true };
   };
 
   const appendFilterTagToForm = (rawTag) => {
     const normalizedValue = normalizeOptionLabel(rawTag);
     if (!normalizedValue) return;
 
+    managedCatalogDirtyRef.current = true;
     setFilterTagRecords((previous) => ensureManagedEntity(previous, normalizedValue, "filter-tag"));
     setProductForm((previous) => {
       const currentTags = splitFilterTagsText(previous.filterTagsText);
@@ -6088,6 +6457,7 @@ export default function App() {
       setEditorError("Ingresa un nombre valido para el filtro.");
       return;
     }
+    managedCatalogDirtyRef.current = true;
     setFilterTagRecords((previous) => ensureManagedEntity(previous, normalizedValue, "filter-tag"));
     if (adminTab === "producto") {
       appendFilterTagToForm(normalizedValue);
@@ -6133,6 +6503,7 @@ export default function App() {
       return;
     }
 
+    managedCatalogDirtyRef.current = true;
     setFilterTagRecords((previous) => previous.map((entry) => entry.id === recordId ? { ...entry, name: nextName, slug: nextSlug, draftName: nextName, draftSlug: nextSlug, active: true } : entry));
 
     if (record.name.toLowerCase() !== nextName.toLowerCase()) {
@@ -6151,6 +6522,7 @@ export default function App() {
   };
 
   const toggleManagedFilterTagActive = (recordId) => {
+    managedCatalogDirtyRef.current = true;
     setFilterTagRecords((previous) => previous.map((record) => record.id === recordId ? { ...record, active: !record.active } : record));
   };
 
@@ -6185,8 +6557,78 @@ export default function App() {
     });
 
     setFilterTagRecords((previous) => previous.filter((entry) => entry.id !== recordId));
+    managedCatalogDirtyRef.current = true;
     setEditorMessage(`Filtro "${record.name}" eliminado${replacement ? ` y reemplazado por "${replacement}"` : ""}.`);
     setEditorError("");
+  };
+
+  const bulkSetManagedFilterTagsActive = async (recordIds = [], active = true) => {
+    const idSet = new Set((Array.isArray(recordIds) ? recordIds : []).map(String));
+    if (!idSet.size) return { ok: false, message: "No hay tags seleccionados." };
+    const confirmed = await requestDestructiveConfirmation({
+      title: `¿${active ? "Activar" : "Ocultar"} ${idSet.size} tag${idSet.size === 1 ? "" : "s"}?`,
+      description: active
+        ? "Los tags seleccionados volverán a estar disponibles en filtros y edición."
+        : "Los productos conservarán sus tags, pero dejarán de estar disponibles para nuevas asignaciones.",
+    });
+    if (!confirmed) return { ok: false, cancelled: true };
+    const previousRecords = filterTagRecordsRef.current;
+    const nextRecords = previousRecords.map((record) => idSet.has(String(record.id)) ? { ...record, active: Boolean(active) } : record);
+    setFilterTagRecords(nextRecords);
+    filterTagRecordsRef.current = nextRecords;
+    const result = await syncCatalogSnapshot({ filterTagRecords: nextRecords }, { silent: true });
+    if (!result.ok) {
+      setFilterTagRecords(previousRecords);
+      filterTagRecordsRef.current = previousRecords;
+      showToastMessage(result.message || "No pudimos actualizar los tags seleccionados.", "error");
+      return { ok: false, message: result.message };
+    }
+    showToastMessage(`${idSet.size} tag(s) ${active ? "activados" : "ocultados"}.`, "success");
+    return { ok: true };
+  };
+
+  const bulkDeleteManagedFilterTags = async (recordIds = []) => {
+    const idSet = new Set((Array.isArray(recordIds) ? recordIds : []).map(String));
+    const currentRecords = filterTagRecordsRef.current;
+    const selectedRecords = currentRecords.filter((record) => idSet.has(String(record.id)));
+    if (!selectedRecords.length) return { ok: false, message: "No hay tags seleccionados." };
+    const selectedNames = new Set(selectedRecords.map((record) => record.name.toLowerCase()));
+    const affectedCount = productsRef.current.filter((product) => (product.filterTags || []).some((tag) => selectedNames.has(normalizeOptionLabel(tag).toLowerCase()))).length;
+    const confirmed = await requestDestructiveConfirmation({
+      title: `¿Eliminar ${selectedRecords.length} tag${selectedRecords.length === 1 ? "" : "s"}?`,
+      description: affectedCount > 0
+        ? `Se quitarán de ${affectedCount} producto(s). Esta acción no se puede deshacer.`
+        : "No están asociados a productos. Esta acción no se puede deshacer.",
+    });
+    if (!confirmed) return { ok: false, cancelled: true };
+
+    const previousProducts = productsRef.current;
+    const previousProductForm = productForm;
+    const nextRecords = currentRecords.filter((record) => !idSet.has(String(record.id)));
+    const nextProducts = previousProducts.map((product) => normalizeProduct({
+      ...product,
+      filterTags: (product.filterTags || []).filter((tag) => !selectedNames.has(normalizeOptionLabel(tag).toLowerCase())),
+    }));
+    setFilterTagRecords(nextRecords);
+    filterTagRecordsRef.current = nextRecords;
+    setProducts(nextProducts);
+    productsRef.current = nextProducts;
+    setProductForm((previous) => ({
+      ...previous,
+      filterTagsText: splitFilterTagsText(previous.filterTagsText).filter((tag) => !selectedNames.has(tag.toLowerCase())).join(", "),
+    }));
+    const result = await syncCatalogSnapshot({ products: nextProducts, filterTagRecords: nextRecords }, { silent: true });
+    if (!result.ok) {
+      setFilterTagRecords(currentRecords);
+      filterTagRecordsRef.current = currentRecords;
+      setProducts(previousProducts);
+      productsRef.current = previousProducts;
+      setProductForm(previousProductForm);
+      showToastMessage(result.message || "No pudimos eliminar los tags seleccionados.", "error");
+      return { ok: false, message: result.message };
+    }
+    showToastMessage(`${selectedRecords.length} tag(s) eliminados.`, "success");
+    return { ok: true };
   };
 
   const handleColorFieldChange = (uid, field, value) => {
@@ -6215,6 +6657,32 @@ export default function App() {
     });
   };
 
+  useEffect(() => {
+    if (!isAdmin || !catalogReady) return;
+    const match = normalizedPathname.match(/^\/admin\/catalogo\/([^/]+)$/);
+    if (!match || match[1] === "nuevo") return;
+    const productId = decodeRouteSegment(match[1]);
+    const product = products.find((entry) => normalizeEntityId(entry.id) === normalizeEntityId(productId));
+    if (!product) {
+      setEditorError("El producto solicitado ya no existe o no está disponible.");
+      setAdminTab("catalogo");
+      window.history.replaceState({}, document.title, "/admin/catalogo");
+      setPathname("/admin/catalogo");
+      return;
+    }
+    if (normalizeEntityId(productForm.id) === normalizeEntityId(product.id)) return;
+    const form = createProductForm(product);
+    setProductForm(form);
+    setProductFormBaseline(getProductFormSignature(form));
+    discardProductDraft();
+    setPreviewColor(form.colorsData[0]?.name || "");
+    setPreviewImageIndex(0);
+    setCustomProductTypeInput("");
+    setCustomFilterTagInput("");
+    setEditorMessage("");
+    setEditorError("");
+  }, [catalogReady, discardProductDraft, isAdmin, normalizedPathname, productForm.id, products]);
+
   const handleColorImageChange = (uid, imageIndex, value) => {
     setProductForm((previous) => ({
       ...previous,
@@ -6223,6 +6691,7 @@ export default function App() {
         return {
           ...color,
           images: color.images.map((image, index) => index === imageIndex ? value : image),
+          imageViews: color.images.map((_, index) => index === imageIndex ? "" : (color.imageViews?.[index] || "")),
         };
       }),
     }));
@@ -6275,6 +6744,7 @@ export default function App() {
           name: "",
           hex: "#c8c4bc",
           images: [""],
+          imageViews: [""],
           sizes: [{ uid: createUid(), size: "", stock: "0" }],
         },
       ],
@@ -6300,7 +6770,7 @@ export default function App() {
       ...previous,
       colorsData: previous.colorsData.map((color) => {
         if (color.uid !== uid) return color;
-        return { ...color, images: [...color.images, ""] };
+        return { ...color, images: [...color.images, ""], imageViews: [...color.images.map((_, index) => color.imageViews?.[index] || ""), ""] };
       }),
     }));
   };
@@ -6311,7 +6781,8 @@ export default function App() {
       colorsData: previous.colorsData.map((color) => {
         if (color.uid !== uid) return color;
         const nextImages = color.images.filter((_, index) => index !== imageIndex);
-        return { ...color, images: nextImages.length ? nextImages : [""] };
+        const nextImageViews = (color.imageViews || []).filter((_, index) => index !== imageIndex);
+        return { ...color, images: nextImages.length ? nextImages : [""], imageViews: nextImages.length ? nextImageViews : [""] };
       }),
     }));
   };
@@ -6320,29 +6791,201 @@ export default function App() {
     const inputElement = event.target;
     const files = Array.from(inputElement?.files || []);
     if (!files.length) return;
+    const color = productForm.colorsData.find((entry) => entry.uid === uid);
+    const currentCount = (color?.images || []).filter(Boolean).length;
+    const remainingSlots = Math.max(0, PRODUCT_FORM_LIMITS.maxImagesPerColor - currentCount);
+    if (!remainingSlots) {
+      const message = `Cada color admite hasta ${PRODUCT_FORM_LIMITS.maxImagesPerColor} fotos.`;
+      setEditorError(message);
+      showToastMessage(message, "warning");
+      inputElement.value = "";
+      return;
+    }
+    const selectedFiles = files.slice(0, remainingSlots);
+    const uploadController = new AbortController();
+    catalogImageUploadControllersRef.current.get(uid)?.abort();
+    catalogImageUploadControllersRef.current.set(uid, uploadController);
+    setCatalogImageUploadStateByColor((previous) => ({
+      ...previous,
+      [uid]: { status: "uploading", completed: 0, total: selectedFiles.length, succeeded: 0, failed: 0 },
+    }));
     try {
-      const uploadedImages = await Promise.all(files.map((file) => uploadCatalogProductImage(file)));
-
-      setProductForm((previous) => ({
-        ...previous,
-        colorsData: previous.colorsData.map((color) => {
-          if (color.uid !== uid) return color;
-          const currentImages = color.images.filter(Boolean);
-          return {
-            ...color,
-            images: currentImages.length ? [...currentImages, ...uploadedImages] : uploadedImages,
-          };
+      const result = await uploadCatalogImageFiles(selectedFiles, {
+        uploadOne: (file, context) => uploadCatalogProductImage(file, {
+          signal: uploadController.signal,
+          onProgress: ({ percent }) => setCatalogImageUploadStateByColor((previous) => ({
+            ...previous,
+            [uid]: {
+              status: "uploading",
+              completed: context.index,
+              total: context.total,
+              succeeded: previous[uid]?.succeeded || 0,
+              failed: previous[uid]?.failed || 0,
+              percent,
+            },
+          })),
         }),
+        onProgress: (progress) => setCatalogImageUploadStateByColor((previous) => ({
+          ...previous,
+          [uid]: { status: "uploading", ...progress, percent: 0 },
+        })),
+      });
+      const uploadedImages = result.urls;
+
+      if (uploadedImages.length) {
+        setProductForm((previous) => ({
+          ...previous,
+          colorsData: previous.colorsData.map((entry) => {
+            if (entry.uid !== uid) return entry;
+            const currentImages = entry.images.filter(Boolean);
+            return {
+              ...entry,
+              images: [...currentImages, ...uploadedImages],
+              imageViews: [...entry.images.flatMap((image, index) => image ? [entry.imageViews?.[index] || ""] : []), ...uploadedImages.map(() => "")],
+            };
+          }),
+        }));
+      }
+
+      if (result.failures.length) {
+        const failedNames = result.failures.map((failure) => failure.fileName).join(", ");
+        const message = uploadedImages.length
+          ? `${uploadedImages.length} foto(s) guardadas. No se pudieron subir: ${failedNames}.`
+          : (result.failures[0]?.message || "No se pudo subir ninguna foto.");
+        setEditorError(message);
+        showToastMessage(message, uploadedImages.length ? "warning" : "error");
+      } else {
+        setEditorError("");
+        showToastMessage(`${uploadedImages.length} foto(s) guardadas en ImageKit.`, "success");
+      }
+      setCatalogImageUploadStateByColor((previous) => ({
+        ...previous,
+        [uid]: {
+          status: result.failures.length ? "partial" : "done",
+          completed: selectedFiles.length,
+          total: selectedFiles.length,
+          succeeded: uploadedImages.length,
+          failed: result.failures.length,
+        },
       }));
-      setEditorError("");
-      showToastMessage(`${uploadedImages.length} imagen(es) optimizadas y guardadas en Vercel Blob.`, "success");
     } catch (error) {
       const message = error instanceof Error ? error.message : "No pudimos cargar una o mas imagenes.";
       setEditorError(message);
       showToastMessage(message, "error");
+      setCatalogImageUploadStateByColor((previous) => ({
+        ...previous,
+        [uid]: { status: "error", completed: 0, total: selectedFiles.length, succeeded: 0, failed: selectedFiles.length },
+      }));
     } finally {
+      if (catalogImageUploadControllersRef.current.get(uid) === uploadController) {
+        catalogImageUploadControllersRef.current.delete(uid);
+      }
       if (inputElement) inputElement.value = "";
     }
+  };
+
+  const cancelCatalogImageUpload = (uid) => {
+    catalogImageUploadControllersRef.current.get(uid)?.abort();
+  };
+
+  const migrateLegacyColorImages = async (uid) => {
+    const color = productForm.colorsData.find((entry) => entry.uid === uid);
+    const legacyImages = (color?.images || []).filter((image) => isLegacyInlineCatalogImage(image));
+    if (!legacyImages.length) return null;
+
+    const uploadController = new AbortController();
+    catalogImageUploadControllersRef.current.get(uid)?.abort();
+    catalogImageUploadControllersRef.current.set(uid, uploadController);
+    setCatalogImageUploadStateByColor((previous) => ({
+      ...previous,
+      [uid]: { status: "uploading", completed: 0, total: legacyImages.length, succeeded: 0, failed: 0 },
+    }));
+
+    try {
+      const result = await migrateLegacyCatalogImages(color.images, {
+        uploadOne: (dataUrl, context) => uploadPreparedCatalogImage(dataUrlToBlob(dataUrl), {
+          signal: uploadController.signal,
+          onProgress: ({ percent }) => setCatalogImageUploadStateByColor((previous) => ({
+            ...previous,
+            [uid]: {
+              status: "uploading",
+              completed: context.index,
+              total: context.total,
+              succeeded: previous[uid]?.succeeded || 0,
+              failed: previous[uid]?.failed || 0,
+              percent,
+            },
+          })),
+        }),
+        onProgress: (progress) => setCatalogImageUploadStateByColor((previous) => ({
+          ...previous,
+          [uid]: { status: "uploading", ...progress, percent: 0 },
+        })),
+      });
+      setProductForm((previous) => ({
+        ...previous,
+        colorsData: previous.colorsData.map((entry) => entry.uid === uid ? {
+          ...entry,
+          images: result.images,
+          imageViews: result.images.map((_, index) => entry.imageViews?.[index] || ""),
+        } : entry),
+      }));
+      const message = result.failures.length
+        ? `${result.migrated} foto(s) migradas; ${result.failures.length} conservaron su versión anterior.`
+        : `${result.migrated} foto(s) migradas a ImageKit. Guarda el producto para publicar el cambio.`;
+      if (result.failures.length) setEditorError(message);
+      else setEditorError("");
+      showToastMessage(message, result.failures.length ? "warning" : "success");
+      setCatalogImageUploadStateByColor((previous) => ({
+        ...previous,
+        [uid]: {
+          status: result.failures.length ? "partial" : "done",
+          completed: result.total,
+          total: result.total,
+          succeeded: result.migrated,
+          failed: result.failures.length,
+        },
+      }));
+      return result;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "No se pudieron migrar las fotos antiguas.";
+      setEditorError(message);
+      showToastMessage(message, "error");
+      setCatalogImageUploadStateByColor((previous) => ({
+        ...previous,
+        [uid]: { status: "error", completed: 0, total: legacyImages.length, succeeded: 0, failed: legacyImages.length },
+      }));
+      return null;
+    } finally {
+      if (catalogImageUploadControllersRef.current.get(uid) === uploadController) {
+        catalogImageUploadControllersRef.current.delete(uid);
+      }
+    }
+  };
+
+  const migrateAllLegacyImages = async () => {
+    const colorsWithLegacy = (productForm.colorsData || []).filter((color) =>
+      (color.images || []).some((img) => isLegacyInlineCatalogImage(img))
+    );
+    if (!colorsWithLegacy.length) {
+      showToastMessage("No hay fotos antiguas pendientes en este producto.", "info");
+      return;
+    }
+
+    let totalMigrated = 0;
+    let totalFailures = 0;
+    for (const color of colorsWithLegacy) {
+      const result = await migrateLegacyColorImages(color.uid);
+      if (result) {
+        totalMigrated += result.migrated || 0;
+        totalFailures += result.failures?.length || 0;
+      }
+    }
+
+    const summaryMessage = totalFailures > 0
+      ? `${totalMigrated} foto(s) migradas; ${totalFailures} conservaron su versión previa. Guarda el producto para aplicar.`
+      : `${totalMigrated} foto(s) migradas a ImageKit exitosamente. Guarda el producto para publicar el cambio.`;
+    showToastMessage(summaryMessage, totalFailures > 0 ? "warning" : "success");
   };
 
   const handleStoreSlideImageUpload = async (slideId, event) => {
@@ -6532,6 +7175,12 @@ export default function App() {
   };
 
   const saveProduct = async () => {
+    if (Object.values(catalogImageUploadStateByColor).some((state) => state?.status === "uploading")) {
+      const message = "Espera a que termine la subida de fotos antes de guardar el producto.";
+      setEditorError(message);
+      showToastMessage(message, "warning");
+      return;
+    }
     const builtProduct = buildProductFromForm(productForm);
     if (builtProduct.error) {
       setEditorError(builtProduct.error);
@@ -6564,9 +7213,8 @@ export default function App() {
     productTypeRecordsRef.current = nextProductTypeRecords;
     filterTagRecordsRef.current = nextFilterTagRecords;
 
-    setEditorMessage(productForm.id ? `Producto "${normalizedProduct.name}" actualizado.` : `Producto "${normalizedProduct.name}" agregado al catalogo.`);
+    setEditorMessage(`Guardando "${normalizedProduct.name}" en el servidor...`);
     setEditorError("");
-    resetEditor();
 
     const syncResult = await syncCatalogSnapshot({
       products: nextProducts,
@@ -6575,12 +7223,116 @@ export default function App() {
     }, { silent: true });
 
     if (!syncResult.ok) {
-      setEditorError(syncResult.message || "Guardamos cambios localmente, pero no pudimos sincronizar con el servidor.");
-      showToastMessage(syncResult.message || "Guardamos cambios localmente, pero no pudimos sincronizar con el servidor.", "warning");
+      setEditorMessage("");
+      setEditorError(syncResult.message || "No pudimos sincronizar. El formulario sigue abierto para que puedas reintentar.");
+      showToastMessage(syncResult.message || "No pudimos sincronizar. Conservamos tus cambios para reintentar.", "warning");
       return;
     }
 
+    resetEditor();
+    setEditorMessage(productForm.id ? `Producto "${normalizedProduct.name}" actualizado.` : `Producto "${normalizedProduct.name}" agregado al catálogo.`);
     showToastMessage(`Producto "${normalizedProduct.name}" sincronizado con el servidor.`, "success");
+  };
+
+  const importCatalogProducts = async (importedProducts = []) => {
+    if (!Array.isArray(importedProducts) || !importedProducts.length) {
+      return { ok: false, message: "No hay productos válidos para importar." };
+    }
+    const previousProducts = productsRef.current;
+    const importedIds = new Set(importedProducts.map((product) => normalizeEntityId(product.id)).filter(Boolean));
+    const normalizedImported = importedProducts.map((product) => normalizeProduct(product));
+    const nextProducts = [
+      ...normalizedImported,
+      ...previousProducts.filter((product) => !importedIds.has(normalizeEntityId(product.id))),
+    ];
+    const nextTypeRecords = normalizedImported.reduce(
+      (records, product) => ensureManagedEntity(records, product.productType || "General", "product-type"),
+      productTypeRecordsRef.current,
+    );
+    const nextTagRecords = normalizedImported.flatMap((product) => product.filterTags || []).reduce(
+      (records, tag) => ensureManagedEntity(records, tag, "filter-tag"),
+      filterTagRecordsRef.current,
+    );
+    const importSnapshot = {
+      products: nextProducts,
+      productTypeRecords: nextTypeRecords,
+      filterTagRecords: nextTagRecords,
+    };
+    const estimatedBytes = new TextEncoder().encode(JSON.stringify(importSnapshot)).byteLength;
+    if (estimatedBytes > MAX_IMPORT_SYNC_BYTES) {
+      const message = `La sincronización pesaría ${(estimatedBytes / 1024 / 1024).toFixed(1)} MB. Divide la importación para mantener cada guardado por debajo de 4 MB.`;
+      setEditorMessage("");
+      setEditorError(message);
+      return { ok: false, message };
+    }
+
+    setEditorMessage("Validación terminada. Guardando el catálogo importado...");
+    setEditorError("");
+    const result = await syncCatalogSnapshot(importSnapshot, { silent: true });
+    if (!result.ok) {
+      setEditorMessage("");
+      setEditorError(result.message || "La importación no se aplicó. Corrige el conflicto y vuelve a intentarlo.");
+      showToastMessage(result.message || "La importación no se aplicó.", "error");
+      return { ok: false, message: result.message };
+    }
+    setProducts(nextProducts);
+    productsRef.current = nextProducts;
+    setProductTypeRecords(nextTypeRecords);
+    productTypeRecordsRef.current = nextTypeRecords;
+    setFilterTagRecords(nextTagRecords);
+    filterTagRecordsRef.current = nextTagRecords;
+    setEditorMessage(`${normalizedImported.length} producto${normalizedImported.length === 1 ? "" : "s"} importado${normalizedImported.length === 1 ? "" : "s"} correctamente.`);
+    setEditorError("");
+    showToastMessage("Importación del catálogo completada.", "success");
+    return { ok: true };
+  };
+
+  const adjustInventory = async ({ productId, color, size, delta, reason }) => {
+    const normalizedId = normalizeEntityId(productId);
+    const quantityDelta = Number(delta);
+    const cleanReason = sanitizeLine(reason || "").slice(0, 120);
+    const currentProducts = productsRef.current;
+    const target = currentProducts.find((product) => normalizeEntityId(product.id) === normalizedId);
+    if (!target || !color || !size || !Number.isInteger(quantityDelta) || quantityDelta === 0 || !cleanReason) {
+      return { ok: false, message: "Selecciona una variante, indica una cantidad entera y escribe el motivo." };
+    }
+    const currentVariant = (target.variants || []).find((variant) => variant.color === color && variant.size === size);
+    if (!currentVariant) return { ok: false, message: "La variante seleccionada ya no existe." };
+    const previousStock = Math.max(0, Number(currentVariant.stock) || 0);
+    const nextStock = previousStock + quantityDelta;
+    if (nextStock < 0) return { ok: false, message: `El ajuste dejaría el stock en ${nextStock}. Reduce la salida.` };
+
+    const nextProduct = normalizeProduct({
+      ...target,
+      variants: (target.variants || []).map((variant) => (
+        variant.color === color && variant.size === size ? { ...variant, stock: nextStock } : variant
+      )),
+    });
+    const nextProducts = currentProducts.map((product) => normalizeEntityId(product.id) === normalizedId ? nextProduct : product);
+    const movement = {
+      id: `mov-${createUid()}`,
+      productId: normalizedId,
+      productName: target.name,
+      color,
+      size,
+      delta: quantityDelta,
+      previousStock,
+      nextStock,
+      reason: cleanReason,
+      source: "admin",
+      status: "active",
+      createdAt: new Date().toISOString(),
+    };
+    const result = await syncCatalogSnapshot({ products: nextProducts, inventoryMovement: movement }, { silent: true });
+    if (!result.ok) return { ok: false, message: result.message || "No se pudo guardar el movimiento. Intenta nuevamente." };
+
+    setProducts(nextProducts);
+    productsRef.current = nextProducts;
+    if (Array.isArray(result.data?.physicalStockEvents)) {
+      setPhysicalStockEvents(result.data.physicalStockEvents);
+    }
+    showToastMessage(`Stock de ${target.name} actualizado a ${nextStock}.`, "success");
+    return { ok: true, movement };
   };
 
   const saveContactConfiguration = async () => {
@@ -6768,6 +7520,38 @@ export default function App() {
       showToastMessage(serverWarning, "warning");
     }
   };
+
+  const bulkUpdateOrderStatus = async (orderIds = [], nextStatus) => {
+    const idSet = new Set((Array.isArray(orderIds) ? orderIds : []).map(String).filter(Boolean));
+    if (!idSet.size) return { ok: false, updated: 0, message: "No hay pedidos seleccionados." };
+    if (idSet.size > 25) return { ok: false, updated: 0, message: "Selecciona un máximo de 25 pedidos por lote." };
+    const selectedOrders = orderHistory.filter((order) => idSet.has(String(order.id)));
+    let updated = 0;
+    let latestHistory = null;
+    for (const order of selectedOrders) {
+      const normalizedStatus = normalizeOrderStatusForOrder(nextStatus, order.deliveryType || "delivery");
+      const response = await updateServerOrder({ orderId: order.id, status: normalizedStatus });
+      if (!response.ok) {
+        const message = updated > 0
+          ? `${updated} pedido(s) se actualizaron antes del error. ${response.message || "Revisa el resto y reintenta."}`
+          : (response.message || "No pudimos actualizar los pedidos seleccionados.");
+        if (Array.isArray(latestHistory)) setOrderHistory(latestHistory.map(normalizeOrderRecord));
+        showToastMessage(message, "error");
+        return { ok: false, updated, message };
+      }
+      updated += 1;
+      if (Array.isArray(response.orderHistory)) latestHistory = response.orderHistory;
+    }
+    if (Array.isArray(latestHistory)) {
+      setOrderHistory(latestHistory.map(normalizeOrderRecord));
+      setLiveOrdersUpdatedAt(new Date().toISOString());
+    }
+    const message = `${updated} pedido(s) actualizados a “${normalizeOrderStatusForOrder(nextStatus)}”.`;
+    setEditorMessage(message);
+    setEditorError("");
+    showToastMessage(message, "success");
+    return { ok: true, updated };
+  };
   const clearAdminOrderFilters = () => {
     setOrderSearch("");
     setOrderStatusFilter("all");
@@ -6785,16 +7569,21 @@ export default function App() {
       ...(currentTimer?.patch || {}),
       ...patch,
     };
+    setOrderPatchStateById((previous) => ({ ...previous, [orderId]: { status: "pending", patch: mergedPatch } }));
     const timerId = window.setTimeout(async () => {
       const response = await updateServerOrder({
         orderId,
         ...mergedPatch,
       });
       if (!response.ok) {
+        setOrderPatchStateById((previous) => ({ ...previous, [orderId]: { status: "error", patch: mergedPatch, message: response.message || "No pudimos sincronizar los cambios." } }));
         showToastMessage(response.message || "No pudimos sincronizar los cambios del pedido.", "error");
-      } else if (Array.isArray(response.orderHistory)) {
-        setOrderHistory(response.orderHistory.map(normalizeOrderRecord));
-        setLiveOrdersUpdatedAt(new Date().toISOString());
+      } else {
+        if (Array.isArray(response.orderHistory)) {
+          setOrderHistory(response.orderHistory.map(normalizeOrderRecord));
+          setLiveOrdersUpdatedAt(new Date().toISOString());
+        }
+        setOrderPatchStateById((previous) => ({ ...previous, [orderId]: { status: "saved", patch: {} } }));
       }
       orderPatchTimersRef.current.delete(orderId);
     }, 450);
@@ -6839,6 +7628,20 @@ export default function App() {
       order.id === orderId ? { ...order, courierName: safeCourierName } : order
     )));
     scheduleOrderPatchSync(orderId, { courierName: safeCourierName });
+  };
+
+  const updateOrderInternalNote = (orderId, internalNote) => {
+    const safeNote = String(internalNote || "").slice(0, 600);
+    setOrderHistory((previous) => previous.map((order) => (
+      order.id === orderId ? { ...order, internalNote: safeNote } : order
+    )));
+    scheduleOrderPatchSync(orderId, { internalNote: safeNote });
+  };
+
+  const retryOrderPatch = (orderId) => {
+    const failedPatch = orderPatchStateById[orderId]?.patch;
+    if (!failedPatch || !Object.keys(failedPatch).length) return;
+    scheduleOrderPatchSync(orderId, failedPatch);
   };
 
   const updateOrderPaymentProof = async (orderId, paymentProof) => {
@@ -6914,6 +7717,7 @@ export default function App() {
     : (toastTone === "warning" ? Clock3 : (toastTone === "info" ? MessageCircle : BadgeCheck));
   const routeNotFound = catalogReady
     && !KNOWN_DIRECT_ROUTES.has(normalizedPathname)
+    && !adminRouteActive
     && (!productRouteSlug || (catalogReady && !routedProduct));
 
   const returnHomeFromRoute = () => {
@@ -6962,6 +7766,10 @@ export default function App() {
                   closeProductModal();
                   setShowCartSummary(true);
                 }
+              }}
+              onOpenCart={() => {
+                closeProductModal();
+                setShowCartSummary(true);
               }}
               isAdmin={isAdmin}
               onEditProduct={(product) => {
@@ -7144,11 +7952,11 @@ export default function App() {
               isMobile={isMobileViewport}
               onClose={() => {
                 setOrderSuccessModal({ open: false, order: null, whatsappUrl: "" });
-                setShowOrdersModal(true);
+                openOrdersPage();
               }}
               onOpenOrders={() => {
                 setOrderSuccessModal({ open: false, order: null, whatsappUrl: "" });
-                setShowOrdersModal(true);
+                openOrdersPage();
               }}
               onLaunchWhatsApp={handleLaunchOrderSuccessWhatsApp}
             />
@@ -7157,15 +7965,14 @@ export default function App() {
       )}
 
       {showOrdersModal && (
-        <ErrorBoundary onReset={() => setShowOrdersModal(false)}>
+        <ErrorBoundary onReset={closeOrdersPage}>
           <Suspense fallback={null}>
             <OrdersModal
               open={showOrdersModal}
-              onClose={() => setShowOrdersModal(false)}
+              onClose={closeOrdersPage}
               orders={customerOrders}
               onSearchChange={setUserOrderSearch}
               searchValue={userOrderSearch}
-              onOpenReference={setReferenceOrder}
               onCopyOrderCode={handleCopyOrderCode}
               onOpenOrderWhatsApp={handleOpenOrderWhatsApp}
             />
@@ -7193,10 +8000,12 @@ export default function App() {
             <ExternalAdminPanelModal
               open={showAdminPanel && isAdmin}
               onClose={requestCloseAdminPanel}
-              adminTab={adminTab === "inventario" ? "resumen" : adminTab}
+              adminTab={adminTab}
               setAdminTab={requestAdminTabChange}
               editorMessage={editorMessage}
               editorError={editorError}
+              realtimeSyncStatus={realtimeSyncStatus}
+              retryRealtimeSync={() => setRealtimeSyncRetryKey((current) => current + 1)}
               adminProductCount={adminProductCount}
               adminColorVariantCount={adminColorVariantCount}
               adminPhotoCount={adminPhotoCount}
@@ -7210,6 +8019,10 @@ export default function App() {
               adminCatalogQuery={adminCatalogQuery}
               setAdminCatalogQuery={setAdminCatalogQuery}
               onSaveOffers={saveOffersFromAdmin}
+              onImportCatalog={importCatalogProducts}
+              onCreatePhotoDraft={createProductFromPhotoBatch}
+              onAdjustInventory={adjustInventory}
+              physicalStockEvents={physicalStockEvents}
               offersSaving={offerSaveBusy}
               adminCatalogProducts={adminCatalogProducts}
               products={products}
@@ -7218,6 +8031,7 @@ export default function App() {
               handleDeleteProduct={handleDeleteProduct}
               bulkDeleteCatalogProducts={bulkDeleteCatalogProducts}
               bulkSetCatalogFeatured={bulkSetCatalogFeatured}
+              bulkSetCatalogVisibility={bulkSetCatalogVisibility}
               toggleProductPublicVisibility={toggleProductPublicVisibility}
               productForm={productForm}
               productDraftRecovery={productDraftRecovery}
@@ -7238,6 +8052,10 @@ export default function App() {
               handleColorFieldChange={handleColorFieldChange}
               removeColorVariant={removeColorVariant}
               handleColorFilesUpload={handleColorFilesUpload}
+              onMigrateLegacyImages={migrateLegacyColorImages}
+              onMigrateAllLegacyImages={migrateAllLegacyImages}
+              catalogImageUploadStateByColor={catalogImageUploadStateByColor}
+              cancelCatalogImageUpload={cancelCatalogImageUpload}
               addImageField={addImageField}
               handleColorImageChange={handleColorImageChange}
               removeImageField={removeImageField}
@@ -7267,8 +8085,12 @@ export default function App() {
               clearAdminOrderFilters={clearAdminOrderFilters}
               adminOrderCustomerOptions={adminOrderCustomerOptions}
               updateOrderStatus={updateOrderStatus}
+              bulkUpdateOrderStatus={bulkUpdateOrderStatus}
               updateOrderGuide={updateOrderGuide}
               updateOrderCourier={updateOrderCourier}
+              updateOrderInternalNote={updateOrderInternalNote}
+              orderPatchStateById={orderPatchStateById}
+              retryOrderPatch={retryOrderPatch}
               updateOrderPaymentProof={updateOrderPaymentProof}
               clearOrderPaymentProof={clearOrderPaymentProof}
               handleOrderProofUpload={handleOrderProofUpload}
@@ -7280,7 +8102,6 @@ export default function App() {
               orderLiveAlert={orderLiveAlert}
               clearOrderLiveAlert={() => setOrderLiveAlert(null)}
               refreshOrdersFromServer={refreshOrdersFromServer}
-              onOpenOrderReference={setReferenceOrder}
               onCopyOrderCode={handleCopyOrderCode}
               productTypeOptions={productTypeOptions}
               customProductTypeInput={customProductTypeInput}
@@ -7301,10 +8122,14 @@ export default function App() {
               saveManagedProductType={saveManagedProductType}
               deleteManagedProductType={deleteManagedProductType}
               toggleManagedProductTypeActive={toggleManagedProductTypeActive}
+              bulkSetManagedProductTypesActive={bulkSetManagedProductTypesActive}
+              bulkDeleteManagedProductTypes={bulkDeleteManagedProductTypes}
               handleManagedFilterTagDraftChange={handleManagedFilterTagDraftChange}
               saveManagedFilterTag={saveManagedFilterTag}
               deleteManagedFilterTag={deleteManagedFilterTag}
               toggleManagedFilterTagActive={toggleManagedFilterTagActive}
+              bulkSetManagedFilterTagsActive={bulkSetManagedFilterTagsActive}
+              bulkDeleteManagedFilterTags={bulkDeleteManagedFilterTags}
               coupons={coupons}
               couponDraft={couponDraft}
               couponEditorMessage={couponEditorMessage}
@@ -7355,17 +8180,22 @@ export default function App() {
         {destructiveConfirmation?.content}
       </ConfirmModal>
 
-      {referenceOrder && (
-        <ErrorBoundary onReset={() => setReferenceOrder(null)}>
-          <Suspense fallback={null}>
-            <OrderReferenceModal
-              open={Boolean(referenceOrder)}
-              order={referenceOrder}
-              onClose={() => setReferenceOrder(null)}
-            />
-          </Suspense>
-        </ErrorBoundary>
-      )}
+      <ConfirmModal
+        open={Boolean(catalogConflict)}
+        title="Hay una versión más reciente del catálogo"
+        description="Otra sesión administrativa guardó cambios antes que tú. Ninguna versión se reemplazará hasta que elijas qué hacer."
+        confirmLabel="Cargar versión del servidor"
+        cancelLabel="Seguir revisando"
+        secondaryLabel={catalogConflictBusy ? "Guardando…" : "Guardar mis cambios"}
+        confirmTone="primary"
+        onCancel={() => void resolveCatalogConflict("review")}
+        onSecondary={() => void resolveCatalogConflict("local")}
+        onConfirm={() => void resolveCatalogConflict("server")}
+      >
+        <p className="confirm-modal-note">
+          “Cargar versión del servidor” descarta únicamente los cambios locales pendientes. “Guardar mis cambios” reemplaza la versión del servidor, pero volverá a detenerse si alguien guarda nuevamente mientras decides.
+        </p>
+      </ConfirmModal>
 
       {isAdmin && !showAdminPanel && orderLiveAlert && (
         <aside className="global-admin-order-alert" role="status" aria-live="polite">
@@ -7386,7 +8216,7 @@ export default function App() {
               className="btn btn-primary"
               type="button"
               onClick={() => {
-                setAdminTab("pedidos");
+                void requestAdminTabChange("pedidos");
                 setShowAdminPanel(true);
               }}
             >
@@ -7438,7 +8268,7 @@ export default function App() {
               {storeSettings.brandLabel.toLowerCase() !== storeSettings.brandName.toLowerCase() && (
                 <p className="brand-label">{storeSettings.brandLabel}</p>
               )}
-              <h1 className="brand-wordmark">{storeSettings.brandName}</h1>
+              <span className="brand-wordmark">{storeSettings.brandName}</span>
             </button>
             <div className="mobile-header-tools" role="group" aria-label="Accesos rápidos">
               <button type="button" className="icon-quick-btn" onClick={openCatalogSearch} aria-label="Buscar prendas">
@@ -7457,14 +8287,6 @@ export default function App() {
                 aria-label={currentUser ? "Mi perfil" : "Ingresar"}
               >
                 <UserRound size={18} />
-              </button>
-              <button type="button" className="icon-quick-btn icon-quick-btn-badge" onClick={() => setShowFavoritesPanel(true)} aria-label="Favoritos">
-                <Heart size={18} />
-                {favorites.length > 0 && <span className="icon-quick-badge">{Math.min(favorites.length, 99)}</span>}
-              </button>
-              <button type="button" ref={mobileCartAnchorRef} className="icon-quick-btn icon-quick-btn-badge" onClick={() => setShowCartSummary(true)} aria-label="Carrito">
-                <ShoppingBag size={18} />
-                {totalItems > 0 && <span className="icon-quick-badge">{Math.min(totalItems, 99)}</span>}
               </button>
               <button
                 type="button"
@@ -7515,9 +8337,10 @@ export default function App() {
               </button>
             </div>
 
+            {!currentUser && !isAdmin && <button type="button" className="btn btn-outline nav-account-inline" onClick={openOrdersPage}>Mis pedidos</button>}
             {currentUser && !isAdmin && (
               <>
-                <button className="btn btn-outline nav-account-inline" style={{ padding: "10px 14px" }} onClick={() => setShowOrdersModal(true)}>
+                <button className="btn btn-outline nav-account-inline" style={{ padding: "10px 14px" }} onClick={openOrdersPage}>
                   <Package size={14} />
                   Mis pedidos
                 </button>
@@ -7627,6 +8450,7 @@ export default function App() {
                 </button>
               </div>
               <div className="mobile-nav-actions">
+                {!currentUser && <button type="button" className="btn btn-outline" onClick={openOrdersPage}>Mis pedidos sin cuenta</button>}
                 <div className="mobile-nav-primary-grid">
                   <button className="btn btn-outline" onClick={() => { setShowMobileNav(false); setShowFavoritesPanel(true); }}>
                     <Heart size={14} />
@@ -7644,7 +8468,7 @@ export default function App() {
                         <UserRound size={14} />
                         Mi perfil
                       </button>
-                      <button className="btn btn-outline" onClick={() => { setShowMobileNav(false); setShowOrdersModal(true); }}>
+                      <button className="btn btn-outline" onClick={openOrdersPage}>
                         <Package size={14} />
                         Mis pedidos
                       </button>
@@ -7734,6 +8558,7 @@ export default function App() {
         <button
           type="button"
           className={`mobile-bottom-item mobile-bottom-item-badge ${mobileQuickActive === "carrito" ? "active" : ""}`}
+          ref={mobileCartAnchorRef}
           onClick={() => {
             setShowMobileNav(false);
             setShowCartSummary(true);
@@ -7750,7 +8575,7 @@ export default function App() {
         <div className="container hero-grid hero-shell">
           <Motion.div initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: ANIMATION.medium }} className="hero-copy-panel">
             <span className="badge badge-dark hero-badge">{storeSettings.heroBadgeText}</span>
-            <h2 className="section-title hero-title" style={{ fontSize: "clamp(34px, 6vw, 64px)", marginTop: 18 }}>{activeHeroSlide?.title || "Nueva colección"}</h2>
+            <h1 className="section-title hero-title" style={{ fontSize: "clamp(34px, 6vw, 64px)", marginTop: 18 }}>{activeHeroSlide?.title || "Nueva colección"}</h1>
             <p className="muted hero-copy" style={{ fontSize: 18, lineHeight: 1.8, maxWidth: 620 }}>
               {activeHeroSlide?.subtitle || "Explora prendas versátiles y encuentra tu próximo look."}
             </p>
@@ -7803,6 +8628,7 @@ export default function App() {
                     src={activeHeroSlide?.image || FALLBACK_IMAGE}
                     alt={activeHeroSlide?.title || "Imagen de portada"}
                     loading="eager"
+                    fetchPriority="high"
                     decoding="async"
                     initial={{ opacity: 0, scale: 1.03 }}
                     animate={{ opacity: 1, scale: 1 }}
@@ -8305,22 +9131,3 @@ export default function App() {
     </MotionConfig>
   );
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

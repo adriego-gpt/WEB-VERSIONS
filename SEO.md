@@ -15,16 +15,16 @@ Configurada en `index.html` para la indexación óptima de la portada y la marca
   - `og:type`: `website`
   - `og:title`: `Adriego Store | Moda y ropa exclusiva`
   - `og:description`: `Descubre Adriego Store: moda seleccionada, tendencias exclusivas y atención personalizada con pedidos directos por WhatsApp.`
-  - `og:url`: `https://adriego.com/`
-  - `og:image`: `https://adriego.com/og-cover.jpg` (1200×630 raster)
+  - `og:url`: `https://adriego.vercel.app/`
+  - `og:image`: `https://adriego.vercel.app/og-cover.jpg` (1200×630 raster)
   - `og:site_name`: `Adriego Store`
   - `og:locale`: `es_CO`
 - **Twitter Cards:**
   - `twitter:card`: `summary_large_image`
   - `twitter:title`: `Adriego Store | Moda y ropa exclusiva`
   - `twitter:description`: `Descubre Adriego Store: moda seleccionada, tendencias exclusivas y atención personalizada con pedidos directos por WhatsApp.`
-  - `twitter:image`: `https://adriego.com/og-cover.jpg`
-- **Canonical URL:** `https://adriego.com/`
+  - `twitter:image`: `https://adriego.vercel.app/og-cover.jpg`
+- **Canonical URL:** `https://adriego.vercel.app/`
 - **Datos Estructurados JSON-LD:** Bloque `schema.org/ClothingStore` y `schema.org/Product` dinámico con marca, condición, ofertas y vendedor.
 
 ---
@@ -53,4 +53,4 @@ En consonancia con `ROUTES.md`:
 - Se recomienda implementar una Edge Function o Middleware en Vercel que detecte User-Agents como `WhatsApp/`, `facebookexternalhit/`, `Twitterbot` y responda con el HTML pre-renderizado que contenga las etiquetas Open Graph del producto antes de redirigir al bundle SPA.
 
 ### 3.3. Configuración Final de Producción
-- ✅ El dominio personalizado `https://adriego.com` ya está configurado en Vercel, `index.html`, `robots.txt`, `sitemap.xml` y variables de entorno.
+- ✅ El dominio activo `https://adriego.vercel.app` está configurado en Vercel, `index.html`, `robots.txt` y `sitemap.xml`.

@@ -1,11 +1,8 @@
 import { useEffect } from "react";
 import { getUserSessionStatus } from "../services/userAccountService.js";
 import { getCatalogState, getRealtimeSyncStatus } from "../services/serverStateService.js";
-import {
-  computePollingDelay,
-  normalizeSyncVersions,
-  calculateSyncTriggers
-} from "../domain/sync/syncCalculations.js";
+import { computePollingDelay } from "../domain/sync/syncCalculations.js";
+import { refreshSyncPartitions } from "../domain/sync/refreshSyncPartitions.js";
 
 /** Keeps cross-device catalog, order, admin, and authenticated-user state fresh. */
 export function useRealtimeSync({
@@ -19,14 +16,19 @@ export function useRealtimeSync({
   refreshOrders,
   setCurrentUser,
   showAdminPanel,
+  onStatusChange,
+  retryKey,
 }) {
   useEffect(() => {
     if (!catalogReady) return undefined;
     let cancelled = false;
     let timerId = null;
+    let inFlight = false;
+    let forceQueued = false;
 
     const scheduleNext = () => {
       if (cancelled) return;
+      if (timerId) window.clearTimeout(timerId);
       const isVisible = typeof document === "undefined" || document.visibilityState === "visible";
       const delayMs = computePollingDelay(isVisible ? "visible" : "hidden");
       timerId = window.setTimeout(() => {
@@ -35,6 +37,14 @@ export function useRealtimeSync({
     };
 
     const pollRealtimeSync = async (force = false) => {
+      if (cancelled) return;
+      if (inFlight) {
+        forceQueued ||= force;
+        return;
+      }
+      inFlight = true;
+      if (timerId) window.clearTimeout(timerId);
+      onStatusChange?.({ state: "checking", updatedAt: "" });
       try {
         const privateStatus = Boolean(currentUserId || isAdmin);
         const result = await getRealtimeSyncStatus({
@@ -43,53 +53,52 @@ export function useRealtimeSync({
           preferCache: !force,
           maxAgeMs: force ? 0 : (privateStatus ? 5000 : 30000),
         });
-        if (cancelled || !result?.ok || !result.versions) {
-          scheduleNext();
+        if (cancelled) return;
+        if (!result?.ok || !result.versions) {
+          onStatusChange?.({
+            state: result?.status === 0 ? "offline" : "error",
+            updatedAt: new Date().toISOString(),
+            message: result?.message || "No se pudo comprobar la sincronización.",
+          });
           return;
         }
 
-        const previousVersions = realtimeVersionsRef.current;
-        const nextVersions = normalizeSyncVersions(result.versions, result.currentUser);
-        realtimeVersionsRef.current = nextVersions;
-
-        const triggers = calculateSyncTriggers(previousVersions, nextVersions, {
-          currentUserId,
-          isAdmin,
-          showAdminPanel,
-          adminTab,
+        const { deferredCatalog } = await refreshSyncPartitions({
+          result,
+          versionsRef: realtimeVersionsRef,
+          context: { currentUserId, isAdmin, showAdminPanel, adminTab },
+          getCatalogState,
+          applyCatalogState,
+          refreshOrders,
+          refreshAdminUsers,
+          getUserSessionStatus,
+          setCurrentUser,
+          isCancelled: () => cancelled,
         });
-
-        if (triggers.shouldRefreshCatalog) {
-          const catalogResult = await getCatalogState({
-            admin: Boolean(isAdmin),
-            catalogVersion: nextVersions.catalog,
-            preferCache: false,
-            force: true,
+        if (!cancelled) {
+          onStatusChange?.({
+            state: deferredCatalog ? "deferred" : "synced",
+            updatedAt: new Date().toISOString(),
+            message: deferredCatalog ? "Hay cambios del catálogo pendientes. Se cargarán al salir del editor." : "",
           });
-          if (!cancelled && catalogResult?.ok && catalogResult?.data) {
-            applyCatalogState(catalogResult.data);
-          }
         }
-
-        if (triggers.shouldRefreshOrders) {
-          void refreshOrders({ silent: true, force: true, preferCache: false, notifyAdminOnNew: Boolean(isAdmin) });
+      } catch (error) {
+        if (!cancelled) {
+          onStatusChange?.({
+            state: typeof navigator !== "undefined" && navigator.onLine === false ? "offline" : "error",
+            updatedAt: new Date().toISOString(),
+            message: error?.message || "No se pudo completar la sincronización.",
+          });
         }
-
-        if (triggers.shouldRefreshUsers) {
-          void refreshAdminUsers({ silent: true, force: true, preferCache: false });
+      } finally {
+        inFlight = false;
+        if (!cancelled && forceQueued) {
+          forceQueued = false;
+          void pollRealtimeSync(true);
+        } else {
+          scheduleNext();
         }
-
-        if (triggers.shouldRefreshUserState) {
-          const sessionResult = await getUserSessionStatus();
-          if (!cancelled) {
-            setCurrentUser(sessionResult?.ok && sessionResult?.authenticated && sessionResult?.user ? sessionResult.user : null);
-          }
-        }
-      } catch {
-        // Silent error tolerance
       }
-
-      scheduleNext();
     };
 
     const refreshOnFocus = () => { void pollRealtimeSync(true); };
@@ -109,5 +118,5 @@ export function useRealtimeSync({
       window.removeEventListener("online", refreshOnFocus);
       if (typeof document !== "undefined") document.removeEventListener("visibilitychange", refreshOnVisibility);
     };
-  }, [adminTab, applyCatalogState, catalogReady, currentUserId, isAdmin, realtimeVersionsRef, refreshAdminUsers, refreshOrders, setCurrentUser, showAdminPanel]);
+  }, [adminTab, applyCatalogState, catalogReady, currentUserId, isAdmin, onStatusChange, realtimeVersionsRef, refreshAdminUsers, refreshOrders, retryKey, setCurrentUser, showAdminPanel]);
 }

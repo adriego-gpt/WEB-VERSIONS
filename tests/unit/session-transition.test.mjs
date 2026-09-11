@@ -70,6 +70,17 @@ test("sin cuenta el carrito se restaura y persiste solamente en el dispositivo",
   assert.match(hookSource, /if \(!currentUserId\) return Promise\.resolve/, "un invitado no debe escribir en ninguna cuenta remota");
 });
 
+test("el carrito y favoritos guardados esperan al catálogo antes de depurarse", async () => {
+  const appSource = await readFile(appUrl, "utf8");
+  const reconciliationStart = appSource.indexOf("setCart((previous) => {", appSource.indexOf("if (!catalogReady) return;"));
+  const publicCartFilterStart = appSource.indexOf("if (isAdmin || !catalogReady) return;", reconciliationStart);
+  const favoritesFilterStart = appSource.indexOf("if (isAdmin || !catalogReady) return;", publicCartFilterStart + 1);
+
+  assert.ok(reconciliationStart >= 0, "debe esperar el catálogo antes de reconciliar el carrito local");
+  assert.ok(publicCartFilterStart > reconciliationStart, "debe esperar el catálogo antes de filtrar el carrito público");
+  assert.ok(favoritesFilterStart > publicCartFilterStart, "debe esperar el catálogo antes de filtrar favoritos");
+});
+
 test("una sesión existente hidrata el usuario desde el servidor al recargar", async () => {
   const appSource = await readFile(appUrl, "utf8");
 

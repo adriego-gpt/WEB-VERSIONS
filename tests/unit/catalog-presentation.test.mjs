@@ -63,3 +63,47 @@ test("featured cards use the principal catalog color without showing color selec
   assert.match(source, /getSelectionForColor\(product, \{ color: product\.catalogColor \}\)/);
   assert.doesNotMatch(source, /featured-product-swatches|featured-swatch/);
 });
+
+test("featured marquee hides repeated filler cards from assistive technology", async () => {
+  const source = await readFile(new URL("../../src/components/catalog/FeaturedProductMarquee.jsx", import.meta.url), "utf8");
+
+  assert.match(source, /const isRepeatedItem = itemIndex >= products\.length;/);
+  assert.match(source, /isDuplicate=\{isDuplicate \|\| isRepeatedItem\}/);
+});
+
+test("catalog reconciliation preserves an explicitly empty server catalog", async () => {
+  const source = await readFile(new URL("../../src/App.jsx", import.meta.url), "utf8");
+
+  assert.match(
+    source,
+    /const resolvedProducts = Array\.isArray\(data\.products\) \? incomingProducts : fallbackProducts;/,
+  );
+  assert.doesNotMatch(
+    source,
+    /const resolvedProducts = incomingProducts\.length \? incomingProducts : fallbackProducts;/,
+  );
+});
+
+test("catalog conflicts require an explicit administrator decision", async () => {
+  const source = await readFile(new URL("../../src/App.jsx", import.meta.url), "utf8");
+
+  assert.match(source, /result\.status === 409 && result\.code === "CATALOG_VERSION_CONFLICT"/);
+  assert.match(source, /title="Hay una versión más reciente del catálogo"/);
+  assert.match(source, /resolveCatalogConflict\("server"\)/);
+  assert.match(source, /resolveCatalogConflict\("local"\)/);
+  assert.match(source, /baseCatalogVersion: conflict\.currentVersion/);
+  assert.match(source, /adoptCatalogVersion\(conflict\.currentVersion\)/);
+});
+
+test("realtime synchronization failures are visible to the administrator", async () => {
+  const hookSource = await readFile(new URL("../../src/hooks/useRealtimeSync.js", import.meta.url), "utf8");
+  const panelSource = await readFile(new URL("../../src/components/admin/AdminPanelModal.jsx", import.meta.url), "utf8");
+
+  assert.match(hookSource, /state: deferredCatalog \? "deferred" : "synced"/);
+  assert.match(hookSource, /state: result\?\.status === 0 \? "offline" : "error"/);
+  assert.doesNotMatch(hookSource, /Silent error tolerance/);
+  assert.match(panelSource, /className={`admin-sync-status is-\$\{realtimeSyncStatus\?\.state/);
+  assert.match(panelSource, /Error de sincronización/);
+  assert.match(panelSource, /className="admin-sync-retry"/);
+  assert.match(panelSource, /onClick={retryRealtimeSync}/);
+});

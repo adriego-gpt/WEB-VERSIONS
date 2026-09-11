@@ -7,6 +7,7 @@ function normalizeDraftColor(color = {}) {
     name: String(color.name || ""),
     hex: String(color.hex || ""),
     images: Array.isArray(color.images) ? color.images.map((image) => String(image || "")) : [],
+    imageViews: Array.isArray(color.imageViews) ? color.imageViews : [],
     sizes: Array.isArray(color.sizes)
       ? color.sizes.map((entry) => ({
         size: String(entry?.size || ""),
@@ -19,6 +20,7 @@ function normalizeDraftColor(color = {}) {
 export function getProductFormSignature(form = {}) {
   return JSON.stringify({
     id: form.id == null ? null : String(form.id),
+    sku: String(form.sku || ""),
     name: String(form.name || ""),
     price: String(form.price ?? ""),
     oldPrice: String(form.oldPrice ?? ""),

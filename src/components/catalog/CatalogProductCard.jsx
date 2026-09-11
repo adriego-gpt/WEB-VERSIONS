@@ -15,6 +15,13 @@ import {
   getStockStatus,
 } from "../../domain/products/variants";
 
+function getResponsiveSources(src) {
+  if (!/^https:\/\/images\.unsplash\.com\//i.test(src)) return undefined;
+  return [320, 640, 960]
+    .map((width) => src.replace(/([?&])w=\d+/i, `$1w=${width}`))
+    .join(", ");
+}
+
 function getVisibleOptions(options = [], selectedOption, limit) {
   const uniqueOptions = [...new Set(options.filter(Boolean))];
   if (uniqueOptions.length <= limit) return uniqueOptions;
@@ -46,6 +53,12 @@ export function CatalogProductCard({
   const currentImages = getImagesForColor(product, selectedColor);
   const currentImage = currentImages[0] || FALLBACK_IMAGE;
   const discount = discountPercent(product.price, product.oldPrice);
+  const badgeKinds = getProductBadgeKinds(product, discount);
+  const badges = badgeKinds.map((badgeKind) => {
+    if (badgeKind === "offer") return <span key="offer" className="badge badge-offer">Oferta -{discount}%</span>;
+    if (badgeKind === "featured") return <span key="featured" className="badge badge-dark">Destacado</span>;
+    return <span key="new" className="badge badge-light">Nuevo</span>;
+  });
   const sizesForSelectedColor = getSizesForColor(product, selectedColor);
   const availableStock = resolvedSelection.availableStock;
   const stockStatus = getStockStatus(availableStock);
@@ -83,7 +96,7 @@ export function CatalogProductCard({
   };
 
   return (
-    <Motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: ANIMATION.base, ease: ANIMATION.easeOut }} className="card product-card">
+    <div className="card product-card">
       <div className="product-img-wrap">
         <a
           href={`/producto/${product.slug || product.id}`}
@@ -98,6 +111,8 @@ export function CatalogProductCard({
             <Motion.img
               key={`${product.id}-${selectedColor}-${currentImage}`}
               src={currentImage}
+              srcSet={getResponsiveSources(currentImage)}
+              sizes="(max-width: 768px) 50vw, (max-width: 1100px) 33vw, 25vw"
               alt={product.name}
               loading="lazy"
               decoding="async"
@@ -114,13 +129,7 @@ export function CatalogProductCard({
             />
           </AnimatePresence>
         </a>
-        <div className="product-card-badges" style={{ position: "absolute", left: 10, top: 10, display: "flex", flexWrap: "wrap", gap: 6, pointerEvents: "none" }}>
-          {getProductBadgeKinds(product, discount).map((badgeKind) => {
-            if (badgeKind === "offer") return <span key="offer" className="badge badge-offer">Oferta -{discount}%</span>;
-            if (badgeKind === "featured") return <span key="featured" className="badge badge-dark">Destacado</span>;
-            return <span key="new" className="badge badge-light">Nuevo</span>;
-          })}
-        </div>
+        {badges.length > 0 && <div className="product-card-badges product-card-badges-overlay">{badges}</div>}
         <div className="product-card-floating-actions">
           <button
             type="button"
@@ -129,7 +138,8 @@ export function CatalogProductCard({
               triggerHaptic("light");
               onToggleFavorite(product.id);
             }}
-            aria-label="Guardar en favoritos"
+            aria-label={isFavorite ? "Quitar de favoritos" : "Guardar en favoritos"}
+            aria-pressed={isFavorite}
           >
             <Heart size={16} fill={isFavorite ? "currentColor" : "none"} />
           </button>
@@ -143,6 +153,7 @@ export function CatalogProductCard({
       </div>
 
       <div className="product-card-body">
+        {badges.length > 0 && <div className="product-card-badges product-card-badges-inline">{badges.slice(0, 2)}</div>}
         <div className="product-card-overview">
           <div className="product-card-identity">
             <p className="product-card-category">{product.category}</p>
@@ -302,7 +313,7 @@ export function CatalogProductCard({
                 alignItems: "center",
                 justifyContent: "center",
                 gap: "6px",
-                transition: "all 0.2s ease"
+                transition: "background-color 160ms ease-out, color 160ms ease-out, box-shadow 160ms ease-out"
               }}
               onClick={handleMainButtonClick}
               disabled={availableStock <= 0 || addedFeedback}
@@ -314,13 +325,13 @@ export function CatalogProductCard({
                   <Check size={16} /> ¡Agregado!
                 </>
               ) : (
-                "Agregar"
+                <><span className="catalog-add-desktop">Agregar</span><span className="catalog-add-mobile">Elegir talla</span></>
               )}
             </button>
           </div>
         )}
       </div>
-    </Motion.div>
+    </div>
   );
 }
 

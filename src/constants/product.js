@@ -4,10 +4,10 @@ export const FILE_SECURITY = {
 };
 
 export const PRODUCT_FORM_LIMITS = {
-  maxColors: 24,
-  maxImagesPerColor: 16,
-  maxSizesPerColor: 24,
-  maxFilterTags: 20,
+  maxColors: 12,
+  maxImagesPerColor: 8,
+  maxSizesPerColor: 20,
+  maxFilterTags: 12,
 };
 
 export const FALLBACK_IMAGE = "https://images.unsplash.com/photo-1529139574466-a303027c1d8b?auto=format&fit=crop&w=1200&q=80";

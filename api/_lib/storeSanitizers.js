@@ -1,4 +1,6 @@
 import crypto from "node:crypto";
+import { alignImageViews } from "../../src/domain/products/imageViews.js";
+import { PRODUCT_FORM_LIMITS } from "../../src/constants/product.js";
 import { normalizeCouponList } from "../../src/services/couponService.js";
 import { normalizeCardFeePercent } from "../../src/domain/orders/payment.js";
 import { normalizeBankAccounts } from "../../src/domain/contact/paymentSettings.js";
@@ -16,7 +18,7 @@ import {
 const FALLBACK_IMAGE = "https://images.unsplash.com/photo-1529139574466-a303027c1d8b?auto=format&fit=crop&w=1200&q=80";
 const MAX_PRODUCTS = 250;
 const MAX_HERO_SLIDES = 6;
-const MAX_IMAGES_PER_COLOR = 8;
+const MAX_IMAGES_PER_COLOR = PRODUCT_FORM_LIMITS.maxImagesPerColor;
 const DEFAULT_POST_PURCHASE_TEMPLATE = "Hola {cliente}, tu pedido {codigo} quedo registrado por {total}. Te ayudamos a finalizar pago y envio por aqui.";
 const DEFAULT_ABANDONED_CART_TEMPLATE = "Hola {cliente}, tienes {items} producto(s) pendientes por {total}. Si quieres, te ayudo a cerrarlo ahora mismo.";
 const DEFAULT_HERO_BADGE_TEXT = "La mejor coleccion premium, a un solo clic";
@@ -51,9 +53,9 @@ function summarizeStockBySize(variants = [], sizes = []) {
 }
 
 function sanitizeVariants(rawVariants = [], rawColors = [], rawSizes = [], rawStockBySize = {}) {
-  const colorCandidates = sanitizeStringArray(rawColors, 12, 30);
-  const sizeCandidates = sanitizeStringArray(rawSizes, 20, 20);
-  const safeVariants = sanitizeArray(rawVariants, 120)
+  const colorCandidates = sanitizeStringArray(rawColors, PRODUCT_FORM_LIMITS.maxColors, 30);
+  const sizeCandidates = sanitizeStringArray(rawSizes, PRODUCT_FORM_LIMITS.maxSizesPerColor, 20);
+  const safeVariants = sanitizeArray(rawVariants, PRODUCT_FORM_LIMITS.maxColors * PRODUCT_FORM_LIMITS.maxSizesPerColor)
     .map((variant) => ({
       uid: String(variant?.uid || crypto.randomUUID()),
       color: normalizeOptionLabel(variant?.color || "").slice(0, 30),
@@ -82,7 +84,7 @@ function sanitizeVariants(rawVariants = [], rawColors = [], rawSizes = [], rawSt
 
 function sanitizeImagesByColor(rawImagesByColor = {}, colors = []) {
   const entries = rawImagesByColor && typeof rawImagesByColor === "object" && !Array.isArray(rawImagesByColor)
-    ? Object.entries(rawImagesByColor).slice(0, 12)
+    ? Object.entries(rawImagesByColor).slice(0, PRODUCT_FORM_LIMITS.maxColors)
     : [];
 
   const safeMap = new Map();
@@ -180,8 +182,8 @@ function sanitizeProducts(rawProducts = []) {
       const oldPrice = Math.max(safeOldPrice, safeBasePrice, effectivePrice);
 
       const variants = sanitizeVariants(product?.variants, product?.colors, product?.sizes, product?.stockBySize);
-      const colors = sanitizeStringArray(variants.map((variant) => variant.color), 12, 30);
-      const sizes = sanitizeStringArray(variants.map((variant) => variant.size), 20, 20);
+      const colors = sanitizeStringArray(variants.map((variant) => variant.color), PRODUCT_FORM_LIMITS.maxColors, 30);
+      const sizes = sanitizeStringArray(variants.map((variant) => variant.size), PRODUCT_FORM_LIMITS.maxSizesPerColor, 20);
       const imagesByColor = sanitizeImagesByColor(product?.imagesByColor, colors);
       const colorSwatches = sanitizeColorSwatches(product?.colorSwatches, colors);
       const requestedCatalogColor = normalizeOptionLabel(product?.catalogColor || "").slice(0, 30);
@@ -189,6 +191,7 @@ function sanitizeProducts(rawProducts = []) {
 
       return {
         id: productId,
+        sku: normalizeLine(product?.sku || "").toUpperCase().slice(0, 60),
         name,
         basePrice: safeBasePrice,
         price: effectivePrice,
@@ -197,13 +200,17 @@ function sanitizeProducts(rawProducts = []) {
         productType: normalizeLine(product?.productType || "General").slice(0, 40),
         description: sanitizeParagraph(product?.description || "").slice(0, 1200),
         imagesByColor,
+        imageViewsByColor: Object.fromEntries(Object.entries(imagesByColor).map(([color, images]) => {
+          const rawColor = Object.keys(product?.imagesByColor || {}).find((key) => normalizeOptionLabel(key).slice(0, 30) === color);
+          return [color, alignImageViews(product?.imagesByColor?.[rawColor], product?.imageViewsByColor?.[rawColor], images, normalizeImageSource)];
+        })),
         colorSwatches,
         colors,
         catalogColor,
         sizes,
         variants,
         stockBySize: summarizeStockBySize(variants, sizes),
-        filterTags: sanitizeStringArray(product?.filterTags, 12, 40),
+        filterTags: sanitizeStringArray(product?.filterTags, PRODUCT_FORM_LIMITS.maxFilterTags, 40),
         featured: Boolean(product?.featured),
         rating: clampNumber(product?.rating, 0, 5, 5),
         newArrival: Boolean(product?.newArrival),
@@ -390,6 +397,10 @@ function sanitizeOrderPatch(rawPatch = {}) {
     next.paymentProof = normalizeImageSource(rawPatch.paymentProof);
   }
 
+  if (rawPatch?.internalNote != null) {
+    next.internalNote = sanitizeParagraph(rawPatch.internalNote).slice(0, 600);
+  }
+
   return next;
 }
 
@@ -404,11 +415,37 @@ function sanitizeAdminCatalogPayload(rawData = {}) {
   };
 }
 
+function sanitizePhysicalStockEvents(rawEvents = []) {
+  return sanitizeArray(rawEvents, 80).map((event) => {
+    const quantity = Math.min(999, Math.max(0, Math.floor(Number(event?.quantity) || 0)));
+    const rawDelta = Number(event?.delta);
+    const delta = Number.isInteger(rawDelta)
+      ? Math.min(999, Math.max(-999, rawDelta))
+      : -quantity;
+    return {
+      id: normalizeLine(event?.id || crypto.randomUUID()).slice(0, 100),
+      productId: normalizeLine(event?.productId || "").slice(0, 100),
+      productName: normalizeLine(event?.productName || "Producto").slice(0, 120),
+      color: normalizeOptionLabel(event?.color || "").slice(0, 30),
+      size: normalizeOptionLabel(event?.size || "").slice(0, 20),
+      delta,
+      previousStock: Math.min(999, Math.max(0, Math.floor(Number(event?.previousStock) || 0))),
+      nextStock: Math.min(999, Math.max(0, Math.floor(Number(event?.nextStock) || 0))),
+      reason: normalizeLine(event?.reason || (event?.source === "admin" ? "Ajuste manual" : "Venta física por Telegram")).slice(0, 120),
+      source: event?.source === "admin" ? "admin" : "telegram",
+      status: event?.status === "reverted" ? "reverted" : "active",
+      createdAt: normalizeLine(event?.createdAt || "").slice(0, 40),
+      revertedAt: normalizeLine(event?.revertedAt || "").slice(0, 40),
+    };
+  }).filter((event) => event.id && event.productName && event.createdAt);
+}
+
 export {
   sanitizeAdminCatalogPayload,
   sanitizeContactSettings,
   sanitizeManagedEntities,
   sanitizeOrderPatch,
+  sanitizePhysicalStockEvents,
   sanitizeProducts,
   sanitizeStoreSettings,
 };

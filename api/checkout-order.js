@@ -1,7 +1,9 @@
 
 import crypto from "node:crypto";
+import { ensureGuestSession } from "./_lib/guestSession.js";
 import { bumpRealtimeMeta, updateStore } from "./_lib/store.js";
 import { dispatchOrderNotifications } from "./_lib/notifications.js";
+import { toCustomerOrderResponse } from "./_lib/customerOrders.js";
 import {
   applyCouponUsage,
   createFriendlyOrderCode,
@@ -48,6 +50,10 @@ const IDEMPOTENCY_TTL_MS = Math.max(
 );
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const LEGACY_PICKUP_ADDRESS = "av. principal 123, quito, ecuador";
+
+function getPublicProducts(products = []) {
+  return (Array.isArray(products) ? products : []).filter((product) => product?.isPublic !== false);
+}
 
 function normalizeSessionVersion(value) {
   const numeric = Number(value);
@@ -250,7 +256,7 @@ function buildOrderText(order) {
     `• *Forma de pago:* ${methodSummary}`,
     order.paymentFeeAmount > 0 ? `• *Comisión tarjeta (${order.paymentFeePercent}%):* +${currency(order.paymentFeeAmount)}` : "",
     order.paymentProof ? `• *Comprobante:* Adjuntado en la web` : "",
-    `• *TOTAL A PAGAR:* *${currency(order.total || order.subtotal)}*`,
+    `• *TOTAL A PAGAR:* *${currency(order.total ?? order.subtotal)}*`,
     "",
     `━━━━━━━━━━━━━━━━━━━━`,
     isCard
@@ -303,13 +309,32 @@ export default async function handler(req, res) {
 
   const cookies = parseCookies(req.headers?.cookie || "");
   const session = verifySignedToken(cookies[USER_COOKIE_NAME] || cookies.atelier_user_session || "", userSessionSecret);
-  if (!session) {
+  const body = requireJsonBody(req, res, { endpoint: ENDPOINT_NAME });
+  if (!body) return;
+  const isGuest = !session && body.guestCheckout === true;
+  if (!session && !isGuest) {
     res.status(401).json({ ok: false, message: "Inicia sesión para finalizar la compra." });
     return;
   }
 
-  const body = requireJsonBody(req, res, { endpoint: ENDPOINT_NAME });
-  if (!body) return;
+  const guestName = normalizeLine(body.delivery?.fullName || "").slice(0, 120);
+  const guestPhone = normalizePhone(body.delivery?.phone || "");
+  if (isGuest && (!guestName || !/^\d{10}$/.test(guestPhone))) {
+    res.status(400).json({ ok: false, message: "Ingresa tu nombre y teléfono de 10 dígitos para comprar sin cuenta." });
+    return;
+  }
+  const guestSession = isGuest ? ensureGuestSession(req, res) : null;
+  if (isGuest) {
+    const guestLimit = await consumeRateLimit("checkout-guest-phone", guestPhone, 4, 60 * 60 * 1000, {
+      endpoint: ENDPOINT_NAME,
+      ip: requestIp,
+    });
+    if (!guestLimit.ok) {
+      res.setHeader("Retry-After", String(Math.ceil(guestLimit.retryAfterMs / 1000)));
+      res.status(429).json({ ok: false, message: "Has realizado varios pedidos recientemente. Escríbenos por WhatsApp si necesitas ayuda." });
+      return;
+    }
+  }
   const idempotencyKey = normalizeLine(body?.idempotencyKey || "").toLowerCase();
   if (!UUID_PATTERN.test(idempotencyKey)) {
     res.status(400).json({
@@ -330,12 +355,14 @@ export default async function handler(req, res) {
 
   await updateStore((draft) => {
     const users = Array.isArray(draft.users) ? draft.users : [];
-    const user = users.find((entry) => String(entry.id) === String(session.sub));
+    const user = isGuest
+      ? { id: guestSession.sub, name: guestName, phone: guestPhone, email: "" }
+      : users.find((entry) => String(entry.id) === String(session.sub));
     if (!user) {
       responsePayload = { ok: false, status: 401, message: "No pudimos validar tu sesión." };
       return draft;
     }
-    if (normalizeSessionVersion(session.sessionVersion) !== normalizeSessionVersion(user.sessionVersion)) {
+    if (!isGuest && normalizeSessionVersion(session.sessionVersion) !== normalizeSessionVersion(user.sessionVersion)) {
       responsePayload = { ok: false, status: 401, message: "Tu sesión expiró. Inicia sesión nuevamente." };
       return draft;
     }
@@ -348,19 +375,13 @@ export default async function handler(req, res) {
       && Date.parse(order.createdAt || "") >= idempotencyCutoff
     ));
     if (existingOrder) {
-      const visibleOrderHistory = previousOrders.filter((order) => (
-        String(order.customerId || "") === String(user.id)
-        || (
-          !String(order.customerId || "")
-          && normalizeEmail(order.customerEmail || "") === normalizeEmail(user.email || "")
-        )
-      ));
+      const visibleOrderHistory = previousOrders.filter((order) => String(order.customerId || "") === String(user.id));
       const whatsappNumber = normalizePhone(draft.contactSettings?.whatsappNumber || "");
       responsePayload = {
         ok: true,
         idempotentReplay: true,
         order: existingOrder,
-        products: Array.isArray(draft.products) ? draft.products : [],
+        products: getPublicProducts(draft.products),
         orderHistory: visibleOrderHistory,
         whatsappUrl: buildWhatsAppLink(whatsappNumber, buildOrderText(existingOrder)),
       };
@@ -405,7 +426,7 @@ export default async function handler(req, res) {
 
     const subtotal = safeCart.reduce((total, item) => total + item.price * item.quantity, 0);
     const discountAmount = couponEvaluation.ok ? Number(couponEvaluation.discountAmount) || 0 : 0;
-    const discountedSubtotal = couponEvaluation.ok ? Number(couponEvaluation.total) || subtotal : subtotal;
+    const discountedSubtotal = couponEvaluation.ok ? Number(couponEvaluation.total ?? subtotal) : subtotal;
 
     const shippingSettings = draft.storeSettings?.shippingSettings || {};
     const shippingCalculation = calculateShippingFee({
@@ -593,18 +614,12 @@ export default async function handler(req, res) {
     const whatsappNumber = normalizePhone(draft.contactSettings?.whatsappNumber || "");
     const message = buildOrderText(nextOrder);
     const whatsappUrl = buildWhatsAppLink(whatsappNumber, message);
-    const visibleOrderHistory = draft.orders.filter((order) => (
-      String(order.customerId || "") === String(user.id)
-      || (
-        !String(order.customerId || "")
-        && normalizeEmail(order.customerEmail || "") === normalizeEmail(user.email || "")
-      )
-    ));
+    const visibleOrderHistory = draft.orders.filter((order) => String(order.customerId || "") === String(user.id));
 
     responsePayload = {
       ok: true,
       order: nextOrder,
-      products: draft.products,
+      products: getPublicProducts(draft.products),
       orderHistory: visibleOrderHistory,
       whatsappUrl,
       lowStockAlerts,
@@ -635,5 +650,5 @@ export default async function handler(req, res) {
     }
   }
 
-  res.status(200).json(responsePayload);
+  res.status(200).json({ ...toCustomerOrderResponse(responsePayload), guestId: guestSession?.sub || "" });
 }

@@ -13,6 +13,13 @@ const SERVER_CACHE_KEYS = {
 
 let latestCatalogVersion = 0;
 
+function adoptCatalogVersion(version) {
+  const normalizedVersion = Number(version);
+  if (Number.isInteger(normalizedVersion) && normalizedVersion >= 0) {
+    latestCatalogVersion = normalizedVersion;
+  }
+}
+
 function rememberCatalogVersion(response) {
   const version = Number(response?.data?.catalogVersion);
   if (Number.isInteger(version) && version >= 0) {
@@ -53,6 +60,7 @@ function getCatalogState(options = {}) {
       preferCache,
       maxAgeMs,
       persist: !admin,
+      allowStaleOnError: !force,
     },
   ).then(rememberCatalogVersion);
 }
@@ -62,7 +70,7 @@ function syncCatalogState(data, options = {}) {
   const baseCatalogVersion = Number.isInteger(requestedVersion) && requestedVersion >= 0
     ? requestedVersion
     : latestCatalogVersion;
-  return postJson("/api/catalog-state?action=sync", { data, baseCatalogVersion }).then((response) => {
+  return postJson("/api/catalog-state?action=sync", { data, baseCatalogVersion, writeProtocol: 2 }).then((response) => {
     if (response?.ok) {
       rememberCatalogVersion(response);
       invalidateCachedRequest([
@@ -136,6 +144,7 @@ function listServerOrders(options = {}) {
       preferCache,
       maxAgeMs,
       persist: true,
+      allowStaleOnError: !force,
     },
   );
 }
@@ -213,11 +222,13 @@ function getRealtimeSyncStatus(options = {}) {
       preferCache,
       maxAgeMs,
       persist: false,
+      allowStaleOnError: !force,
     },
   );
 }
 
 export {
+  adoptCatalogVersion,
   getCatalogState,
   syncCatalogState,
   syncContactState,

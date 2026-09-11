@@ -21,6 +21,21 @@ export function CouponManagerPanel({
 }) {
   const [showEditor, setShowEditor] = useState(Boolean(couponDraft?.id));
   const [expandedCouponId, setExpandedCouponId] = useState("");
+  const [couponSearch, setCouponSearch] = useState("");
+  const [simulationSubtotal, setSimulationSubtotal] = useState("50");
+  const [statusNow] = useState(() => Date.now());
+  const normalizedCouponSearch = couponSearch.trim().toLowerCase();
+  const visibleCoupons = coupons.filter((coupon) => !normalizedCouponSearch || String(coupon.code || "").toLowerCase().includes(normalizedCouponSearch));
+  const simulatedSubtotal = Math.max(0, Number(simulationSubtotal) || 0);
+  const simulationStartsAt = couponDraft.startsAt ? new Date(couponDraft.startsAt).getTime() : 0;
+  const simulationExpiresAt = couponDraft.expiresAt ? new Date(couponDraft.expiresAt).getTime() : 0;
+  const simulationEligible = simulatedSubtotal >= Math.max(0, Number(couponDraft.minPurchase) || 0)
+    && (!simulationStartsAt || simulationStartsAt <= statusNow)
+    && (!simulationExpiresAt || simulationExpiresAt >= statusNow);
+  const rawSimulatedDiscount = couponDraft.discountType === "fixed"
+    ? Math.min(simulatedSubtotal, Math.max(0, Number(couponDraft.discountValue) || 0))
+    : simulatedSubtotal * (Math.min(100, Math.max(0, Number(couponDraft.discountValue) || 0)) / 100);
+  const simulatedDiscount = simulationEligible ? rawSimulatedDiscount : 0;
   const selectedExcludedTypes = new Set(
     splitFilterTagsText(couponDraft?.excludedProductTypesText || "").map((item) => item.toLowerCase()),
   );
@@ -41,7 +56,6 @@ export function CouponManagerPanel({
   };
 
   return (
-    <div className="admin-tab-panel">
       <section className="admin-workspace coupon-manager-workspace" aria-labelledby="coupon-manager-title">
         <AdminSectionHeader
           title="Cupones"
@@ -171,25 +185,34 @@ export function CouponManagerPanel({
                 </div>
               </div>
             </details>
+
+            <div className="coupon-simulator">
+              <div><strong>Simular descuento</strong><span>Valida subtotal mínimo y vigencia; el alcance por productos se comprueba en checkout.</span></div>
+              <label><span>Subtotal</span><input className="input" type="number" min="0" value={simulationSubtotal} onChange={(event) => setSimulationSubtotal(event.target.value)} /></label>
+              <output aria-live="polite"><span>{simulationEligible ? "El cliente pagaría" : "Cupón no aplicable"}</span><strong>{currency(Math.max(0, simulatedSubtotal - simulatedDiscount))}</strong></output>
+            </div>
           </div>
         )}
 
         <div className="coupon-list-header">
-          <strong>Cupones registrados</strong>
-          <span>{coupons.length}</span>
+          <div><strong>Cupones registrados</strong><span>{visibleCoupons.length} de {coupons.length}</span></div>
+          <input className="input" type="search" aria-label="Buscar cupones por código" placeholder="Buscar código" value={couponSearch} onChange={(event) => setCouponSearch(event.target.value)} />
         </div>
         <div className="coupon-compact-list">
-          {coupons.length === 0 ? (
+          {visibleCoupons.length === 0 ? (
             <div className="empty-admin-note">Aún no hay cupones creados.</div>
-          ) : coupons.map((coupon) => {
+          ) : visibleCoupons.map((coupon) => {
             const isExpanded = expandedCouponId === coupon.id;
             const detailsId = `coupon-${coupon.id}-details`;
+            const startsAt = coupon.startsAt ? new Date(coupon.startsAt).getTime() : 0;
+            const expiresAt = coupon.expiresAt ? new Date(coupon.expiresAt).getTime() : 0;
+            const statusLabel = !coupon.active ? "Inactivo" : startsAt > statusNow ? "Programado" : expiresAt && expiresAt < statusNow ? "Vencido" : "Activo";
             return (
               <article key={coupon.id} className={`coupon-compact-row${isExpanded ? " is-expanded" : ""}`}>
                 <button className="coupon-row-disclosure" type="button" onClick={() => setExpandedCouponId(isExpanded ? "" : coupon.id)} aria-expanded={isExpanded} aria-controls={detailsId}>
                   <span className={`entity-status-dot${coupon.active ? " is-active" : ""}`} />
                   <span><strong>{coupon.code}</strong><small>{coupon.discountType === "percentage" ? `${coupon.discountValue}%` : currency(coupon.discountValue)} · mínimo ${currency(coupon.minPurchase || 0)}</small></span>
-                  <span>{coupon.usageTotal || 0} usos</span>
+                  <span>{statusLabel} · {coupon.usageTotal || 0} usos</span>
                   <ChevronDown size={17} aria-hidden="true" />
                 </button>
                 <div className="coupon-row-actions">
@@ -213,7 +236,5 @@ export function CouponManagerPanel({
           })}
         </div>
       </section>
-    </div>
   );
 }
-

@@ -3,3 +3,8 @@ tests
 public/bocetos
 *.log
 .github
+artifacts
+.tmp*
+.env*
+scripts/recover-catalog.mjs
+.data

@@ -194,6 +194,16 @@ async function seedCatalogBaseData() {
           M: 8,
         },
       },
+      {
+        id: "prod-private-draft",
+        name: "Colección sin publicar",
+        isPublic: false,
+        price: 89.99,
+        colors: ["Negro"],
+        sizes: ["M"],
+        variants: [{ uid: "var-private-draft", color: "Negro", size: "M", stock: 2 }],
+        stockBySize: { M: 2 },
+      },
     ];
     draft.coupons = [];
     draft.orders = [];
@@ -375,6 +385,7 @@ test("critical user/admin flows and security monitoring", async () => {
   assert.equal(checkoutResponse.jsonBody?.order?.total, 63.59);
   assert.equal(checkoutResponse.jsonBody?.order?.paymentProof, "", "Card orders should ignore transfer proof data");
   assert.match(String(checkoutResponse.jsonBody?.order?.items?.[0]?.image || ""), /^https:\/\//);
+  assert.equal(checkoutResponse.jsonBody?.products?.some((product) => product.isPublic === false), false);
   const pickupOrderId = String(checkoutResponse.jsonBody?.order?.id || "");
 
   const unavailableTransferResponse = await callApi(checkoutOrderHandler, {
@@ -788,6 +799,7 @@ test("critical user/admin flows and security monitoring", async () => {
     csrfToken: adminCsrf,
     json: {
       baseCatalogVersion: Number(catalogBeforeAdminSync.jsonBody?.data?.catalogVersion || 0),
+      writeProtocol: 2,
       data: {
         products: [
           {
@@ -1089,6 +1101,44 @@ test("critical user/admin flows and security monitoring", async () => {
   });
   assert.equal(adminLogoutResponse.statusCode, 200);
   assert.equal(adminLogoutResponse.jsonBody?.isAdmin, false);
+});
+
+test("guest checkout isolates orders, preserves idempotency and requires contact and CSRF", async () => {
+  await seedCatalogBaseData();
+  const cookiesA = {};
+  const cookiesB = {};
+  const csrfA = await getCsrfToken(cookiesA);
+  const csrfB = await getCsrfToken(cookiesB);
+  const extraHeaders = { "x-forwarded-for": "198.51.100.72" };
+  const payload = {
+    guestCheckout: true,
+    idempotencyKey: crypto.randomUUID(),
+    cart: [{ id: "prod-1", color: "Negro", size: "M", quantity: 1, price: 0.01 }],
+    paymentMethod: "card_link",
+    delivery: { type: "pickup", fullName: "Invitada Uno", phone: "0999000123" },
+  };
+  const denied = await callApi(checkoutOrderHandler, { method: "POST", json: payload, cookieJar: cookiesA, extraHeaders });
+  assert.equal(denied.statusCode, 403);
+  const invalid = await callApi(checkoutOrderHandler, { method: "POST", json: { ...payload, delivery: {} }, cookieJar: cookiesA, csrfToken: csrfA, extraHeaders });
+  assert.equal(invalid.statusCode, 400);
+  const created = await callApi(checkoutOrderHandler, { method: "POST", json: payload, cookieJar: cookiesA, csrfToken: csrfA, extraHeaders });
+  assert.equal(created.statusCode, 200, JSON.stringify(created.jsonBody));
+  assert.equal(created.jsonBody.order.subtotal, 59.99);
+  assert.ok(created.jsonBody.guestId.startsWith("guest-"));
+  assert.equal(created.jsonBody.order.internalNote, undefined);
+  const replay = await callApi(checkoutOrderHandler, { method: "POST", json: payload, cookieJar: cookiesA, csrfToken: csrfA, extraHeaders });
+  assert.equal(replay.jsonBody.order.id, created.jsonBody.order.id);
+  const second = await callApi(checkoutOrderHandler, { method: "POST", json: { ...payload, idempotencyKey: crypto.randomUUID() }, cookieJar: cookiesB, csrfToken: csrfB, extraHeaders });
+  assert.equal(second.statusCode, 200);
+  assert.notEqual(second.jsonBody.guestId, created.jsonBody.guestId);
+  const listA = await callApi(ordersHandler, { cookieJar: cookiesA, extraHeaders });
+  assert.deepEqual(listA.jsonBody.orderHistory.map((order) => order.id), [created.jsonBody.order.id]);
+  const listB = await callApi(ordersHandler, { cookieJar: cookiesB, extraHeaders });
+  assert.deepEqual(listB.jsonBody.orderHistory.map((order) => order.id), [second.jsonBody.order.id]);
+  const forged = await callApi(ordersHandler, { cookieJar: { adriego_user_session: cookiesA.adriego_guest_orders }, extraHeaders });
+  assert.equal(forged.statusCode, 401);
+  const tampered = await callApi(ordersHandler, { cookieJar: { adriego_guest_orders: `${cookiesA.adriego_guest_orders}tampered` }, extraHeaders });
+  assert.equal(tampered.statusCode, 401);
 });
 
 after(async () => {

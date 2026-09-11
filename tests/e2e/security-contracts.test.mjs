@@ -40,14 +40,18 @@ const [
   { default: userAuthHandler },
   { default: adminSessionHandler },
   { default: catalogStateHandler },
-  { default: checkoutOrderHandler }
+  { default: checkoutOrderHandler },
+  { default: ordersHandler },
+  { default: couponPreviewHandler }
 ] = await Promise.all([
   importFromProject("api/_lib/store.js"),
   importFromProject("api/csrf-token.js"),
   importFromProject("api/user-auth.js"),
   importFromProject("api/admin-session.js"),
   importFromProject("api/catalog-state.js"),
-  importFromProject("api/checkout-order.js")
+  importFromProject("api/checkout-order.js"),
+  importFromProject("api/orders.js"),
+  importFromProject("api/coupon-preview.js")
 ]);
 
 function createMockResponse() {
@@ -415,6 +419,7 @@ test("Security Contracts", async (t) => {
       csrfToken: adminCsrf,
       json: {
         baseCatalogVersion: obsoleteVersion,
+        writeProtocol: 2,
         data: { ...catalogData, products: mutatedProducts }
       }
     });
@@ -430,6 +435,78 @@ test("Security Contracts", async (t) => {
     assert.equal(newCatalogData.products[0].price, 10, "Price should NOT be updated by obsolete version request");
   });
 
+  await t.test("legacy tabs cannot overwrite the catalog even with a current version", async () => {
+    const before = await readStore();
+    const response = await callApi(catalogStateHandler, {
+      method: "POST", query: { action: "sync" }, cookieJar: adminCookies, csrfToken: adminCsrf,
+      json: { baseCatalogVersion: before.meta.realtime.catalogVersion, data: { products: [], contactSettings: {} } },
+    });
+    assert.equal(response.statusCode, 409);
+    assert.equal(response.jsonBody.code, "CATALOG_CLIENT_OUTDATED");
+    assert.deepEqual(await readStore(), before);
+  });
+
+  await t.test("internal notes remain administrative across list, fresh checkout and replay", async () => {
+    const stored = (await readStore()).orders[0];
+    const note = "Privado: revisar empaque\nNo compartir con el cliente";
+    const adminUpdate = await callApi(ordersHandler, {
+      method: "POST", query: { action: "update" }, cookieJar: adminCookies, csrfToken: adminCsrf,
+      json: { orderId: stored.id, internalNote: note },
+    });
+    assert.equal(adminUpdate.statusCode, 200);
+    assert.equal(adminUpdate.jsonBody.orderHistory.find((o) => o.id === stored.id).internalNote, note);
+    for (const handler of [ordersHandler, catalogStateHandler]) {
+      const response = await callApi(handler, { method: "GET", cookieJar: adminCookies });
+      const history = response.jsonBody.orderHistory || response.jsonBody.data.orderHistory;
+      assert.equal(history.find((o) => o.id === stored.id).internalNote, note);
+    }
+    const list = await callApi(ordersHandler, { method: "GET", cookieJar: userCookies });
+    assert.equal(list.statusCode, 200);
+    assert.equal(Object.hasOwn(list.jsonBody.orderHistory[0], "internalNote"), false);
+    assert.equal(list.jsonBody.orderHistory[0].total, stored.total);
+    assert.deepEqual(list.jsonBody.orderHistory[0].items, stored.items);
+    const payload = { cart: [{ id: "prod-sec", color: "Rojo", size: "M", quantity: 1 }] };
+    for (const idempotencyKey of [crypto.randomUUID(), stored.idempotencyKey]) {
+      const checkout = await callApi(checkoutOrderHandler, {
+        method: "POST", cookieJar: userCookies, csrfToken: userCsrf, json: { ...payload, idempotencyKey },
+      });
+      assert.equal(checkout.statusCode, 200);
+      assert.equal(Object.hasOwn(checkout.jsonBody.order, "internalNote"), false);
+      assert.ok(checkout.jsonBody.orderHistory.every((o) => !Object.hasOwn(o, "internalNote")));
+      if (idempotencyKey === stored.idempotencyKey) {
+        assert.equal(checkout.jsonBody.idempotentReplay, true);
+        assert.equal(checkout.jsonBody.order.id, stored.id);
+      }
+    }
+    assert.equal((await readStore()).orders.find((o) => o.id === stored.id).internalNote, note);
+  });
+
+  await t.test("100 percent coupons preserve zero in preview, checkout and replay", async () => {
+    await updateStore((draft) => {
+      draft.coupons = [{ code: "GRATIS", discountType: "percentage", discountValue: 100, active: true }];
+      return draft;
+    });
+    const cart = [{ id: "prod-sec", color: "Rojo", size: "M", quantity: 1 }];
+    const preview = await callApi(couponPreviewHandler, {
+      method: "POST", cookieJar: userCookies, csrfToken: userCsrf, json: { cart, couponCode: "GRATIS" },
+    });
+    assert.equal(preview.statusCode, 200);
+    assert.equal(preview.jsonBody.couponState.ok, true);
+    assert.equal(preview.jsonBody.couponState.total, 0);
+    const idempotencyKey = crypto.randomUUID();
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const response = await callApi(checkoutOrderHandler, {
+        method: "POST", cookieJar: userCookies, csrfToken: userCsrf,
+        json: { cart, couponCode: "GRATIS", idempotencyKey },
+      });
+      assert.equal(response.statusCode, 200);
+      assert.equal(response.jsonBody.order.subtotal, 10);
+      assert.equal(response.jsonBody.order.discountAmount, 10);
+      assert.equal(response.jsonBody.order.paymentBaseTotal, 0);
+      assert.equal(response.jsonBody.order.total, 0);
+    }
+  });
+
   await t.test("5. Protected routes must require session and CSRF", async () => {
     // 5a. Missing CSRF -> 403
     const noCsrfResp = await callApi(catalogStateHandler, {
@@ -439,6 +516,7 @@ test("Security Contracts", async (t) => {
       csrfToken: "", // explicitly missing
       json: {
         baseCatalogVersion: 100,
+        writeProtocol: 2,
         data: { products: [] }
       }
     });
@@ -454,6 +532,7 @@ test("Security Contracts", async (t) => {
       csrfToken: validCsrfForEmpty,
       json: {
         baseCatalogVersion: 100,
+        writeProtocol: 2,
         data: { products: [] }
       }
     });

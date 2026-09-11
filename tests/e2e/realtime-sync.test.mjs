@@ -347,6 +347,7 @@ test("realtime sync keeps user/admin state consistent across devices", async () 
     csrfToken: csrfAdmin,
     json: {
       baseCatalogVersion: catalogVersionBefore,
+      writeProtocol: 2,
       data: {
         products: [
           {
@@ -538,6 +539,7 @@ test("realtime sync keeps user/admin state consistent across devices", async () 
     csrfToken: csrfAdmin,
     json: {
       baseCatalogVersion: Number(catalogAfterReactivation.jsonBody?.data?.catalogVersion || 0),
+      writeProtocol: 2,
       data: {
         products: [
           {

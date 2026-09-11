@@ -29,6 +29,15 @@ function executeCommand(command = []) {
     return "OK";
   }
   if (normalizedName === "DEL") return values.delete(String(key)) ? 1 : 0;
+  if (normalizedName === "EVAL") {
+    const script = String(key || "").toLowerCase();
+    const lockKey = String(args[0] || "");
+    const lockToken = String(args[1] || "");
+    if (String(values.get(lockKey) || "") !== lockToken) return 0;
+    if (script.includes("pexpire")) return 1;
+    if (script.includes("del")) return values.delete(lockKey) ? 1 : 0;
+    return 0;
+  }
   return "OK";
 }
 
@@ -89,7 +98,10 @@ test("store updates preserve catalog data and write state plus realtime metadata
 
   const transactionCall = calls.findLast((call) => call.url.endsWith("/multi-exec"));
   assert.ok(transactionCall);
-  assert.equal(transactionCall.body.length, 2);
+  assert.equal(transactionCall.body.length, 3);
+  const backupCommand = transactionCall.body.find(command => String(command[1]).includes(":backup:"));
+  assert.ok(backupCommand, "catalog changes must back up the previous state in the same transaction");
+  assert.deepEqual(JSON.parse(backupCommand[2]).products, []);
   const storedState = JSON.parse(values.get("adriego:store:v1"));
   const storedRealtime = JSON.parse(values.get("adriego:store:v1:realtime"));
   assert.deepEqual(storedState.products[0].colors, ["Verde oliva"]);
@@ -98,4 +110,22 @@ test("store updates preserve catalog data and write state plus realtime metadata
 
   const realtime = await storeModule.readRealtimeMeta();
   assert.equal(realtime.catalogVersion, storedRealtime.catalogVersion);
+
+  const lockCalls = calls.filter((call) => String(call.body?.[0] || "").toUpperCase() === "EVAL");
+  assert.ok(lockCalls.some((call) => String(call.body?.[1] || "").includes("pexpire")));
+  assert.ok(lockCalls.some((call) => String(call.body?.[1] || "").includes("del")));
+});
+
+test("corrupt persisted state aborts updates without replacing it with an empty store", async () => {
+  const key = "adriego:store:v1";
+  const original = values.get(key);
+  values.set(key, "{broken-json");
+  const transactionCount = calls.filter(call => call.url.endsWith("/multi-exec")).length;
+  try {
+    await assert.rejects(storeModule.updateStore(draft => draft), /store-corrupt-refusing-empty-fallback/);
+    assert.equal(values.get(key), "{broken-json");
+    assert.equal(calls.filter(call => call.url.endsWith("/multi-exec")).length, transactionCount);
+  } finally {
+    values.set(key, original);
+  }
 });

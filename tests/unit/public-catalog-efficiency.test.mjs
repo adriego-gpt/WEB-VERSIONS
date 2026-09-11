@@ -76,18 +76,29 @@ async function callApi(handler, query = {}) {
 
 before(async () => {
   await updateStore((draft) => {
-    draft.products = [{
-      id: "product-cache-1",
-      name: "Vestido Cache",
-      price: 55,
-      colors: ["Azul petróleo"],
-      sizes: ["M"],
-      imagesByColor: {
-        "Azul petróleo": ["https://images.example.test/vestido-cache.webp"],
+    draft.products = [
+      {
+        id: "product-cache-1",
+        name: "Vestido Cache",
+        price: 55,
+        colors: ["Azul petróleo"],
+        sizes: ["M"],
+        imagesByColor: {
+          "Azul petróleo": ["https://images.example.test/vestido-cache.webp"],
+        },
+        variants: [{ uid: "variant-cache-1", color: "Azul petróleo", size: "M", stock: 4 }],
+        stockBySize: { M: 4 },
       },
-      variants: [{ uid: "variant-cache-1", color: "Azul petróleo", size: "M", stock: 4 }],
-      stockBySize: { M: 4 },
-    }];
+      {
+        id: "product-private-1",
+        name: "Prenda todavía oculta",
+        isPublic: false,
+        price: 90,
+        colors: ["Negro"],
+        sizes: ["M"],
+        variants: [{ uid: "variant-private-1", color: "Negro", size: "M", stock: 2 }],
+      },
+    ];
     draft.coupons = [{ id: "private-coupon", code: "PRIVATE10", discount: 10 }];
     draft.orders = [{ id: "private-order", total: 55 }];
     bumpRealtimeMeta(draft, ["catalog"]);
@@ -111,6 +122,8 @@ test("public catalog response is cacheable, cookie-free, and preserves product c
   assert.equal(response.getHeader("set-cookie"), undefined);
   assert.match(String(response.getHeader("vercel-cdn-cache-control") || ""), /s-maxage=/i);
   assert.deepEqual(response.jsonBody?.data?.products?.[0]?.colors, ["Azul petróleo"]);
+  assert.equal(response.jsonBody?.data?.products?.length, 1);
+  assert.equal(response.jsonBody?.data?.products?.some((product) => product.isPublic === false), false);
   assert.equal("coupons" in response.jsonBody.data, false);
   assert.equal("orderHistory" in response.jsonBody.data, false);
 });
