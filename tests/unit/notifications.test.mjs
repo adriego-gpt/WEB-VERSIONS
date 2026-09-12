@@ -22,6 +22,11 @@ import webhookHandler, {
   buildPendingOrdersView,
   buildAdminHome,
   buildInventoryMenu,
+  buildInventoryTypesView,
+  buildInventoryProductsByTypeView,
+  buildInventoryInStockView,
+  getAvailableProductTypes,
+  getProductTotalStock,
   formatHelpMessage,
   PENDING_GUIDE_PROMPTS,
 } from '../../api/telegram-webhook.js';
@@ -607,6 +612,125 @@ test('Order Notifications Engine (Telegram & n8n)', async (t) => {
       assert.match(calls[0].text, /Comandos oficiales/);
       assert.match(calls[0].text, /\/pedidos/);
       assert.match(calls[0].text, /\/ventas/);
+    } finally {
+      globalThis.fetch = prevFetch;
+      if (prevSecret) process.env.TELEGRAM_WEBHOOK_SECRET = prevSecret;
+      else delete process.env.TELEGRAM_WEBHOOK_SECRET;
+      if (prevAdmin) process.env.TELEGRAM_ADMIN_CHAT_ID = prevAdmin;
+      else delete process.env.TELEGRAM_ADMIN_CHAT_ID;
+      if (prevToken) process.env.TELEGRAM_BOT_TOKEN = prevToken;
+      else delete process.env.TELEGRAM_BOT_TOKEN;
+    }
+  });
+
+  await t.test('17. Product type grouping and available stock calculation contracts', () => {
+    const mockProducts = [
+      { id: 'p-corta-1', name: 'Blusa Corta Satín', productType: 'Cortas', variants: [{ color: 'Negro', size: 'S', stock: 4 }, { color: 'Negro', size: 'M', stock: 2 }] },
+      { id: 'p-larga-1', name: 'Camisa Manga Larga', productType: 'Largas', variants: [{ color: 'Blanco', size: 'M', stock: 5 }] },
+      { id: 'p-larga-2', name: 'Blusa Larga Seda', productType: 'Largas', variants: [{ color: 'Rojo', size: 'U', stock: 0 }] },
+      { id: 'p-vestido', name: 'Vestido Midi Fiesta', productType: 'Vestidos', variants: [{ color: 'Verde', size: 'M', stock: 3 }] },
+      { id: 'p-infer-corta', name: 'Top Corto Rib', category: 'Cortas', variants: [{ color: 'Beige', size: 'S', stock: 7 }] },
+    ];
+
+    assert.equal(getProductTotalStock(mockProducts[0]), 6);
+    assert.equal(getProductTotalStock(mockProducts[2]), 0);
+
+    const types = getAvailableProductTypes(mockProducts);
+    const cortas = types.find((t) => t.name.toLowerCase() === 'cortas');
+    const largas = types.find((t) => t.name.toLowerCase() === 'largas');
+    const vestidos = types.find((t) => t.name.toLowerCase() === 'vestidos');
+
+    assert.ok(cortas, 'Must include Cortas');
+    assert.equal(cortas.count, 2); // p-corta-1 and inferred p-infer-corta
+    assert.equal(cortas.totalStock, 13);
+
+    assert.ok(largas, 'Must include Largas');
+    assert.equal(largas.count, 2);
+    assert.equal(largas.totalStock, 5);
+
+    assert.ok(vestidos, 'Must include Vestidos');
+    assert.equal(vestidos.totalStock, 3);
+  });
+
+  await t.test('18. Physical sale interactive navigation by type and in-stock views', async () => {
+    const prevFetch = globalThis.fetch;
+    const prevSecret = process.env.TELEGRAM_WEBHOOK_SECRET;
+    const prevAdmin = process.env.TELEGRAM_ADMIN_CHAT_ID;
+    const prevToken = process.env.TELEGRAM_BOT_TOKEN;
+
+    process.env.TELEGRAM_WEBHOOK_SECRET = 'test-secret';
+    process.env.TELEGRAM_ADMIN_CHAT_ID = '1037173906';
+    process.env.TELEGRAM_BOT_TOKEN = 'test-bot-token';
+
+    const testProducts = [
+      { id: 'p-corta', name: 'Blusa Corta Elegante', productType: 'Cortas', variants: [{ color: 'Negro', size: 'S', stock: 4 }] },
+      { id: 'p-larga', name: 'Camisa Larga Formal', productType: 'Largas', variants: [{ color: 'Azul', size: 'M', stock: 8 }] },
+      { id: 'p-empty', name: 'Vestido Agotado', productType: 'Vestidos', variants: [{ color: 'Rojo', size: 'S', stock: 0 }] },
+    ];
+
+    await updateStore((draft) => {
+      draft.products = testProducts;
+      draft.productTypes = [{ name: 'Cortas' }, { name: 'Largas' }, { name: 'Vestidos' }];
+      return draft;
+    });
+
+    const store = await readStore();
+
+    // 1. Types view
+    const typesView = buildInventoryTypesView(store);
+    assert.match(typesView.text, /Filtrar por tipo de prenda/);
+    const hasCortasBtn = typesView.reply_markup.inline_keyboard.some((row) =>
+      row.some((b) => b.text.includes('Cortas') && b.callback_data.startsWith('inv:type:'))
+    );
+    assert.ok(hasCortasBtn, 'Must render Cortas button with inv:type: callback');
+
+    // 2. Products by type view
+    const cortasIndex = getAvailableProductTypes(testProducts).findIndex((t) => t.name.toLowerCase() === 'cortas');
+    const productsView = buildInventoryProductsByTypeView(store, cortasIndex, 0);
+    assert.match(productsView.text, /Prendas: Cortas/);
+    assert.ok(productsView.reply_markup.inline_keyboard[0][0].text.includes('4 disp.'));
+    assert.match(productsView.reply_markup.inline_keyboard[0][0].callback_data, /^inv:product:/);
+
+    // 3. In-stock view
+    const inStockView = buildInventoryInStockView(store, 0);
+    assert.match(inStockView.text, /Prendas con stock disponible/);
+    assert.equal(inStockView.reply_markup.inline_keyboard.filter((r) => r[0].callback_data.startsWith('inv:product:')).length, 2);
+
+    // 4. Callback dispatch test via webhook
+    const calls = [];
+    globalThis.fetch = async (url, options) => {
+      const endpoint = url.split('/').pop();
+      calls.push({ endpoint, url, options, body: JSON.parse(options.body) });
+      return { ok: true, json: async () => ({ ok: true, result: { message_id: 888 } }) };
+    };
+
+    const callWebhook = async (data) => {
+      const res = { code: 200, setHeader() {}, status(c) { this.code = c; return this; }, json(p) { this.payload = p; return this; } };
+      await webhookHandler({
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-telegram-bot-api-secret-token': 'test-secret' },
+        body: { callback_query: { id: 'cb-test', from: { id: 1037173906 }, message: { message_id: 801, chat: { id: 1037173906 } }, data } },
+      }, res);
+      return res;
+    };
+
+    try {
+      // Test callback inv:types
+      await callWebhook('inv:types');
+      assert.equal(calls.filter((c) => c.endpoint === 'editMessageText').length, 1);
+      assert.match(calls.at(-1).body.text, /Filtrar por tipo de prenda/);
+
+      // Test callback inv:type:<cortasIndex>:0
+      calls.length = 0;
+      await callWebhook(`inv:type:${cortasIndex}:0`);
+      assert.equal(calls.filter((c) => c.endpoint === 'editMessageText').length, 1);
+      assert.match(calls.at(-1).body.text, /Prendas: Cortas/);
+
+      // Test callback inv:instock:0
+      calls.length = 0;
+      await callWebhook('inv:instock:0');
+      assert.equal(calls.filter((c) => c.endpoint === 'editMessageText').length, 1);
+      assert.match(calls.at(-1).body.text, /Prendas con stock disponible/);
     } finally {
       globalThis.fetch = prevFetch;
       if (prevSecret) process.env.TELEGRAM_WEBHOOK_SECRET = prevSecret;

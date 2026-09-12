@@ -212,33 +212,327 @@ function getProductOptions(product) {
   return { variants, colors };
 }
 
+function getProductTotalStock(product) {
+  const variants = Array.isArray(product?.variants) ? product.variants : [];
+  return variants.reduce((sum, variant) => sum + Math.max(0, Number(variant.stock) || 0), 0);
+}
+
+function normalizeTypeName(name = "") {
+  return String(name || "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
+function getAvailableProductTypes(products = [], declaredTypes = []) {
+  const DEFAULT_TYPES = [
+    "Cortas", "Largas", "3/4", "Pao", "Licras", "Blazers", "Vestidos", "Camisas", "Pantalones", "Tops", "Chaquetas",
+  ];
+  const declaredList = Array.isArray(declaredTypes) && declaredTypes.length
+    ? declaredTypes.map((t) => (typeof t === "string" ? t : t?.name || "")).filter(Boolean)
+    : DEFAULT_TYPES;
+
+  const typesMap = new Map();
+  declaredList.forEach((typeName) => {
+    const key = normalizeTypeName(typeName);
+    if (key && !typesMap.has(key)) {
+      typesMap.set(key, { name: typeName.trim(), count: 0, totalStock: 0, products: [] });
+    }
+  });
+
+  (Array.isArray(products) ? products : []).forEach((product) => {
+    const productType = String(product?.productType || "").trim();
+    const productName = String(product?.name || "").trim();
+    const productCategory = String(product?.category || "").trim();
+    const tags = Array.isArray(product?.filterTags) ? product.filterTags : [];
+    const stock = getProductTotalStock(product);
+
+    let matched = false;
+    if (productType) {
+      const typeKey = normalizeTypeName(productType);
+      if (typesMap.has(typeKey)) {
+        const entry = typesMap.get(typeKey);
+        entry.count += 1;
+        entry.totalStock += stock;
+        entry.products.push(product);
+        matched = true;
+      } else {
+        typesMap.set(typeKey, { name: productType, count: 1, totalStock: stock, products: [product] });
+        matched = true;
+      }
+    }
+
+    if (!matched) {
+      for (const entry of typesMap.values()) {
+        const needle = entry.name.toLowerCase();
+        if (
+          productName.toLowerCase().includes(needle)
+          || productCategory.toLowerCase().includes(needle)
+          || tags.some((tag) => String(tag).toLowerCase().includes(needle))
+        ) {
+          entry.count += 1;
+          entry.totalStock += stock;
+          entry.products.push(product);
+          matched = true;
+          break;
+        }
+      }
+    }
+
+    if (!matched) {
+      const generalKey = "otras";
+      if (!typesMap.has(generalKey)) {
+        typesMap.set(generalKey, { name: "Otras prendas", count: 0, totalStock: 0, products: [] });
+      }
+      const entry = typesMap.get(generalKey);
+      entry.count += 1;
+      entry.totalStock += stock;
+      entry.products.push(product);
+    }
+  });
+
+  return Array.from(typesMap.values()).filter((entry) => entry.count > 0 || declaredList.includes(entry.name));
+}
+
+function buildInventoryTypesView(store = {}) {
+  const products = Array.isArray(store?.products) ? store.products : [];
+  const productTypes = Array.isArray(store?.productTypes) ? store.productTypes : [];
+  const types = getAvailableProductTypes(products, productTypes);
+
+  const keyboard = [];
+  const typeButtons = types.map((entry, index) => {
+    const stockBadge = entry.totalStock > 0 ? `· ${entry.totalStock} disp.` : "· 0 disp.";
+    return {
+      text: `${entry.name} ${stockBadge}`,
+      callback_data: `inv:type:${index}:0`,
+    };
+  });
+
+  for (let i = 0; i < typeButtons.length; i += 2) {
+    if (i + 1 < typeButtons.length) {
+      keyboard.push([typeButtons[i], typeButtons[i + 1]]);
+    } else {
+      keyboard.push([typeButtons[i]]);
+    }
+  }
+
+  keyboard.push([
+    { text: "🔥 Ver con stock disponible", callback_data: "inv:instock:0" },
+    { text: "🔎 Buscar por nombre", callback_data: "inv:search" },
+  ]);
+  keyboard.push([{ text: "↩️ Menú inventario", callback_data: "inv:menu" }]);
+
+  return {
+    text: "🗂️ *Filtrar por tipo de prenda*\n━━━━━━━━━━━━━━━━━━━━\nElige una categoría (ej: *Cortas*, *Largas*, etc.) para ver prendas y disponibilidad:",
+    reply_markup: { inline_keyboard: keyboard },
+  };
+}
+
+function buildInventoryProductsByTypeView(store = {}, typeIndex = 0, page = 0) {
+  const products = Array.isArray(store?.products) ? store.products : [];
+  const productTypes = Array.isArray(store?.productTypes) ? store.productTypes : [];
+  const types = getAvailableProductTypes(products, productTypes);
+  const targetType = types[Number(typeIndex)] || types[0];
+
+  if (!targetType) {
+    return {
+      text: "⚠️ No se encontró el tipo de prenda seleccionado.",
+      reply_markup: { inline_keyboard: [[{ text: "↩️ Ver tipos", callback_data: "inv:types" }]] },
+    };
+  }
+
+  const typeProducts = (targetType.products || []).slice().sort((a, b) => {
+    const stockA = getProductTotalStock(a);
+    const stockB = getProductTotalStock(b);
+    if ((stockA > 0) !== (stockB > 0)) return stockB - stockA;
+    return stockB - stockA || String(a.name || "").localeCompare(String(b.name || ""), "es");
+  });
+
+  const PAGE_SIZE = 6;
+  const safePage = Math.max(0, Math.floor(Number(page) || 0));
+  const totalPages = Math.max(1, Math.ceil(typeProducts.length / PAGE_SIZE));
+  const currentPage = Math.min(safePage, totalPages - 1);
+  const startIndex = currentPage * PAGE_SIZE;
+  const paginated = typeProducts.slice(startIndex, startIndex + PAGE_SIZE);
+
+  if (!paginated.length) {
+    return {
+      text: `🗂️ *Tipo: ${escapeTelegramMarkdown(targetType.name)}*\n━━━━━━━━━━━━━━━━━━━━\n⚠️ No hay prendas registradas en esta categoría actualmente.`,
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "🔎 Buscar por nombre", callback_data: "inv:search" }],
+          [{ text: "🗂️ Ver otros tipos", callback_data: "inv:types" }],
+          [{ text: "↩️ Inventario", callback_data: "inv:menu" }],
+        ],
+      },
+    };
+  }
+
+  const keyboard = [];
+  paginated.forEach((product) => {
+    const stock = getProductTotalStock(product);
+    const badge = stock > 0 ? `· ${stock} disp.` : "· ❌ Agotado";
+    const label = `${String(product.name || "Producto").slice(0, 32)} ${badge}`;
+    keyboard.push([{
+      text: label,
+      callback_data: stock > 0 ? `inv:product:${getProductToken(product.id)}` : "inv:nostock",
+    }]);
+  });
+
+  const navRow = [];
+  if (currentPage > 0) {
+    navRow.push({ text: "⬅️ Anterior", callback_data: `inv:type:${typeIndex}:${currentPage - 1}` });
+  }
+  if (currentPage < totalPages - 1) {
+    navRow.push({ text: "Siguiente ➡️", callback_data: `inv:type:${typeIndex}:${currentPage + 1}` });
+  }
+  if (navRow.length) keyboard.push(navRow);
+
+  keyboard.push([
+    { text: "🗂️ Ver otros tipos", callback_data: "inv:types" },
+    { text: "↩️ Inventario", callback_data: "inv:menu" },
+  ]);
+
+  const pageBadge = totalPages > 1 ? ` · Pág. ${currentPage + 1}/${totalPages}` : "";
+  return {
+    text: `🗂️ *Prendas: ${escapeTelegramMarkdown(targetType.name)}* (${targetType.totalStock} disp.${pageBadge})\n━━━━━━━━━━━━━━━━━━━━\nSelecciona una prenda para registrar la venta:`,
+    reply_markup: { inline_keyboard: keyboard },
+  };
+}
+
+function buildInventoryInStockView(store = {}, page = 0) {
+  const products = (Array.isArray(store?.products) ? store.products : [])
+    .filter((p) => getProductTotalStock(p) > 0)
+    .sort((a, b) => getProductTotalStock(b) - getProductTotalStock(a) || String(a.name || "").localeCompare(String(b.name || ""), "es"));
+
+  const PAGE_SIZE = 6;
+  const safePage = Math.max(0, Math.floor(Number(page) || 0));
+  const totalPages = Math.max(1, Math.ceil(products.length / PAGE_SIZE));
+  const currentPage = Math.min(safePage, totalPages - 1);
+  const startIndex = currentPage * PAGE_SIZE;
+  const paginated = products.slice(startIndex, startIndex + PAGE_SIZE);
+
+  if (!paginated.length) {
+    return {
+      text: "🔥 *Prendas con stock disponible*\n━━━━━━━━━━━━━━━━━━━━\n⚠️ No hay prendas con stock disponible en este momento.",
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "🗂️ Ver por tipo", callback_data: "inv:types" }],
+          [{ text: "↩️ Menú inventario", callback_data: "inv:menu" }],
+        ],
+      },
+    };
+  }
+
+  const keyboard = [];
+  paginated.forEach((product) => {
+    const stock = getProductTotalStock(product);
+    const label = `${String(product.name || "Producto").slice(0, 32)} · ${stock} disp.`;
+    keyboard.push([{
+      text: label,
+      callback_data: `inv:product:${getProductToken(product.id)}`,
+    }]);
+  });
+
+  const navRow = [];
+  if (currentPage > 0) {
+    navRow.push({ text: "⬅️ Anterior", callback_data: `inv:instock:${currentPage - 1}` });
+  }
+  if (currentPage < totalPages - 1) {
+    navRow.push({ text: "Siguiente ➡️", callback_data: `inv:instock:${currentPage + 1}` });
+  }
+  if (navRow.length) keyboard.push(navRow);
+
+  keyboard.push([
+    { text: "🗂️ Filtrar por tipo", callback_data: "inv:types" },
+    { text: "↩️ Inventario", callback_data: "inv:menu" },
+  ]);
+
+  const pageBadge = totalPages > 1 ? ` · Pág. ${currentPage + 1}/${totalPages}` : "";
+  return {
+    text: `🔥 *Prendas con stock disponible* (${products.length} modelos${pageBadge})\n━━━━━━━━━━━━━━━━━━━━\nSelecciona una prenda para registrar la venta:`,
+    reply_markup: { inline_keyboard: keyboard },
+  };
+}
+
 async function sendInventorySearchResults(token, chatId, query, messageId = null) {
   const normalizedQuery = String(query || "").trim().toLocaleLowerCase("es");
+  const cleanNeedle = normalizedQuery.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
   const store = await readStore();
   const products = Array.isArray(store?.products) ? store.products : [];
-  const matches = products.filter((product) => String(product.name || "").toLocaleLowerCase("es").includes(normalizedQuery)).slice(0, 8);
+
+  const matches = products.filter((product) => {
+    const name = String(product.name || "").toLocaleLowerCase("es").normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    const type = String(product.productType || "").toLocaleLowerCase("es").normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    const cat = String(product.category || "").toLocaleLowerCase("es").normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    const tags = (Array.isArray(product.filterTags) ? product.filterTags : []).join(" ").toLocaleLowerCase("es").normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    const colors = (Array.isArray(product.variants) ? product.variants : []).map((v) => String(v.color || "")).join(" ").toLocaleLowerCase("es").normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    return name.includes(cleanNeedle) || type.includes(cleanNeedle) || cat.includes(cleanNeedle) || tags.includes(cleanNeedle) || colors.includes(cleanNeedle);
+  });
+
+  matches.sort((a, b) => {
+    const stockA = getProductTotalStock(a);
+    const stockB = getProductTotalStock(b);
+    if ((stockA > 0) !== (stockB > 0)) return stockB - stockA;
+    return stockB - stockA || String(a.name || "").localeCompare(String(b.name || ""), "es");
+  });
+
   if (!matches.length) {
-    await editTelegramMessage(token, chatId, messageId, `🔍 *Sin resultados*\n\nNo encontré prendas para “${escapeTelegramMarkdown(query)}”.`, {
-      reply_markup: { inline_keyboard: [[{ text: "🔎 Buscar otra", callback_data: "inv:search" }], [{ text: "↩️ Inventario", callback_data: "inv:menu" }]] },
-    });
+    const text = `🔍 *Sin resultados*\n\nNo encontré prendas para “${escapeTelegramMarkdown(query)}”.\n\nPuedes intentar con otra palabra o explorar directamente por tipos (Cortas, Largas, etc.).`;
+    const markup = {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "🔎 Buscar otra vez", callback_data: "inv:search" }],
+          [{ text: "🗂️ Ver por tipo de prenda", callback_data: "inv:types" }],
+          [{ text: "↩️ Menú inventario", callback_data: "inv:menu" }],
+        ],
+      },
+    };
+    if (messageId) {
+      const edited = await editTelegramMessage(token, chatId, messageId, text, markup);
+      if (!edited) await sendTelegramMessage(token, chatId, text, markup);
+    } else {
+      await sendTelegramMessage(token, chatId, text, markup);
+    }
     return;
   }
-  await editTelegramMessage(token, chatId, messageId, `👗 *Resultados · ${matches.length}*\n\nElige una prenda para registrar la venta.`, {
+
+  const text = `👗 *Resultados para “${escapeTelegramMarkdown(query)}” · ${matches.length} prenda${matches.length === 1 ? "" : "s"}*\n\nElige una prenda para registrar la venta:`;
+  const markup = {
     reply_markup: {
       inline_keyboard: [
-        ...matches.map((product) => [{ text: String(product.name || "Producto").slice(0, 48), callback_data: `inv:product:${getProductToken(product.id)}` }]),
+        ...matches.slice(0, 8).map((product) => {
+          const stock = getProductTotalStock(product);
+          const badge = stock > 0 ? `· ${stock} disp.` : "· ❌ Agotado";
+          const label = `${String(product.name || "Producto").slice(0, 32)} ${badge}`;
+          return [{
+            text: label,
+            callback_data: stock > 0 ? `inv:product:${getProductToken(product.id)}` : "inv:nostock",
+          }];
+        }),
         [{ text: "🔎 Buscar otra", callback_data: "inv:search" }],
-        [{ text: "↩️ Inventario", callback_data: "inv:menu" }],
+        [{ text: "🗂️ Ver por tipo de prenda", callback_data: "inv:types" }],
+        [{ text: "↩️ Menú inventario", callback_data: "inv:menu" }],
       ],
     },
-  });
+  };
+
+  if (messageId) {
+    const edited = await editTelegramMessage(token, chatId, messageId, text, markup);
+    if (!edited) await sendTelegramMessage(token, chatId, text, markup);
+  } else {
+    await sendTelegramMessage(token, chatId, text, markup);
+  }
 }
 
 function buildInventoryMenu() {
   return {
-    text: "🛍️ *Inventario físico*\n\nRegistra una venta o revisa lo que necesita reposición.",
+    text: "🛍️ *Inventario físico y Venta*\n\nRegistra ventas rápidas con stock en tiempo real o revisa reposición:",
     reply_markup: { inline_keyboard: [
-      [{ text: "➖ Registrar venta", callback_data: "inv:search" }],
+      [{ text: "➖ Registrar venta (Buscar)", callback_data: "inv:search" }],
+      [{ text: "🗂️ Filtrar por tipo (Cortas, Largas...)", callback_data: "inv:types" }],
+      [{ text: "🔥 Prendas con stock disponible", callback_data: "inv:instock:0" }],
       [{ text: "📋 Revisar reposición", callback_data: "inv:restock" }],
       [{ text: "↩️ Deshacer última venta", callback_data: "inv:undo-last" }],
       [{ text: "⌂ Inicio", callback_data: "home" }],
@@ -627,9 +921,26 @@ export default async function handler(req, res) {
       await answerCallbackQuery(token, cb.id);
       const menu = buildInventoryMenu();
       await editTelegramMessage(token, senderChatId, sourceMessageId, menu.text, { reply_markup: menu.reply_markup });
+    } else if (data === "inv:types") {
+      await answerCallbackQuery(token, cb.id, "Cargando tipos de prenda...");
+      const store = await readStore();
+      const view = buildInventoryTypesView(store);
+      await editTelegramMessage(token, senderChatId, sourceMessageId, view.text, { reply_markup: view.reply_markup });
+    } else if (data.startsWith("inv:type:")) {
+      await answerCallbackQuery(token, cb.id);
+      const [, , rawTypeIndex, rawPage] = data.split(":");
+      const store = await readStore();
+      const view = buildInventoryProductsByTypeView(store, Number(rawTypeIndex), Number(rawPage || 0));
+      await editTelegramMessage(token, senderChatId, sourceMessageId, view.text, { reply_markup: view.reply_markup });
+    } else if (data.startsWith("inv:instock:")) {
+      await answerCallbackQuery(token, cb.id);
+      const rawPage = data.slice("inv:instock:".length);
+      const store = await readStore();
+      const view = buildInventoryInStockView(store, Number(rawPage || 0));
+      await editTelegramMessage(token, senderChatId, sourceMessageId, view.text, { reply_markup: view.reply_markup });
     } else if (data === "inv:search") {
       await answerCallbackQuery(token, cb.id);
-      await sendTelegramMessage(token, senderChatId, "🔎 *Buscar producto para venta física*\n\nEscribe el nombre completo o una parte del nombre de la prenda.", {
+      await sendTelegramMessage(token, senderChatId, "🔎 *Buscar producto para venta física*\n\nEscribe el nombre o tipo de prenda (ej: _Cortas_, _Largas_, _Vestido_):", {
         reply_markup: { force_reply: true, selective: true },
       });
       if (Number.isSafeInteger(sourceMessageId) && sourceMessageId > 0) {
@@ -659,20 +970,30 @@ export default async function handler(req, res) {
         reply_markup: { inline_keyboard: [[{ text: "↩️ Inventario", callback_data: "inv:menu" }]] },
       });
     } else if (data === "inv:nostock") {
-      await answerCallbackQuery(token, cb.id, "Esta talla está agotada.");
+      await answerCallbackQuery(token, cb.id, "⚠️ Esta opción no tiene stock disponible.", { show_alert: true });
     } else if (data.startsWith("inv:product:")) {
       await answerCallbackQuery(token, cb.id);
       const productToken = data.slice("inv:product:".length);
       const store = await readStore();
       const product = findProductByToken(store.products, productToken);
-      const { colors } = getProductOptions(product);
+      const { colors, variants } = getProductOptions(product);
       if (!product || !colors.length) {
-        await editTelegramMessage(token, senderChatId, sourceMessageId, "⚠️ El producto ya no está disponible. Inicia otra búsqueda.", { reply_markup: { inline_keyboard: [[{ text: "🔎 Buscar otra", callback_data: "inv:search" }]] } });
+        await editTelegramMessage(token, senderChatId, sourceMessageId, "⚠️ El producto ya no está disponible. Inicia otra búsqueda.", { reply_markup: { inline_keyboard: [[{ text: "🔎 Buscar otra", callback_data: "inv:search" }], [{ text: "🗂️ Ver por tipo", callback_data: "inv:types" }]] } });
       } else {
+        const colorButtons = colors.map((color, index) => {
+          const colorVariants = variants.filter((variant) => variant.color === color);
+          const colorStock = colorVariants.reduce((sum, variant) => sum + Math.max(0, Number(variant.stock) || 0), 0);
+          const badge = colorStock > 0 ? `· ${colorStock} disp.` : "· Agotado";
+          return [{
+            text: `${color.slice(0, 36)} ${badge}`,
+            callback_data: colorStock > 0 ? `inv:color:${productToken}:${index}` : "inv:nostock",
+          }];
+        });
         await editTelegramMessage(token, senderChatId, sourceMessageId, `🎨 *${escapeTelegramMarkdown(product.name)}*\n\nSelecciona el color:`, {
           reply_markup: { inline_keyboard: [
-            ...colors.map((color, index) => [{ text: color.slice(0, 48), callback_data: `inv:color:${productToken}:${index}` }]),
-            [{ text: "↩️ Buscar otra", callback_data: "inv:search" }],
+            ...colorButtons,
+            [{ text: "🗂️ Ver por tipo", callback_data: "inv:types" }],
+            [{ text: "↩️ Menú inventario", callback_data: "inv:menu" }],
           ] },
         });
       }
@@ -1184,21 +1505,50 @@ export default async function handler(req, res) {
         ],
       },
     });
-  } else if (lowerText === "🛍️ inventario" || lowerText.includes("inventario físico") || lowerText.includes("inventario fisico")) {
+  } else if (lowerText === "🛍️ inventario" || lowerText.includes("inventario físico") || lowerText.includes("inventario fisico") || lowerText === "/stock" || lowerText === "/venta" || lowerText === "stock" || lowerText === "venta") {
     const menu = buildInventoryMenu();
     await sendTelegramMessage(token, senderChatId, menu.text, { reply_markup: menu.reply_markup });
-  } else if (lowerText.startsWith("/stock ")) {
-    const query = text.replace(/^\/stock\s+/i, "").trim().toLowerCase();
+  } else if (lowerText.startsWith("/stock ") || lowerText.startsWith("stock ")) {
+    const query = text.replace(/^[/]?stock\s+/i, "").trim();
+    const cleanNeedle = normalizeTypeName(query);
     const store = await readStore();
-    const matches = (Array.isArray(store?.products) ? store.products : []).filter((product) => String(product.name || "").toLowerCase().includes(query)).slice(0, 8);
+    const products = Array.isArray(store?.products) ? store.products : [];
+    const matches = products.filter((product) => {
+      const name = normalizeTypeName(product.name);
+      const type = normalizeTypeName(product.productType);
+      const cat = normalizeTypeName(product.category);
+      const tags = (Array.isArray(product.filterTags) ? product.filterTags : []).map(normalizeTypeName).join(" ");
+      return name.includes(cleanNeedle) || type.includes(cleanNeedle) || cat.includes(cleanNeedle) || tags.includes(cleanNeedle);
+    }).slice(0, 6);
+
     if (!matches.length) {
-      await sendTelegramMessage(token, senderChatId, "🔍 No encontré prendas que coincidan con *" + escapeTelegramMarkdown(query) + "*.");
+      await sendTelegramMessage(token, senderChatId, "🔍 No encontré prendas que coincidan con *" + escapeTelegramMarkdown(query) + "*.", {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "🗂️ Ver por tipo de prenda", callback_data: "inv:types" }],
+            [{ text: "🛍️ Menú inventario", callback_data: "inv:menu" }],
+          ],
+        },
+      });
     } else {
       const lines = matches.map((product) => {
+        const totalStock = getProductTotalStock(product);
         const variants = (product.variants || []).map((variant) => "• " + escapeTelegramMarkdown(variant.color) + " / " + escapeTelegramMarkdown(variant.size) + ": *" + Math.max(0, Number(variant.stock) || 0) + "*").join("\n");
-        return "👗 *" + escapeTelegramMarkdown(product.name) + "*\n" + variants;
+        return "👗 *" + escapeTelegramMarkdown(product.name) + "* (Total: *" + totalStock + "* disp.)\n" + variants;
       });
-      await sendTelegramMessage(token, senderChatId, "🔎 *Stock disponible*\n━━━━━━━━━━━━━━━━━━━━\n" + lines.join("\n\n"));
+      const sellButtons = matches.filter((p) => getProductTotalStock(p) > 0).slice(0, 3).map((p) => ([{
+        text: `➖ Vender ${String(p.name).slice(0, 24)} (${getProductTotalStock(p)} disp)`,
+        callback_data: `inv:product:${getProductToken(p.id)}`,
+      }]));
+      await sendTelegramMessage(token, senderChatId, "🔎 *Stock disponible para “" + escapeTelegramMarkdown(query) + "”*\n━━━━━━━━━━━━━━━━━━━━\n" + lines.join("\n\n"), {
+        reply_markup: {
+          inline_keyboard: [
+            ...sellButtons,
+            [{ text: "🗂️ Ver por tipos", callback_data: "inv:types" }],
+            [{ text: "🛍️ Menú inventario", callback_data: "inv:menu" }],
+          ],
+        },
+      });
     }
   } else if (lowerText.startsWith("/venta ")) {
     const parts = text.replace(/^\/venta\s+/i, "").split("|").map((part) => part.trim());
@@ -1307,6 +1657,12 @@ export {
   buildPendingOrdersView,
   buildAdminHome,
   buildInventoryMenu,
+  buildInventoryTypesView,
+  buildInventoryProductsByTypeView,
+  buildInventoryInStockView,
+  getAvailableProductTypes,
+  getProductTotalStock,
+  sendInventorySearchResults,
   formatHelpMessage,
   TELEGRAM_BOT_COMMANDS,
   registerTelegramBotCommands,

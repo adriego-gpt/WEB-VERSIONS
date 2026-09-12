@@ -16,7 +16,7 @@
     "test:unit:analytics": "node --test tests/unit/analytics-service.test.mjs",
     "test:unit:remote-state": "node --test tests/unit/remote-state.test.mjs",
     "test:unit:sync": "node --test tests/unit/sync-domain.test.mjs tests/unit/sync-hooks.test.mjs",
-    "test:unit": "node --test tests/unit/*.test.mjs"
+    "test:unit": "node --test --test-concurrency=1 tests/unit/*.test.mjs"
   },
   "dependencies": {
     "framer-motion": "^12.38.0",
