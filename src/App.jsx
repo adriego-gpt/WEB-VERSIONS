@@ -2359,8 +2359,9 @@ export default function App() {
 
   const productSearchIndex = useMemo(() => products.map((product) => {
     const normalizedType = normalizeOptionLabel(product.productType || "General");
-    const catalogText = normalizeSearchText(`${product.name} ${product.category} ${product.productType || ""} ${product.description} ${(product.filterTags || []).join(" ")}`);
-    const adminText = normalizeSearchText(`${product.name} ${product.category} ${product.productType || ""} ${(product.filterTags || []).join(" ")} ${product.offerEnabled ? "oferta" : ""}`);
+    const featuredText = product.featured ? " destacado destacados" : "";
+    const catalogText = normalizeSearchText(`${product.name} ${product.category} ${product.productType || ""} ${product.description} ${(product.filterTags || []).join(" ")}${featuredText}`);
+    const adminText = normalizeSearchText(`${product.name} ${product.category} ${product.productType || ""} ${(product.filterTags || []).join(" ")} ${product.offerEnabled ? "oferta" : ""}${featuredText}`);
     return {
       product,
       normalizedType,
@@ -2432,6 +2433,7 @@ export default function App() {
       order.items.map((item) => `${item.name} ${item.color} ${item.size}`).join(" "),
     ].join(" ")),
   })), [orderHistory]);
+
   const adminOrderCustomerOptions = useMemo(() => {
     const options = new Set();
     orderHistory.forEach((order) => {
@@ -2466,15 +2468,19 @@ export default function App() {
   );
 
   const featuredProducts = useMemo(() => {
-    const featuredInStock = stockReadyProducts.filter((product) => product.featured);
-    if (featuredInStock.length > 0) {
-      return featuredInStock;
+    const publicFeatured = products.filter((product) => product.isPublic !== false && product.featured);
+    if (publicFeatured.length > 0) {
+      return [...publicFeatured].sort((a, b) => {
+        const stockDiff = Number(hasProductAvailableStock(b)) - Number(hasProductAvailableStock(a));
+        if (stockDiff !== 0) return stockDiff;
+        return (Number(b.newArrival) - Number(a.newArrival)) || ((Number(b.rating) || 0) - (Number(a.rating) || 0));
+      });
     }
     const fallbackInStock = stockReadyProducts
       .filter((product) => !product.featured)
       .sort((left, right) => (Number(right.newArrival) - Number(left.newArrival)) || ((Number(right.rating) || 0) - (Number(left.rating) || 0)));
     return fallbackInStock.slice(0, 8);
-  }, [stockReadyProducts]);
+  }, [products, stockReadyProducts]);
 
   const recommendedProducts = useMemo(() => {
     const cartProductIds = new Set(cart.map((item) => String(item.id)));
@@ -3050,6 +3056,7 @@ export default function App() {
         Number(realtimeSyncVersionsRef.current.catalog || 0),
         incomingCatalogVersion,
       );
+      adoptCatalogVersion(incomingCatalogVersion);
     }
     const previousProductsMap = new Map(productsRef.current.map((product) => [String(product.id), product]));
     const incomingProducts = Array.isArray(data.products)
@@ -3088,6 +3095,7 @@ export default function App() {
       // Commit hydration before catalogReady so saved selections are never
       // pruned against the bundled placeholder catalog during startup.
       setProducts(resolvedProducts);
+      productsRef.current = resolvedProducts;
       if (Array.isArray(data.coupons)) {
         setCoupons(normalizeCouponList(data.coupons));
       }
@@ -3158,6 +3166,15 @@ export default function App() {
           showToastMessage(result.message || "No pudimos sincronizar cambios con el servidor.", "warning");
         }
         return result;
+      }
+
+      const nextVersion = Number(result.data?.catalogVersion);
+      if (Number.isInteger(nextVersion) && nextVersion >= 0) {
+        realtimeSyncVersionsRef.current.catalog = Math.max(
+          Number(realtimeSyncVersionsRef.current.catalog || 0),
+          nextVersion,
+        );
+        adoptCatalogVersion(nextVersion);
       }
 
       if (reconcile && result.data) {
@@ -3519,6 +3536,11 @@ export default function App() {
           expiresAt: Number(result.session.expiresAt) || 0,
           issuedAt: Number(result.session.issuedAt) || Date.now(),
         });
+        const catalogResult = await getCatalogState({ admin: true, preferCache: false, force: true });
+        if (!cancelled && catalogResult.ok && catalogResult.data) {
+          applyCatalogStateFromServer(catalogResult.data);
+          setCatalogReady(true);
+        }
       } else {
         setAdminSession(null);
       }
@@ -3527,7 +3549,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [applyCatalogStateFromServer]);
 
   useEffect(() => {
     if (!adminRouteActive || !adminSessionReady || isAdmin) return;
@@ -3668,6 +3690,7 @@ export default function App() {
   useCatalogBootstrap({
     applyCatalogState: applyCatalogStateFromServer,
     setCatalogReady,
+    admin: adminRouteActive,
   });
 
   useEffect(() => {
@@ -5479,7 +5502,7 @@ export default function App() {
     setSearch("");
     setCategory("Todos");
     setProductTypeFilter("Todos");
-    setSortBy("featured");
+    setSortBy("destacados");
     setCatalogPage(1);
     setEditingCartItemKey(null);
     setShowMobileNav(false);
@@ -5644,7 +5667,7 @@ export default function App() {
           expiresAt: Number(adminLoginResult.session.expiresAt) || 0,
           issuedAt: Number(adminLoginResult.session.issuedAt) || Date.now(),
         });
-        const catalogResult = await getCatalogState({ admin: true, preferCache: true, force: false });
+        const catalogResult = await getCatalogState({ admin: true, preferCache: false, force: true });
         if (catalogResult.ok && catalogResult.data) {
           applyCatalogStateFromServer(catalogResult.data);
           setCatalogReady(true);
@@ -6144,10 +6167,10 @@ export default function App() {
       return { ok: false, removed: 0, message: "No hay productos seleccionados." };
     }
 
-    const previousProducts = products;
+    const previousProducts = productsRef.current;
     const previousFavorites = favorites;
-    const removedProducts = products.filter((product) => idSet.has(normalizeEntityId(product.id)));
-    const nextProducts = products.filter((product) => !idSet.has(normalizeEntityId(product.id)));
+    const removedProducts = previousProducts.filter((product) => idSet.has(normalizeEntityId(product.id)));
+    const nextProducts = previousProducts.filter((product) => !idSet.has(normalizeEntityId(product.id)));
     const nextFavorites = favorites.filter((favoriteId) => !idSet.has(normalizeEntityId(favoriteId)));
 
     if (!removedProducts.length) {
@@ -6189,9 +6212,9 @@ export default function App() {
       return { ok: false, updated: 0, message: "No hay productos seleccionados." };
     }
 
-    const previousProducts = products;
+    const previousProducts = productsRef.current;
     let updatedCount = 0;
-    const nextProducts = products.map((product) => {
+    const nextProducts = previousProducts.map((product) => {
       const productId = normalizeEntityId(product.id);
       if (!idSet.has(productId)) return product;
       if (Boolean(product.featured) === Boolean(featured)) return product;
@@ -6254,7 +6277,7 @@ export default function App() {
     const normalizedProductId = normalizeEntityId(productId);
     if (!normalizedProductId) return { ok: false, message: "Producto invalido." };
 
-    const previousProducts = products;
+    const previousProducts = productsRef.current;
     const targetProduct = previousProducts.find((product) => normalizeEntityId(product.id) === normalizedProductId);
     if (!targetProduct) return { ok: false, message: "Producto no encontrado." };
 
@@ -6300,6 +6323,59 @@ export default function App() {
     setEditorMessage(`Producto "${targetProduct.name}" ahora esta ${stateLabel}.`);
     setEditorError("");
     showToastMessage(`Producto ${resolvedIsPublic ? "publicado" : "ocultado"} correctamente.`, "success");
+    return { ok: true };
+  };
+
+  const toggleProductFeatured = async (productId, nextFeaturedValue = null) => {
+    const normalizedProductId = normalizeEntityId(productId);
+    if (!normalizedProductId) return { ok: false, message: "Producto invalido." };
+
+    const previousProducts = productsRef.current;
+    const targetProduct = previousProducts.find((product) => normalizeEntityId(product.id) === normalizedProductId);
+    if (!targetProduct) return { ok: false, message: "Producto no encontrado." };
+
+    const resolvedFeatured = nextFeaturedValue == null
+      ? !targetProduct.featured
+      : Boolean(nextFeaturedValue);
+
+    if (Boolean(targetProduct.featured) === resolvedFeatured) {
+      return { ok: true, unchanged: true };
+    }
+
+    const nextProducts = previousProducts.map((product) => (
+      normalizeEntityId(product.id) === normalizedProductId
+        ? normalizeProduct({ ...product, featured: resolvedFeatured })
+        : product
+    ));
+
+    setProducts(nextProducts);
+    productsRef.current = nextProducts;
+    setProductForm((previous) => (
+      normalizeEntityId(previous.id) === normalizedProductId
+        ? { ...previous, featured: resolvedFeatured }
+        : previous
+    ));
+
+    const syncResult = await syncCatalogSnapshot({
+      products: nextProducts,
+    }, { silent: true });
+
+    if (!syncResult.ok) {
+      setProducts(previousProducts);
+      productsRef.current = previousProducts;
+      setProductForm((previous) => (
+        normalizeEntityId(previous.id) === normalizedProductId
+          ? { ...previous, featured: Boolean(targetProduct.featured) }
+          : previous
+      ));
+      showToastMessage(syncResult.message || "No pudimos sincronizar el estado destacado del producto.", "error");
+      return { ok: false, message: syncResult.message || "sync-error" };
+    }
+
+    const stateLabel = resolvedFeatured ? "marcado como destacado" : "quitado de destacados";
+    setEditorMessage(`Producto "${targetProduct.name}" ahora esta ${stateLabel}.`);
+    setEditorError("");
+    showToastMessage(`Producto ${resolvedFeatured ? "destacado" : "desmarcado"} correctamente.`, "success");
     return { ok: true };
   };
 
@@ -7266,14 +7342,17 @@ export default function App() {
     }
   };
 
-  const saveProduct = async () => {
+  const saveProduct = async (options = {}) => {
     if (Object.values(catalogImageUploadStateByColor).some((state) => state?.status === "uploading")) {
       const message = "Espera a que termine la subida de fotos antes de guardar el producto.";
       setEditorError(message);
       showToastMessage(message, "warning");
       return;
     }
-    const builtProduct = buildProductFromForm(productForm);
+    const formToBuild = options?.isPublic !== undefined
+      ? { ...productForm, isPublic: Boolean(options.isPublic) }
+      : productForm;
+    const builtProduct = buildProductFromForm(formToBuild);
     if (builtProduct.error) {
       setEditorError(builtProduct.error);
       setEditorMessage("");
@@ -7281,14 +7360,18 @@ export default function App() {
     }
 
     const normalizedProduct = normalizeProduct(builtProduct.value);
-    const nextProductTypeRecords = ensureManagedEntity(productTypeRecords, normalizedProduct.productType, "product-type");
+    const previousProducts = productsRef.current;
+    const previousTypeRecords = productTypeRecordsRef.current;
+    const previousTagRecords = filterTagRecordsRef.current;
+
+    const nextProductTypeRecords = ensureManagedEntity(previousTypeRecords, normalizedProduct.productType, "product-type");
     const nextFilterTagRecords = normalizedProduct.filterTags.reduce(
       (records, tag) => ensureManagedEntity(records, tag, "filter-tag"),
-      filterTagRecords,
+      previousTagRecords,
     );
     const nextProducts = productForm.id
-      ? products.map((product) => normalizeEntityId(product.id) === normalizeEntityId(normalizedProduct.id) ? normalizedProduct : product)
-      : [normalizedProduct, ...products];
+      ? previousProducts.map((product) => normalizeEntityId(product.id) === normalizeEntityId(normalizedProduct.id) ? normalizedProduct : product)
+      : [normalizedProduct, ...previousProducts];
 
     setProductTypeRecords(nextProductTypeRecords);
     setFilterTagRecords(nextFilterTagRecords);
@@ -7305,7 +7388,8 @@ export default function App() {
     productTypeRecordsRef.current = nextProductTypeRecords;
     filterTagRecordsRef.current = nextFilterTagRecords;
 
-    setEditorMessage(`Guardando "${normalizedProduct.name}" en el servidor...`);
+    const actionText = normalizedProduct.isPublic ? "Publicando" : "Guardando";
+    setEditorMessage(`${actionText} "${normalizedProduct.name}" en el servidor...`);
     setEditorError("");
 
     const syncResult = await syncCatalogSnapshot({
@@ -7315,6 +7399,13 @@ export default function App() {
     }, { silent: true });
 
     if (!syncResult.ok) {
+      setProducts(previousProducts);
+      productsRef.current = previousProducts;
+      setProductTypeRecords(previousTypeRecords);
+      productTypeRecordsRef.current = previousTypeRecords;
+      setFilterTagRecords(previousTagRecords);
+      filterTagRecordsRef.current = previousTagRecords;
+
       setEditorMessage("");
       setEditorError(syncResult.message || "No pudimos sincronizar. El formulario sigue abierto para que puedas reintentar.");
       showToastMessage(syncResult.message || "No pudimos sincronizar. Conservamos tus cambios para reintentar.", "warning");
@@ -7322,7 +7413,13 @@ export default function App() {
     }
 
     resetEditor();
-    setEditorMessage(productForm.id ? `Producto "${normalizedProduct.name}" actualizado.` : `Producto "${normalizedProduct.name}" agregado al catálogo.`);
+    const visibilityLabel = normalizedProduct.isPublic
+      ? "publicado en la tienda"
+      : "guardado como borrador (oculto al público)";
+    const successMessage = productForm.id
+      ? `Producto "${normalizedProduct.name}" actualizado y ${visibilityLabel}.`
+      : `Producto "${normalizedProduct.name}" agregado y ${visibilityLabel}.`;
+    setEditorMessage(successMessage);
     showToastMessage(`Producto "${normalizedProduct.name}" sincronizado con el servidor.`, "success");
   };
 
@@ -7376,6 +7473,11 @@ export default function App() {
     setEditorMessage(`${normalizedImported.length} producto${normalizedImported.length === 1 ? "" : "s"} importado${normalizedImported.length === 1 ? "" : "s"} correctamente.`);
     setEditorError("");
     showToastMessage("Importación del catálogo completada.", "success");
+    setAdminTab("catalogo");
+    if (typeof window !== "undefined") {
+      window.history.pushState({}, "", "/admin/catalogo");
+      setPathname("/admin/catalogo");
+    }
     return { ok: true };
   };
 
@@ -8125,6 +8227,7 @@ export default function App() {
               bulkSetCatalogFeatured={bulkSetCatalogFeatured}
               bulkSetCatalogVisibility={bulkSetCatalogVisibility}
               toggleProductPublicVisibility={toggleProductPublicVisibility}
+              toggleProductFeatured={toggleProductFeatured}
               productForm={productForm}
               productDraftRecovery={productDraftRecovery}
               productDraftSavedAt={productDraftSavedAt}

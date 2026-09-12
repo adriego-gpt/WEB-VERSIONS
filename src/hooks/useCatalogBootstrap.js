@@ -6,13 +6,17 @@ import { shouldRevalidateCatalogCache } from "../domain/sync/syncCalculations.js
  * Loads cached catalog state first and then revalidates it when needed.
  * The caller owns state normalization so this hook stays transport-focused.
  */
-export function useCatalogBootstrap({ applyCatalogState, setCatalogReady }) {
+export function useCatalogBootstrap({ applyCatalogState, setCatalogReady, admin = false }) {
   useEffect(() => {
     let cancelled = false;
 
     const loadCatalog = async () => {
       try {
-        const result = await getCatalogState({ preferCache: true, force: false });
+        const result = await getCatalogState({
+          admin: Boolean(admin),
+          preferCache: !admin,
+          force: Boolean(admin),
+        });
         if (cancelled) return;
 
         if (result?.ok && result?.data) {
@@ -22,7 +26,11 @@ export function useCatalogBootstrap({ applyCatalogState, setCatalogReady }) {
 
         if (!shouldRevalidateCatalogCache(result)) return;
 
-        const freshResult = await getCatalogState({ preferCache: false, force: true });
+        const freshResult = await getCatalogState({
+          admin: Boolean(admin),
+          preferCache: false,
+          force: true,
+        });
         if (!cancelled && freshResult?.ok && freshResult?.data) {
           applyCatalogState(freshResult.data);
         }
@@ -38,5 +46,5 @@ export function useCatalogBootstrap({ applyCatalogState, setCatalogReady }) {
     return () => {
       cancelled = true;
     };
-  }, [applyCatalogState, setCatalogReady]);
+  }, [admin, applyCatalogState, setCatalogReady]);
 }

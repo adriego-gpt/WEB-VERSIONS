@@ -29,6 +29,7 @@ export function ProductCatalogPanel({
   onToggleAllVisible,
   onClearSelection,
   onSetFeatured,
+  onToggleFeatured,
   onDeleteSelected,
   onToggleVisibility,
   onEdit,
@@ -178,10 +179,23 @@ export function ProductCatalogPanel({
                   {tags.length > 0 && <span>{tags.length} tag{tags.length === 1 ? "" : "s"}</span>}
                   <span className={isPublic ? "is-success" : "is-muted"}>{isPublic ? "Público" : "Oculto"}</span>
                   {hasLegacyImages && <span className="admin-status-label is-warning">Fotos por migrar</span>}
-                  {product.featured && <span className="is-featured">Destacado</span>}
+                  {product.featured && (
+                    <span className="is-featured" style={{ display: "inline-flex", alignItems: "center", gap: "0.25rem" }}>
+                      <Star size={12} fill="currentColor" /> Destacado
+                    </span>
+                  )}
                 </div>
               </div>
               <div className="admin-catalog-actions">
+                <button
+                  className={`btn ${product.featured ? "btn-soft is-active" : "btn-outline"}`}
+                  type="button"
+                  onClick={() => onToggleFeatured?.(product.id)}
+                  title={product.featured ? "Quitar de destacados" : "Marcar como destacado"}
+                >
+                  <Star size={15} fill={product.featured ? "currentColor" : "none"} />
+                  {product.featured ? "Destacado" : "Destacar"}
+                </button>
                 <button className="btn btn-outline" type="button" onClick={() => onToggleVisibility(product.id)}>
                   {isPublic ? <EyeOff size={15} /> : <Eye size={15} />}
                   {isPublic ? "Ocultar" : "Publicar"}

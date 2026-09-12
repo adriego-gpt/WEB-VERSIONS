@@ -123,6 +123,7 @@ export function AdminPanelModal({
   bulkSetCatalogFeatured,
   bulkSetCatalogVisibility,
   toggleProductPublicVisibility,
+  toggleProductFeatured,
   productForm,
   productDraftRecovery,
   productDraftSavedAt,
@@ -1139,6 +1140,7 @@ export function AdminPanelModal({
                     );
                   }}
                   onToggleVisibility={toggleProductPublicVisibility}
+                  onToggleFeatured={toggleProductFeatured}
                   onEdit={startEditingProduct}
                   onDuplicate={duplicateProduct}
                   onDelete={handleDeleteProduct}

@@ -86,7 +86,7 @@ export function CatalogImportPanel({ products = [], onImport, onCreatePhotoDraft
     }
   };
 
-  const template = "sku,nombre,precio,precio_anterior,categoria,tipo,descripcion,tags,publico,destacado,nuevo,calificacion,oferta_activa,oferta_modo,oferta_valor,color,color_hex,talla,stock,imagenes_urls\r\nVES-001,Vestido lino,39.90,49.90,Mujer,Vestidos,Lino ligero,verano;casual,no,no,si,5,no,percent,0,Negro,#171717,M,0,";
+  const template = "sku,nombre,precio,precio_anterior,categoria,tipo,descripcion,tags,publico,destacado,nuevo,calificacion,oferta_activa,oferta_modo,oferta_valor,color,color_hex,talla,stock,imagenes_urls\r\nVES-001,Vestido lino,39.90,49.90,Mujer,Vestidos,Lino ligero,verano;casual,si,no,si,5,no,percent,0,Negro,#171717,M,0,";
 
   const selectPhotos = (event) => {
     const result = validateCatalogPhotoFiles(event.target.files);
@@ -139,7 +139,7 @@ export function CatalogImportPanel({ products = [], onImport, onCreatePhotoDraft
           <div className="catalog-import-preview-head"><div><strong>{fileName}</strong><span>{preview.summary ? `${preview.summary.products} productos · ${preview.summary.variants} variantes · ${preview.summary.creates} nuevos · ${preview.summary.products - preview.summary.creates} actualizaciones` : "No se pudo preparar"}</span></div><button className="icon-btn" type="button" disabled={busy} onClick={() => setPreview(null)} aria-label="Cerrar vista previa"><X size={17} /></button></div>
           {preview.summary?.products > preview.summary?.creates && <p>En los productos existentes, el CSV reemplaza la lista de colores, tallas y stock. Incluye todas las variantes que quieras conservar. Los campos opcionales sin columna se mantienen.</p>}
           {preview.errors?.length ? <div className="catalog-import-errors" role="alert"><strong>Corrige el archivo antes de importar</strong>{preview.errors.map((error) => <span key={error}>{error}</span>)}</div> : <div className="status-message status-success">Archivo válido. Revisa el resumen y confirma la importación.</div>}
-          {!!preview.products?.length && <div className="catalog-import-table"><div className="catalog-import-row is-head"><span>Producto</span><span>SKU</span><span>Variantes</span><span>Estado</span></div>{preview.products.slice(0, 20).map((product) => <div className="catalog-import-row" key={product.id}><strong>{product.name}</strong><span>{product.sku || "Sin SKU"}</span><span>{product.variants.length}</span><span>{product.isPublic ? "Publicado" : "Borrador"}</span></div>)}</div>}
+          {!!preview.products?.length && <div className="catalog-import-table"><div className="catalog-import-row is-head"><span>Producto</span><span>SKU</span><span>Variantes</span><span>Estado</span></div>{preview.products.slice(0, 20).map((product) => <div className="catalog-import-row" key={product.id}><strong>{product.name}</strong><span>{product.sku || "Sin SKU"}</span><span>{product.variants.length}</span><span className={product.isPublic ? "is-success" : "is-muted"}>{product.isPublic ? "Publicado" : "Borrador (oculto)"}</span></div>)}</div>}
           <div className="catalog-import-actions"><button className="btn btn-outline" type="button" disabled={busy} onClick={() => setPreview(null)}>Elegir otro archivo</button><button className="btn btn-primary" type="button" disabled={busy || reading || preview.errors?.length || !preview.products?.length} onClick={importProducts}><ShieldCheck size={16} />{busy ? "Guardando…" : "Confirmar importación"}</button></div>
         </div>
       )}

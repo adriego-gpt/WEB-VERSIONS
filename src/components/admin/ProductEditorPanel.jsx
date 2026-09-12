@@ -3,6 +3,7 @@ import {
   CheckCircle2,
   ChevronDown,
   Circle,
+  Eye,
   ImagePlus,
   PackagePlus,
   Plus,
@@ -244,6 +245,14 @@ export function ProductEditorPanel({
               <label className="product-editor-field admin-full">
                 <span className="product-editor-field-label">Descripción</span>
                 <textarea className="textarea" value={form.description} onChange={(event) => onFieldChange("description", event.target.value)} placeholder="Describe materiales, corte y detalles útiles para comprar." />
+              </label>
+              <label className="product-editor-toggle-card admin-full">
+                <input className="checkbox" type="checkbox" checked={Boolean(form.isPublic)} onChange={(event) => onFieldChange("isPublic", event.target.checked)} />
+                <span><strong>Visible al público</strong><small>Permite que el producto aparezca en el catálogo público y esté disponible para compra.</small></span>
+              </label>
+              <label className="product-editor-toggle-card admin-full">
+                <input className="checkbox" type="checkbox" checked={Boolean(form.featured)} onChange={(event) => onFieldChange("featured", event.target.checked)} />
+                <span><strong>Producto destacado</strong><small>Muestra este producto en la sección de destacados y en los primeros lugares de la tienda.</small></span>
               </label>
             </div>
           </section>
@@ -650,11 +659,31 @@ export function ProductEditorPanel({
       <footer className="product-editor-footer">
         <div className="product-editor-footer-copy">
           <strong>{form.id ? "Editando producto" : "Nuevo producto"}</strong>
-          <span>Los cambios se publican al guardar.</span>
+          <span>
+            {form.isPublic
+              ? "Visible al público en la tienda."
+              : "Borrador guardado como oculto al público."}
+          </span>
         </div>
         <div className="product-editor-footer-actions">
           <button className="btn btn-outline" type="button" onClick={onReset}>{form.id ? "Cancelar" : "Limpiar"}</button>
-          <button className="btn btn-primary" type="button" onClick={onSave}><Save size={16} />Guardar producto</button>
+          {!form.isPublic && (
+            <button
+              className="btn btn-soft"
+              type="button"
+              onClick={() => {
+                onFieldChange("isPublic", true);
+                if (typeof onSave === "function") {
+                  onSave({ isPublic: true });
+                }
+              }}
+            >
+              <Eye size={16} />Guardar y publicar
+            </button>
+          )}
+          <button className="btn btn-primary" type="button" onClick={() => onSave()}>
+            <Save size={16} />{form.isPublic ? "Guardar producto" : "Guardar borrador"}
+          </button>
         </div>
       </footer>
     </section>

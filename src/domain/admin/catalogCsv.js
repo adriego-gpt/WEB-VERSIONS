@@ -43,9 +43,20 @@ function normalizeHeader(value = "") {
 
 function parseBoolean(value, fallback = false) {
   const normalized = String(value ?? "").trim().toLowerCase();
-  if (["1", "true", "si", "sí", "yes", "publico", "publicado"].includes(normalized)) return true;
-  if (["0", "false", "no", "oculto", "borrador"].includes(normalized)) return false;
+  if (["1", "true", "si", "sí", "yes", "publico", "publicado", "destacado", "destacados", "featured"].includes(normalized)) return true;
+  if (["0", "false", "no", "oculto", "borrador", "no destacado", "no_destacado"].includes(normalized)) return false;
   return fallback;
+}
+
+function getHeaderValue(record = {}, aliases = []) {
+  for (const alias of aliases) {
+    if (record[alias] !== undefined && record[alias] !== "") return record[alias];
+  }
+  return undefined;
+}
+
+function hasAnyHeader(headers = [], aliases = []) {
+  return aliases.some((alias) => headers.includes(alias));
 }
 
 function safeId(value = "") {
@@ -99,13 +110,22 @@ export function parseCatalogCsv(text = "", existingProducts = []) {
       errors.push(`Fila ${line}: el mismo producto tiene nombres o precios diferentes. Unifica sus filas.`);
       return;
     }
+    const featuredHeaderPresent = hasAnyHeader(headers, ["destacado", "destacados", "featured"]);
+    const featuredRaw = getHeaderValue(record, ["destacado", "destacados", "featured"]);
+    const isPublicHeaderPresent = hasAnyHeader(headers, ["publico", "publicado", "publicados", "visible", "is_public"]);
+    const isPublicRaw = getHeaderValue(record, ["publico", "publicado", "publicados", "visible", "is_public"]);
+    const newArrivalHeaderPresent = hasAnyHeader(headers, ["nuevo", "nuevos", "new_arrival", "novedad"]);
+    const newArrivalRaw = getHeaderValue(record, ["nuevo", "nuevos", "new_arrival", "novedad"]);
+
     const current = grouped.get(key) || {
       sku, name, basePrice: price, price, oldPrice: Math.max(price, Number(record.precio_anterior) || price),
       category: String(record.categoria || "General").trim() || "General",
       productType: String(record.tipo || "General").trim() || "General",
       description: String(record.descripcion || "").trim(),
       filterTags: String(record.tags || "").split(/[|;]/).map((tag) => tag.trim()).filter(Boolean).slice(0, 12),
-      featured: parseBoolean(record.destacado), newArrival: parseBoolean(record.nuevo), isPublic: parseBoolean(record.publico),
+      featured: featuredHeaderPresent ? parseBoolean(featuredRaw, false) : false,
+      newArrival: newArrivalHeaderPresent ? parseBoolean(newArrivalRaw, false) : false,
+      isPublic: isPublicHeaderPresent ? parseBoolean(isPublicRaw, true) : true,
       rating: headers.includes("calificacion") ? Math.min(5, Math.max(0, Number(record.calificacion) || 5)) : undefined,
       offerEnabled: headers.includes("oferta_activa") ? parseBoolean(record.oferta_activa) : undefined,
       offerDiscountMode: headers.includes("oferta_modo") ? (String(record.oferta_modo || "percent").toLowerCase() === "amount" ? "amount" : "percent") : undefined,
@@ -151,9 +171,19 @@ export function parseCatalogCsv(text = "", existingProducts = []) {
     const stockBySize = Object.fromEntries(product.sizes.map((size) => [size, product.variants.filter((variant) => variant.size === size).reduce((total, variant) => total + variant.stock, 0)]));
     const importedFields = Object.fromEntries(Object.entries(product).filter(([, value]) => value !== undefined));
     if (existing) {
-      const optionalColumns = { sku: "sku", oldPrice: "precio_anterior", category: "categoria", productType: "tipo", description: "descripcion", filterTags: "tags", featured: "destacado", newArrival: "nuevo", isPublic: "publico" };
-      for (const [field, column] of Object.entries(optionalColumns)) {
-        if (!headers.includes(column)) delete importedFields[field];
+      const optionalColumnAliases = {
+        sku: ["sku"],
+        oldPrice: ["precio_anterior", "precio_regular", "old_price"],
+        category: ["categoria", "category"],
+        productType: ["tipo", "product_type", "type"],
+        description: ["descripcion", "description"],
+        filterTags: ["tags", "etiquetas"],
+        featured: ["destacado", "destacados", "featured"],
+        newArrival: ["nuevo", "nuevos", "new_arrival", "novedad"],
+        isPublic: ["publico", "publicado", "publicados", "visible", "is_public"],
+      };
+      for (const [field, aliases] of Object.entries(optionalColumnAliases)) {
+        if (!hasAnyHeader(headers, aliases)) delete importedFields[field];
       }
       if (!headers.includes("imagenes_urls") && !headers.includes("imagen_url")) {
         importedFields.imagesByColor = Object.fromEntries(product.colors.map(color => [color, existing.imagesByColor?.[color] || []]));

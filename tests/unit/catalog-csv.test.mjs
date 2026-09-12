@@ -37,7 +37,7 @@ test("colores con claves reservadas se rechazan sin bloquear el importador", () 
   }
 });
 
-test("parseCatalogCsv agrupa variantes y deja productos nuevos ocultos", () => {
+test("parseCatalogCsv agrupa variantes y respeta publico=no", () => {
   const csv = `${header}\r\nCAM-001,Camisa lino,29.9,,Mujer,Camisas,Ligera,verano;oficina,no,si,no,Negro,S,3,https://example.com/negro.jpg\r\nCAM-001,Camisa lino,29.9,,Mujer,Camisas,Ligera,verano;oficina,no,si,no,Negro,M,0,https://example.com/negro.jpg`;
   const result = parseCatalogCsv(csv, []);
   assert.deepEqual(result.errors, []);
@@ -101,5 +101,19 @@ test("parseCatalogCsv rechaza límites finales del catálogo", () => {
   const existing = Array.from({ length: 250 }, (_, index) => ({ id: `p-${index}`, sku: `P-${index}`, name: `Producto ${index}` }));
   const tooManyProducts = parseCatalogCsv(`${header}\r\nNEW,Nuevo,10,,,,,,no,no,no,Negro,M,1,`, existing);
   assert.ok(tooManyProducts.errors.some((error) => /máximo 250/.test(error)));
+});
+
+test("parseCatalogCsv admite alias de encabezado y valores flexibles para destacados", () => {
+  const csv1 = "sku,nombre,precio,destacados,color,talla,stock\nDEST-01,Vestido Fiesta,89,si,Rojo,M,5\nDEST-02,Vestido Gala,99,destacado,Negro,S,3";
+  const result1 = parseCatalogCsv(csv1, []);
+  assert.deepEqual(result1.errors, []);
+  assert.equal(result1.products[0].featured, true);
+  assert.equal(result1.products[1].featured, true);
+
+  const existing = [{ id: "p-ext", sku: "DEST-EXT", name: "Vestido Existente", featured: false, variants: [] }];
+  const csv2 = "sku,nombre,precio,destacados,color,talla,stock\nDEST-EXT,Vestido Existente,89,destacados,Azul,M,4";
+  const result2 = parseCatalogCsv(csv2, existing);
+  assert.deepEqual(result2.errors, []);
+  assert.equal(result2.products[0].featured, true);
 });
 
