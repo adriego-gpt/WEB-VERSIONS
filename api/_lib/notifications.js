@@ -14,7 +14,7 @@ export function isAuthorizedAdminChatId(chatId) {
 
 export function escapeTelegramMarkdown(text = "") {
   return String(text || "")
-    .replace(/[_*[\]()~>#+=|{}.!-]/g, "\\$&");
+    .replace(/[`_*[\]()~>#+=|{}.!-]/g, "\\$&");
 }
 
 function currency(value) {
@@ -32,43 +32,53 @@ export function buildTelegramOrderKeyboard(order = {}) {
   }
 
   const customerName = order.customerName || "Cliente";
-  const waText = encodeURIComponent(`¡Hola ${customerName}! ✨ Te saludamos de Adriego Store respecto a tu pedido ${code}.`);
+  const normalizedStatus = String(order.status || "Pendiente").toLowerCase();
+  let customerMessage = `¡Hola ${customerName}! ✨ Te contactamos de Adriego Store por tu pedido ${code}.`;
+  if (normalizedStatus === "listo para retiro") {
+    customerMessage = `¡Hola ${customerName}! ✨ Tu pedido ${code} ya está listo para retirar en nuestro local de El Tejar. ¡Te esperamos!`;
+  } else if (normalizedStatus === "enviado") {
+    const destination = order.deliveryCity ? ` a ${order.deliveryCity}` : "";
+    const guide = order.guideNumber ? ` Guía: ${order.guideNumber}.` : "";
+    customerMessage = `¡Hola ${customerName}! ✨ Tu pedido ${code} ya fue enviado${destination} por ${order.courierName || order.courier || "courier"}.${guide} ¡Gracias por tu compra!`;
+  } else if (normalizedStatus === "entregado") {
+    customerMessage = `¡Hola ${customerName}! ✨ Confirmamos la entrega de tu pedido ${code}. ¡Esperamos que disfrutes tus prendas!`;
+  }
+  const waText = encodeURIComponent(customerMessage);
   const waUrl = intlPhone ? `https://wa.me/${intlPhone}?text=${waText}` : null;
 
   const rows = [];
   const actionRow = [];
-  if (waUrl) {
-    actionRow.push({ text: "💬 WhatsApp Cliente", url: waUrl });
-  }
-  if (order.deliveryType === "delivery") {
-    actionRow.push({ text: "📦 Asignar Guía", callback_data: `setguia:${code}` });
+  if (waUrl) actionRow.push({ text: "💬 Avisar por WhatsApp", url: waUrl });
+  if (order.deliveryType === "delivery" && normalizedStatus !== "entregado") {
+    actionRow.push({ text: order.guideNumber ? "✏️ Cambiar guía" : "📦 Asignar guía", callback_data: `setguia:${code}` });
   }
   if (actionRow.length > 0) {
     rows.push(actionRow);
   }
 
-  // Middle detail row: View Proof, Address, Courier Format
   const detailRow = [];
   if (order.paymentProof || order.paymentMethod === "bank_transfer" || order.paymentMethod === "transfer") {
-    detailRow.push({ text: "📸 Ver Comprobante", callback_data: `proof:${code}` });
+    detailRow.push({ text: "📸 Comprobante", callback_data: `proof:${code}` });
   }
   if (order.deliveryType === "delivery") {
-    detailRow.push({ text: "📍 Ver Dirección", callback_data: `address:${code}` });
-    detailRow.push({ text: "📋 Formato Courier", callback_data: `courier:${code}` });
+    detailRow.push({ text: "📍 Dirección", callback_data: `address:${code}` });
+    detailRow.push({ text: "📋 Courier", callback_data: `courier:${code}` });
   }
   if (detailRow.length > 0) {
     rows.push(detailRow);
   }
 
   const statusRow = [];
-  if (order.deliveryType === "pickup") {
-    statusRow.push({ text: "🏬 Listo para Retiro", callback_data: `status:ready:${code}` });
-    statusRow.push({ text: "✅ Entregado", callback_data: `status:completed:${code}` });
-  } else {
-    statusRow.push({ text: "🚚 Marcar Enviado", callback_data: `status:shipped:${code}` });
-    statusRow.push({ text: "✅ Entregado", callback_data: `status:completed:${code}` });
+  if (normalizedStatus !== "entregado") {
+    if (order.deliveryType === "pickup" && normalizedStatus !== "listo para retiro") {
+      statusRow.push({ text: "🏬 Listo para retirar", callback_data: `status:ready:${code}` });
+    }
+    if (normalizedStatus === "enviado" || normalizedStatus === "listo para retiro") {
+      statusRow.push({ text: "✅ Marcar entregado", callback_data: `status:completed:${code}` });
+    }
   }
-  rows.push(statusRow);
+  if (statusRow.length > 0) rows.push(statusRow);
+  rows.push([{ text: "↩️ Pedidos pendientes", callback_data: "pending:0" }]);
 
   return { inline_keyboard: rows };
 }
@@ -81,10 +91,7 @@ export function formatTelegramOrderMessage(order = {}) {
   const customerPhone = escapeTelegramMarkdown(order.customerPhone || "No especificado");
   const customerEmail = escapeTelegramMarkdown(order.customerEmail || "");
   const deliveryCity = escapeTelegramMarkdown(order.deliveryCity || "");
-  const deliveryAddress = escapeTelegramMarkdown(order.deliveryAddress || "");
-  const deliveryReference = escapeTelegramMarkdown(order.deliveryReference || "");
   const pickupAddress = escapeTelegramMarkdown(order.pickupAddress || "");
-  const pickupNote = escapeTelegramMarkdown(order.pickupNote || "");
   const paymentLabel = escapeTelegramMarkdown(
     order.paymentMethodLabel
     || (order.paymentMethod === "card_link" ? "Tarjeta mediante enlace de pago" : "Transferencia bancaria"),
@@ -95,65 +102,44 @@ export function formatTelegramOrderMessage(order = {}) {
       const name = escapeTelegramMarkdown(item.name || "Prenda");
       const color = escapeTelegramMarkdown(item.color || "N/A");
       const size = escapeTelegramMarkdown(item.size || "N/A");
-      return `  ${idx + 1}. *${name}*\n     Color: ${color} | Talla: ${size} | Cant: ${item.quantity} ➔ ${currency(item.price * item.quantity)}`;
+      return `${idx + 1}. ${item.quantity || 1}× *${name}* · ${color} · ${size} — ${currency(item.price * item.quantity)}`;
     })
-    .join("\n\n");
+    .join("\n");
 
+  const itemCount = order.itemCount || items.reduce((sum, item) => sum + (Number(item.quantity) || 1), 0);
   const lines = [
-    "🛍️ *¡NUEVO PEDIDO RECIBIDO!*",
-    "━━━━━━━━━━━━━━━━━━━━",
-    `📦 *Código:* \`${order.code}\``,
-    `👤 *Cliente:* ${customerName}`,
-    `📞 *Teléfono:* \`${customerPhone}\``,
-    customerEmail ? `📧 *Correo:* ${customerEmail}` : "",
+    `🛍️ *Pedido ${escapeTelegramMarkdown(order.code || "sin código")}*`,
+    `🏷️ ${escapeTelegramMarkdown(order.status || "Pendiente")}`,
     "",
-    `📍 *Modalidad de Entrega:* ${isDelivery ? "🚚 Envío a Domicilio" : "🏬 Retiro en Local (El Tejar)"}`,
+    `💵 *${currency(order.total ?? order.subtotal)}* · ${itemCount} prenda(s)`,
+    `👤 ${customerName} · \`${customerPhone}\``,
+    customerEmail ? `📧 ${customerEmail}` : "",
+    isDelivery
+      ? `🚚 Envío${deliveryCity ? ` · ${deliveryCity}` : ""}`
+      : `🏬 Retiro${pickupAddress ? ` · ${pickupAddress}` : " en local"}`,
+    `💳 ${paymentLabel}${bankName ? ` · ${bankName}` : ""}`,
+    order.paymentProof ? "📸 Comprobante adjunto" : "⏳ Comprobante pendiente",
   ];
 
-  if (isDelivery) {
-    if (order.deliveryIdNumber) lines.push(`🪪 *Cédula/RUC:* \`${escapeTelegramMarkdown(order.deliveryIdNumber)}\``);
-    if (deliveryCity) lines.push(`🏙️ *Ciudad:* ${deliveryCity}`);
-    if (deliveryAddress) lines.push(`🏠 *Dirección:* ${deliveryAddress}`);
-    if (deliveryReference) lines.push(`🧭 *Referencia:* ${deliveryReference}`);
-  } else if (pickupAddress) {
-    lines.push(`🏢 *Lugar:* ${pickupAddress}`);
-    if (pickupNote) lines.push(`🧭 *Referencia Local:* ${pickupNote}`);
+  if (isDelivery && order.guideNumber) {
+    lines.push(`📦 ${escapeTelegramMarkdown(order.courierName || order.courier || "Courier")} · guía \`${escapeTelegramMarkdown(order.guideNumber)}\``);
   }
 
   lines.push(
     "",
-    `💳 *Forma de Pago:* ${paymentLabel}`,
-    bankName ? `🏦 *Banco Seleccionado:* ${bankName}` : "",
-    "",
-    `👗 *Prendas del Pedido (${order.itemCount || items.length}):*`,
-    itemsList || "  (Sin detalles de prendas)",
-    "",
-    `💰 *Subtotal:* ${currency(order.subtotal)}`,
+    "*Prendas*",
+    itemsList || "Sin detalles de prendas",
   );
 
   if (Number(order.discountAmount || 0) > 0) {
-    lines.push(`🎟️ *Descuento Aplicado:* -${currency(order.discountAmount)}${order.couponCode ? ` (Cupón: \`${escapeTelegramMarkdown(order.couponCode)}\`)` : ""}`);
+    lines.push(`🎟️ Descuento -${currency(order.discountAmount)}${order.couponCode ? ` · \`${escapeTelegramMarkdown(order.couponCode)}\`` : ""}`);
   }
   if (Number(order.shippingCost || 0) > 0) {
-    lines.push(`🚚 *Costo de Envío (${escapeTelegramMarkdown(order.shippingLabel || "Envío")}):* +${currency(order.shippingCost)}`);
-  } else if (order.deliveryType === "delivery") {
-    lines.push(`🚚 *Envío:* GRATIS`);
+    lines.push(`🚚 Envío +${currency(order.shippingCost)}`);
   }
   if (Number(order.paymentFeeAmount || 0) > 0) {
-    lines.push(`💳 *Comisión Tarjeta (${order.paymentFeePercent || 6}%):* +${currency(order.paymentFeeAmount)}`);
+    lines.push(`💳 Comisión +${currency(order.paymentFeeAmount)}`);
   }
-
-  lines.push(
-    `💵 *TOTAL A PAGAR:* *${currency(order.total ?? order.subtotal)}*`,
-    "━━━━━━━━━━━━━━━━━━━━",
-    order.paymentProof ? "📸 *Comprobante de pago:* Adjunto en el pedido" : "⏳ *Comprobante:* Pendiente",
-  );
-
-  if (order.guideNumber) {
-    lines.push(`🚚 *Guía Registrada:* \`${escapeTelegramMarkdown(order.guideNumber)}\``);
-  }
-
-  lines.push("⚡ _Usa los botones directos abajo para gestionar el pedido:_");
 
   return lines.filter((line) => line !== null && line !== undefined && line !== false).join("\n");
 }
@@ -251,6 +237,52 @@ export async function sendTelegramStockAlert(alert = {}, options = {}) {
   }
 }
 
+export async function sendTelegramStockDigest(alerts = [], options = {}) {
+  const token = String(options.token || process.env.TELEGRAM_BOT_TOKEN || "").trim();
+  const chatId = String(options.chatId || process.env.TELEGRAM_ADMIN_CHAT_ID || "").trim();
+  if (!token || !chatId || !isAuthorizedAdminChatId(chatId)) {
+    return { ok: false, skipped: true, message: "Unauthorized or unconfigured" };
+  }
+
+  const uniqueAlerts = [...new Map((Array.isArray(alerts) ? alerts : []).map((alert) => [
+    [alert.productName, alert.color, alert.size].join("|"),
+    alert,
+  ])).values()];
+  if (uniqueAlerts.length === 0) return { ok: true, skipped: true };
+
+  const visible = uniqueAlerts.slice(0, 12);
+  const lines = visible.map((alert) => {
+    const stock = Math.max(0, Number(alert.remainingStock) || 0);
+    return `${stock === 0 ? "🛑" : "⚠️"} *${escapeTelegramMarkdown(alert.productName || "Producto")}* · ${escapeTelegramMarkdown(alert.color || "N/A")} · ${escapeTelegramMarkdown(alert.size || "N/A")} · *${stock}*`;
+  });
+  const remainder = uniqueAlerts.length - visible.length;
+  const text = [
+    `📦 *Stock por revisar · ${uniqueAlerts.length} variante${uniqueAlerts.length === 1 ? "" : "s"}*`,
+    "",
+    ...lines,
+    remainder > 0 ? `\n…y ${remainder} más en el panel.` : "",
+  ].filter(Boolean).join("\n");
+
+  try {
+    const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text,
+        parse_mode: "Markdown",
+        disable_web_page_preview: true,
+        reply_markup: { inline_keyboard: [[{ text: "Abrir inventario", url: "https://adriego.vercel.app/admin" }]] },
+      }),
+    });
+    const result = await response.json();
+    return { ok: Boolean(result?.ok), result };
+  } catch (error) {
+    console.error("[telegram-stock-digest-error]", error?.message || error);
+    return { ok: false, error: error?.message || "Telegram network error" };
+  }
+}
+
 export async function sendN8nWebhook(order = {}) {
   const webhookUrl = process.env.N8N_ORDER_WEBHOOK_URL;
   if (!webhookUrl) return { ok: false, skipped: true };
@@ -294,11 +326,44 @@ export async function dispatchOrderNotifications(order = {}, options = {}) {
   const { lowStockAlerts = [] } = options;
   const telegramPromise = sendTelegramNotification(order);
   const n8nPromise = sendN8nWebhook(order);
-  const stockPromises = (Array.isArray(lowStockAlerts) ? lowStockAlerts : []).map((alert) => sendTelegramStockAlert(alert));
+  const stockPromise = sendTelegramStockDigest(Array.isArray(lowStockAlerts) ? lowStockAlerts : []);
 
-  const [telegramResult, n8nResult] = await Promise.allSettled([telegramPromise, n8nPromise, ...stockPromises]);
+  const [telegramResult, n8nResult, stockResult] = await Promise.allSettled([telegramPromise, n8nPromise, stockPromise]);
   return {
     telegram: telegramResult.status === "fulfilled" ? telegramResult.value : { ok: false, error: telegramResult.reason },
     n8n: n8nResult.status === "fulfilled" ? n8nResult.value : { ok: false, error: n8nResult.reason },
+    stock: stockResult.status === "fulfilled" ? stockResult.value : { ok: false, error: stockResult.reason },
   };
 }
+
+export const TELEGRAM_BOT_COMMANDS = [
+  { command: "menu", description: "Menú principal y accesos directos" },
+  { command: "pedidos", description: "Ver y gestionar pedidos pendientes" },
+  { command: "ventas", description: "Resumen de ventas de hoy e histórico" },
+  { command: "stock_bajo", description: "Prendas con stock bajo o agotadas" },
+  { command: "buscar", description: "Buscar pedidos por código o cliente" },
+  { command: "guia", description: "Registrar guía de envío de un pedido" },
+  { command: "stock", description: "Consultar stock disponible de una prenda" },
+  { command: "venta", description: "Registrar venta física manual" },
+  { command: "deshacer", description: "Deshacer la última venta física" },
+  { command: "ayuda", description: "Guía de comandos oficiales y ayuda" },
+];
+
+export async function registerTelegramBotCommands(token = "") {
+  const botToken = String(token || process.env.TELEGRAM_BOT_TOKEN || "").trim();
+  if (!botToken) return { ok: false, message: "Missing Telegram bot token" };
+
+  try {
+    const response = await fetch(`https://api.telegram.org/bot${botToken}/setMyCommands`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ commands: TELEGRAM_BOT_COMMANDS }),
+    });
+    const result = await response.json();
+    return { ok: Boolean(result?.ok), result };
+  } catch (err) {
+    console.error("[registerTelegramBotCommands-error]", err?.message || err);
+    return { ok: false, error: err?.message || "Telegram network error" };
+  }
+}
+

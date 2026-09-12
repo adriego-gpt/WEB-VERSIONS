@@ -13,6 +13,8 @@ import {
   isAuthorizedAdminChatId,
   buildTelegramOrderKeyboard,
   formatTelegramOrderMessage,
+  TELEGRAM_BOT_COMMANDS,
+  registerTelegramBotCommands,
 } from "./_lib/notifications.js";
 
 const ENDPOINT_NAME = "telegram-webhook";
@@ -23,12 +25,12 @@ function currency(value) {
 
 const ADMIN_KEYBOARD_MARKUP = {
   keyboard: [
-    [{ text: "📊 Ventas de Hoy" }, { text: "📦 Pedidos Pendientes" }],
-    [{ text: "⚠️ Stock Bajo" }, { text: "🔍 Buscar Pedido" }],
-    [{ text: "🛍️ Inventario físico" }],
+    [{ text: "📦 Pedidos" }, { text: "🔍 Buscar" }],
+    [{ text: "🛍️ Inventario" }, { text: "📊 Resumen" }],
   ],
   resize_keyboard: true,
   is_persistent: true,
+  input_field_placeholder: "Elige una acción",
 };
 
 async function answerCallbackQuery(token, callbackQueryId, text = "") {
@@ -57,17 +59,67 @@ async function sendTelegramMessage(token, chatId, text, options = {}) {
       reply_markup: ADMIN_KEYBOARD_MARKUP,
       ...options,
     };
-    await fetch("https://api.telegram.org/bot" + token + "/sendMessage", {
+    const response = await fetch("https://api.telegram.org/bot" + token + "/sendMessage", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
+    return await response.json();
   } catch (err) {
     console.error("[sendTelegramMessage-error]", err?.message || err);
+    return { ok: false, error: err?.message || "Send message error" };
   }
 }
 
-async function sendTelegramPhoto(token, chatId, photoSource, caption = "") {
+async function editTelegramMessage(token, chatId, messageId, text, options = {}) {
+  if (!Number.isSafeInteger(messageId) || messageId <= 0) {
+    return sendTelegramMessage(token, chatId, text, options);
+  }
+
+  try {
+    const response = await fetch("https://api.telegram.org/bot" + token + "/editMessageText", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        message_id: messageId,
+        text,
+        parse_mode: "Markdown",
+        disable_web_page_preview: true,
+        ...options,
+      }),
+    });
+    const result = await response.json();
+    if (result?.ok || String(result?.description || "").includes("message is not modified")) return result;
+    console.error("[editTelegramMessage-error]", result?.description || "Telegram rejected edit");
+  } catch (err) {
+    console.error("[editTelegramMessage-error]", err?.message || err);
+  }
+
+  return sendTelegramMessage(token, chatId, text, options);
+}
+
+async function deleteTelegramMessage(token, chatId, messageId) {
+  if (!Number.isSafeInteger(messageId) || messageId <= 0) {
+    return { ok: false, error: "Invalid messageId" };
+  }
+  try {
+    const response = await fetch("https://api.telegram.org/bot" + token + "/deleteMessage", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        message_id: messageId,
+      }),
+    });
+    return await response.json();
+  } catch (err) {
+    console.error("[deleteTelegramMessage-error]", err?.message || err);
+    return { ok: false, error: err?.message || "Delete message error" };
+  }
+}
+
+async function sendTelegramPhoto(token, chatId, photoSource, caption = "", options = {}) {
   const url = String(photoSource || "").trim();
   if (!url) return { ok: false, error: "Empty photo" };
 
@@ -81,6 +133,7 @@ async function sendTelegramPhoto(token, chatId, photoSource, caption = "") {
           photo: url,
           caption: caption || undefined,
           parse_mode: "Markdown",
+          ...options,
         }),
       });
       return await response.json();
@@ -102,6 +155,12 @@ async function sendTelegramPhoto(token, chatId, photoSource, caption = "") {
         if (caption) {
           formData.append("caption", caption);
           formData.append("parse_mode", "Markdown");
+        }
+        if (options?.reply_markup) {
+          formData.append(
+            "reply_markup",
+            typeof options.reply_markup === "string" ? options.reply_markup : JSON.stringify(options.reply_markup)
+          );
         }
 
         const response = await fetch("https://api.telegram.org/bot" + token + "/sendPhoto", {
@@ -153,18 +212,18 @@ function getProductOptions(product) {
   return { variants, colors };
 }
 
-async function sendInventorySearchResults(token, chatId, query) {
+async function sendInventorySearchResults(token, chatId, query, messageId = null) {
   const normalizedQuery = String(query || "").trim().toLocaleLowerCase("es");
   const store = await readStore();
   const products = Array.isArray(store?.products) ? store.products : [];
   const matches = products.filter((product) => String(product.name || "").toLocaleLowerCase("es").includes(normalizedQuery)).slice(0, 8);
   if (!matches.length) {
-    await sendTelegramMessage(token, chatId, `🔍 No encontré prendas que coincidan con *${escapeTelegramMarkdown(query)}*.`, {
+    await editTelegramMessage(token, chatId, messageId, `🔍 *Sin resultados*\n\nNo encontré prendas para “${escapeTelegramMarkdown(query)}”.`, {
       reply_markup: { inline_keyboard: [[{ text: "🔎 Buscar otra", callback_data: "inv:search" }], [{ text: "↩️ Inventario", callback_data: "inv:menu" }]] },
     });
     return;
   }
-  await sendTelegramMessage(token, chatId, `👗 *Selecciona el producto*\n\nEncontré ${matches.length} coincidencia${matches.length === 1 ? "" : "s"} para “${escapeTelegramMarkdown(query)}”.`, {
+  await editTelegramMessage(token, chatId, messageId, `👗 *Resultados · ${matches.length}*\n\nElige una prenda para registrar la venta.`, {
     reply_markup: {
       inline_keyboard: [
         ...matches.map((product) => [{ text: String(product.name || "Producto").slice(0, 48), callback_data: `inv:product:${getProductToken(product.id)}` }]),
@@ -173,6 +232,154 @@ async function sendInventorySearchResults(token, chatId, query) {
       ],
     },
   });
+}
+
+function buildInventoryMenu() {
+  return {
+    text: "🛍️ *Inventario físico*\n\nRegistra una venta o revisa lo que necesita reposición.",
+    reply_markup: { inline_keyboard: [
+      [{ text: "➖ Registrar venta", callback_data: "inv:search" }],
+      [{ text: "📋 Revisar reposición", callback_data: "inv:restock" }],
+      [{ text: "↩️ Deshacer última venta", callback_data: "inv:undo-last" }],
+      [{ text: "⌂ Inicio", callback_data: "home" }],
+    ] },
+  };
+}
+
+function getPendingOrders(orders = []) {
+  return (Array.isArray(orders) ? orders : [])
+    .filter((order) => {
+      const status = String(order?.status || "").toLowerCase();
+      return status === "pendiente" || status === "en preparación" || status === "listo para retiro" || status === "enviado";
+    })
+    .sort((left, right) => String(left.createdAt || "").localeCompare(String(right.createdAt || "")));
+}
+
+function buildPendingOrdersView(orders = [], requestedPage = 0) {
+  const pendingOrders = getPendingOrders(orders);
+  if (pendingOrders.length === 0) {
+    return {
+      text: "✅ *Pedidos al día*\n\nNo hay pedidos pendientes en este momento.",
+      reply_markup: { inline_keyboard: [[{ text: "⌂ Inicio", callback_data: "home" }]] },
+    };
+  }
+
+  const pageSize = 6;
+  const pageCount = Math.ceil(pendingOrders.length / pageSize);
+  const page = Math.min(Math.max(0, Number(requestedPage) || 0), pageCount - 1);
+  const pageOrders = pendingOrders.slice(page * pageSize, (page + 1) * pageSize);
+  const lines = pageOrders.map((order, index) => {
+    const icon = order.deliveryType === "delivery" ? "🚚" : "🏬";
+    return `${page * pageSize + index + 1}. \`${order.code}\` ${icon} ${escapeTelegramMarkdown(order.customerName || "Cliente")}\n   ${currency(order.total ?? order.subtotal)} · ${escapeTelegramMarkdown(order.status || "Pendiente")}`;
+  });
+
+  const buttons = pageOrders.map((order) => [
+    { text: `Abrir ${String(order.code || "pedido").slice(0, 24)}`, callback_data: `view:${order.code}` },
+  ]);
+  const navigation = [];
+  if (page > 0) navigation.push({ text: "← Anterior", callback_data: `pending:${page - 1}` });
+  if (page < pageCount - 1) navigation.push({ text: "Siguiente →", callback_data: `pending:${page + 1}` });
+  if (navigation.length > 0) buttons.push(navigation);
+  buttons.push([{ text: "↻ Actualizar", callback_data: `pending:${page}` }, { text: "⌂ Inicio", callback_data: "home" }]);
+
+  return {
+    text: `📦 *Pedidos pendientes · ${pendingOrders.length}*\nPágina ${page + 1} de ${pageCount}\n\n${lines.join("\n\n")}`,
+    reply_markup: { inline_keyboard: buttons },
+  };
+}
+
+function buildSummaryView(orders = []) {
+  const safeOrders = Array.isArray(orders) ? orders : [];
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const todayOrders = safeOrders.filter((order) => String(order.createdAt || "").startsWith(todayIso));
+  const todayTotal = todayOrders.reduce((sum, order) => sum + (Number(order.total ?? order.subtotal) || 0), 0);
+  const allTotal = safeOrders.reduce((sum, order) => sum + (Number(order.total ?? order.subtotal) || 0), 0);
+
+  const text = [
+    "📊 *Resumen de ventas*",
+    "━━━━━━━━━━━━━━━━━━━━",
+    `📅 *Hoy (${todayIso})*:`,
+    `• *Pedidos:* ${todayOrders.length}`,
+    `• *Total facturado:* *${currency(todayTotal)}*`,
+    "",
+    "📈 *Histórico:*",
+    `• *Total pedidos:* ${safeOrders.length}`,
+    `• *Total acumulado:* *${currency(allTotal)}*`,
+    "━━━━━━━━━━━━━━━━━━━━",
+    "⚡ [Ver en Panel Admin](https://adriego.vercel.app/admin)",
+  ].join("\n");
+
+  const reply_markup = {
+    inline_keyboard: [
+      [{ text: "↻ Actualizar", callback_data: "summary" }, { text: "⌂ Inicio", callback_data: "home" }],
+    ],
+  };
+
+  return { text, reply_markup };
+}
+
+function buildLowStockView(products = []) {
+  const safeProducts = Array.isArray(products) ? products : [];
+  const items = safeProducts.flatMap((product) => (product?.variants || []).map((variant) => ({
+    name: product.name,
+    color: variant.color,
+    size: variant.size,
+    stock: Math.max(0, Number(variant.stock) || 0),
+  }))).filter((item) => item.stock <= 2).sort((left, right) => left.stock - right.stock);
+
+  if (items.length === 0) {
+    return {
+      text: "✅ *Inventario saludable*\n\nNo hay variantes con stock bajo o agotadas.",
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "↻ Actualizar", callback_data: "low-stock" }, { text: "⌂ Inicio", callback_data: "home" }],
+        ],
+      },
+    };
+  }
+
+  const visible = items.slice(0, 20);
+  const lines = visible.map((item) => `${item.stock === 0 ? "🛑" : "⚠️"} *${escapeTelegramMarkdown(item.name)}* · ${escapeTelegramMarkdown(item.color)} · ${escapeTelegramMarkdown(item.size)} · *${item.stock}*`);
+  const text = `⚠️ *Stock por revisar · ${items.length}*\n\n${lines.join("\n")}${items.length > visible.length ? `\n\n…y ${items.length - visible.length} más.` : ""}`;
+
+  return {
+    text,
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: "↻ Actualizar", callback_data: "low-stock" }, { text: "⌂ Inicio", callback_data: "home" }],
+      ],
+    },
+  };
+}
+
+function formatHelpMessage() {
+  const commandLines = TELEGRAM_BOT_COMMANDS.map((c) => `• /${c.command} — ${escapeTelegramMarkdown(c.description)}`);
+  return [
+    "📖 *Comandos oficiales · Adriego Bot*",
+    "━━━━━━━━━━━━━━━━━━━━",
+    ...commandLines,
+    "━━━━━━━━━━━━━━━━━━━━",
+    "💡 _Tip: También puedes usar el teclado táctil para navegar con un toque._",
+  ].join("\n");
+}
+
+function buildAdminHome(store = {}, senderName = "") {
+  const orders = Array.isArray(store.orders) ? store.orders : [];
+  const products = Array.isArray(store.products) ? store.products : [];
+  const pendingCount = getPendingOrders(orders).length;
+  const lowStockCount = products.reduce((count, product) => (
+    count + (product.variants || []).filter((variant) => (Number(variant.stock) || 0) <= 2).length
+  ), 0);
+  const greeting = senderName ? `Hola, ${escapeTelegramMarkdown(senderName)}. ` : "";
+  return {
+    text: `👑 *Adriego Store*\n\n${greeting}Tienes *${pendingCount}* pedido(s) pendiente(s) y *${lowStockCount}* variante(s) por revisar.`,
+    reply_markup: { inline_keyboard: [
+      [{ text: `📦 Pedidos · ${pendingCount}`, callback_data: "pending:0" }],
+      [{ text: "🛍️ Inventario físico", callback_data: "inv:menu" }],
+      [{ text: "📊 Resumen de ventas", callback_data: "summary" }, { text: `⚠️ Stock · ${lowStockCount}`, callback_data: "low-stock" }],
+      [{ text: "🔍 Buscar pedido", callback_data: "search-order" }],
+    ] },
+  };
 }
 
 async function registerGuidedPhysicalSale({ chatId, callbackId, productToken, colorIndex, sizeIndex, quantity }) {
@@ -263,7 +470,7 @@ async function undoPhysicalStockSale(chatId, eventId = "", messageId = null, cal
   return result;
 }
 
-async function applyOrderGuideRegistration(token, senderChatId, orderQuery, courierName, trackingNumber) {
+async function applyOrderGuideRegistration(token, senderChatId, orderQuery, courierName, trackingNumber, promptMessageId = null) {
   let cleanNumber = String(trackingNumber || "").trim();
   let cleanCourier = String(courierName || "").trim();
 
@@ -302,40 +509,23 @@ async function applyOrderGuideRegistration(token, senderChatId, orderQuery, cour
         draft.orders = [...orders];
         bumpRealtimeMeta(draft, ["orders"]);
       }
+
+      if (draft.meta?.pendingGuidePrompts?.[senderChatId]) {
+        const pending = { ...draft.meta.pendingGuidePrompts };
+        delete pending[senderChatId];
+        draft.meta.pendingGuidePrompts = pending;
+      }
       return draft;
     });
   } catch (storeErr) {
     console.error("[update-guia-error]", storeErr?.message || storeErr);
   }
 
+  PENDING_GUIDE_PROMPTS.delete(senderChatId);
+
   if (updatedOrder) {
-    const rawPhone = String(updatedOrder.customerPhone || "").replace(/\D/g, "");
-    let intlPhone = rawPhone;
-    if (rawPhone.startsWith("0") && rawPhone.length === 10) {
-      intlPhone = "593" + rawPhone.slice(1);
-    } else if (rawPhone.length === 9) {
-      intlPhone = "593" + rawPhone;
-    }
-
-    const customerName = updatedOrder.customerName || "Cliente";
-    const destCity = updatedOrder.deliveryCity ? " a " + updatedOrder.deliveryCity : "";
-    const waGuiaText = "¡Hola " + customerName + "! ✨ Te saludamos de Adriego Store. Tu pedido " + updatedOrder.code + " ya fue ENVIADO" + destCity + " 🚚📦 por " + cleanCourier + ".\n\n🔢 Número de Guía: " + cleanNumber + "\n\n¡Muchas gracias por tu compra!";
-    const waUrl = intlPhone ? "https://wa.me/" + intlPhone + "?text=" + encodeURIComponent(waGuiaText) : null;
-
-    const guiaButtons = [];
-    const row1 = [];
-    if (waUrl) {
-      row1.push({ text: "💬 Enviar Guía por WhatsApp", url: waUrl });
-    }
-    guiaButtons.push(row1);
-    guiaButtons.push([{ text: "📦 Ver Siguiente Pendiente", callback_data: "quick_pendientes" }]);
-
-    const successMsg = "✅ *Guía Registrada y Pedido Marcado como Enviado*\n━━━━━━━━━━━━━━━━━━━━\n📦 *Pedido:* `" + updatedOrder.code + "`\n🚚 *Courier:* *" + cleanCourier + "*\n🔢 *No. Guía:* `" + cleanNumber + "`\n🏷️ *Estado:* *Enviado*\n👤 *Cliente:* " + escapeTelegramMarkdown(customerName) + " (" + (updatedOrder.customerPhone || "N/A") + ")\n━━━━━━━━━━━━━━━━━━━━\n👇 _Toca abajo para enviar la guía y datos de rastreo al cliente por WhatsApp:_";
-
-    await sendTelegramMessage(token, senderChatId, successMsg, {
-      reply_markup: {
-        inline_keyboard: guiaButtons,
-      },
+    await editTelegramMessage(token, senderChatId, promptMessageId, `✅ *Guía registrada*\n\n${formatTelegramOrderMessage(updatedOrder)}`, {
+      reply_markup: buildTelegramOrderKeyboard(updatedOrder),
     });
     return true;
   } else {
@@ -392,6 +582,7 @@ export default async function handler(req, res) {
     const cb = update.callback_query;
     const senderChatId = String(cb.from?.id || cb.message?.chat?.id || "").trim();
     const data = String(cb.data || "").trim();
+    const sourceMessageId = Number(cb.message?.message_id);
 
     if (!isAuthorizedAdminChatId(senderChatId)) {
       await answerCallbackQuery(token, cb.id, "🔒 Acción no autorizada.");
@@ -399,20 +590,51 @@ export default async function handler(req, res) {
       return;
     }
 
-    if (data === "inv:menu") {
+    if (data === "home") {
       await answerCallbackQuery(token, cb.id);
-      await sendTelegramMessage(token, senderChatId, "🛍️ *Inventario físico*\n\nElige qué necesitas hacer:", {
-        reply_markup: { inline_keyboard: [
-          [{ text: "➖ Registrar venta", callback_data: "inv:search" }],
-          [{ text: "📋 Lista para proveedor", callback_data: "inv:restock" }],
-          [{ text: "↩️ Deshacer última venta", callback_data: "inv:undo-last" }],
-        ] },
+      const store = await readStore();
+      const home = buildAdminHome(store, cb.from?.first_name || "");
+      await editTelegramMessage(token, senderChatId, sourceMessageId, home.text, { reply_markup: home.reply_markup });
+    } else if (data === "summary") {
+      await answerCallbackQuery(token, cb.id, "Actualizando resumen...");
+      const store = await readStore();
+      const view = buildSummaryView(store.orders);
+      await editTelegramMessage(token, senderChatId, sourceMessageId, view.text, {
+        reply_markup: view.reply_markup,
       });
+    } else if (data === "low-stock") {
+      await answerCallbackQuery(token, cb.id, "Revisando stock...");
+      const store = await readStore();
+      const view = buildLowStockView(store.products);
+      await editTelegramMessage(token, senderChatId, sourceMessageId, view.text, {
+        reply_markup: view.reply_markup,
+      });
+    } else if (data === "search-order") {
+      await answerCallbackQuery(token, cb.id);
+      await sendTelegramMessage(token, senderChatId, "🔍 *Buscar pedido*\n\nResponde con el código o el nombre del cliente.", {
+        reply_markup: { force_reply: true, selective: true, input_field_placeholder: "Ej. ORDER-10099 o María" },
+      });
+      if (Number.isSafeInteger(sourceMessageId) && sourceMessageId > 0) {
+        await deleteTelegramMessage(token, senderChatId, sourceMessageId);
+      }
+    } else if (data === "quick_pendientes" || data.startsWith("pending:")) {
+      await answerCallbackQuery(token, cb.id, "Actualizando pedidos...");
+      const store = await readStore();
+      const page = data.startsWith("pending:") ? Number(data.slice("pending:".length)) : 0;
+      const view = buildPendingOrdersView(store.orders, page);
+      await editTelegramMessage(token, senderChatId, sourceMessageId, view.text, { reply_markup: view.reply_markup });
+    } else if (data === "inv:menu") {
+      await answerCallbackQuery(token, cb.id);
+      const menu = buildInventoryMenu();
+      await editTelegramMessage(token, senderChatId, sourceMessageId, menu.text, { reply_markup: menu.reply_markup });
     } else if (data === "inv:search") {
       await answerCallbackQuery(token, cb.id);
       await sendTelegramMessage(token, senderChatId, "🔎 *Buscar producto para venta física*\n\nEscribe el nombre completo o una parte del nombre de la prenda.", {
         reply_markup: { force_reply: true, selective: true },
       });
+      if (Number.isSafeInteger(sourceMessageId) && sourceMessageId > 0) {
+        await deleteTelegramMessage(token, senderChatId, sourceMessageId);
+      }
     } else if (data === "inv:restock") {
       await answerCallbackQuery(token, cb.id, "Preparando lista...");
       const store = await readStore();
@@ -423,7 +645,7 @@ export default async function handler(req, res) {
         stock: Math.max(0, Number(variant.stock) || 0),
       }))).filter((item) => item.stock <= 2).sort((left, right) => left.stock - right.stock || String(left.name).localeCompare(String(right.name), "es"));
       const lines = items.slice(0, 30).map((item) => `• ${item.stock === 0 ? "🛑" : "⚠️"} *${escapeTelegramMarkdown(item.name)}* · ${escapeTelegramMarkdown(item.color)} · ${escapeTelegramMarkdown(item.size)} · ${item.stock}`);
-      await sendTelegramMessage(token, senderChatId, lines.length
+      await editTelegramMessage(token, senderChatId, sourceMessageId, lines.length
         ? `📋 *Lista para revisar con el proveedor*\n\n${lines.join("\n")}${items.length > 30 ? `\n\n_Mostrando 30 de ${items.length} variantes._` : ""}`
         : "✅ *No hay variantes agotadas o con stock bajo.*", {
         reply_markup: { inline_keyboard: [[{ text: "🔄 Actualizar lista", callback_data: "inv:restock" }], [{ text: "↩️ Inventario", callback_data: "inv:menu" }]] },
@@ -431,7 +653,7 @@ export default async function handler(req, res) {
     } else if (data === "inv:undo-last") {
       await answerCallbackQuery(token, cb.id, "Revirtiendo última venta...");
       const result = await undoPhysicalStockSale(senderChatId, "", null, cb.id);
-      await sendTelegramMessage(token, senderChatId, result?.ok
+      await editTelegramMessage(token, senderChatId, sourceMessageId, result?.ok
         ? `↩️ *Venta física deshecha*\n\nSe devolvió *${result.event.quantity}* unidad(es) de *${escapeTelegramMarkdown(result.event.productName)}* (${escapeTelegramMarkdown(result.event.color)} / ${escapeTelegramMarkdown(result.event.size)}).\nStock actual: *${result.stock}*.`
         : "⚠️ No hay una venta física reciente para deshacer.", {
         reply_markup: { inline_keyboard: [[{ text: "↩️ Inventario", callback_data: "inv:menu" }]] },
@@ -445,9 +667,9 @@ export default async function handler(req, res) {
       const product = findProductByToken(store.products, productToken);
       const { colors } = getProductOptions(product);
       if (!product || !colors.length) {
-        await sendTelegramMessage(token, senderChatId, "⚠️ El producto ya no está disponible. Inicia otra búsqueda.", { reply_markup: { inline_keyboard: [[{ text: "🔎 Buscar otra", callback_data: "inv:search" }]] } });
+        await editTelegramMessage(token, senderChatId, sourceMessageId, "⚠️ El producto ya no está disponible. Inicia otra búsqueda.", { reply_markup: { inline_keyboard: [[{ text: "🔎 Buscar otra", callback_data: "inv:search" }]] } });
       } else {
-        await sendTelegramMessage(token, senderChatId, `🎨 *${escapeTelegramMarkdown(product.name)}*\n\nSelecciona el color:`, {
+        await editTelegramMessage(token, senderChatId, sourceMessageId, `🎨 *${escapeTelegramMarkdown(product.name)}*\n\nSelecciona el color:`, {
           reply_markup: { inline_keyboard: [
             ...colors.map((color, index) => [{ text: color.slice(0, 48), callback_data: `inv:color:${productToken}:${index}` }]),
             [{ text: "↩️ Buscar otra", callback_data: "inv:search" }],
@@ -465,9 +687,9 @@ export default async function handler(req, res) {
       const colorVariants = variants.filter((variant) => variant.color === color);
       const sizes = [...new Set(colorVariants.map((variant) => String(variant.size || "").trim()).filter(Boolean))];
       if (!product || !color || !sizes.length) {
-        await sendTelegramMessage(token, senderChatId, "⚠️ La variante cambió. Vuelve a buscar el producto.", { reply_markup: { inline_keyboard: [[{ text: "🔎 Buscar", callback_data: "inv:search" }]] } });
+        await editTelegramMessage(token, senderChatId, sourceMessageId, "⚠️ La variante cambió. Vuelve a buscar el producto.", { reply_markup: { inline_keyboard: [[{ text: "🔎 Buscar", callback_data: "inv:search" }]] } });
       } else {
-        await sendTelegramMessage(token, senderChatId, `📏 *${escapeTelegramMarkdown(product.name)} · ${escapeTelegramMarkdown(color)}*\n\nSelecciona la talla:`, {
+        await editTelegramMessage(token, senderChatId, sourceMessageId, `📏 *${escapeTelegramMarkdown(product.name)} · ${escapeTelegramMarkdown(color)}*\n\nSelecciona la talla:`, {
           reply_markup: { inline_keyboard: [
             ...sizes.map((size, index) => {
               const stock = Math.max(0, Number(colorVariants.find((variant) => variant.size === size)?.stock) || 0);
@@ -491,10 +713,10 @@ export default async function handler(req, res) {
       const size = sizes[sizeIndex];
       const stock = Math.max(0, Number(colorVariants.find((variant) => variant.size === size)?.stock) || 0);
       if (!product || !color || !size || stock <= 0) {
-        await sendTelegramMessage(token, senderChatId, "⚠️ Esta variante está agotada o cambió. Elige otra.", { reply_markup: { inline_keyboard: [[{ text: "↩️ Volver a tallas", callback_data: `inv:color:${productToken}:${colorIndex}` }]] } });
+        await editTelegramMessage(token, senderChatId, sourceMessageId, "⚠️ Esta variante está agotada o cambió. Elige otra.", { reply_markup: { inline_keyboard: [[{ text: "↩️ Volver a tallas", callback_data: `inv:color:${productToken}:${colorIndex}` }]] } });
       } else {
         const quantities = Array.from({ length: Math.min(5, stock) }, (_, index) => index + 1);
-        await sendTelegramMessage(token, senderChatId, `🔢 *Cantidad vendida*\n\n${escapeTelegramMarkdown(product.name)} · ${escapeTelegramMarkdown(color)} · ${escapeTelegramMarkdown(size)}\nStock actual: *${stock}*`, {
+        await editTelegramMessage(token, senderChatId, sourceMessageId, `🔢 *Cantidad vendida*\n\n${escapeTelegramMarkdown(product.name)} · ${escapeTelegramMarkdown(color)} · ${escapeTelegramMarkdown(size)}\nStock actual: *${stock}*`, {
           reply_markup: { inline_keyboard: [
             quantities.map((quantity) => ({ text: String(quantity), callback_data: `inv:qty:${productToken}:${colorIndex}:${sizeIndex}:${quantity}` })),
             [{ text: "↩️ Cambiar talla", callback_data: `inv:color:${productToken}:${colorIndex}` }],
@@ -516,11 +738,11 @@ export default async function handler(req, res) {
       const size = sizes[sizeIndex];
       const stock = Math.max(0, Number(colorVariants.find((variant) => variant.size === size)?.stock) || 0);
       if (!product || !color || !size || !Number.isInteger(quantity) || quantity < 1 || quantity > stock) {
-        await sendTelegramMessage(token, senderChatId, "⚠️ El stock cambió. Revisa de nuevo la variante.", { reply_markup: { inline_keyboard: [[{ text: "🔄 Revisar", callback_data: `inv:color:${productToken}:${colorIndex}` }]] } });
+        await editTelegramMessage(token, senderChatId, sourceMessageId, "⚠️ El stock cambió. Revisa de nuevo la variante.", { reply_markup: { inline_keyboard: [[{ text: "🔄 Revisar", callback_data: `inv:color:${productToken}:${colorIndex}` }]] } });
       } else {
-        await sendTelegramMessage(token, senderChatId, `🧾 *Confirma la venta física*\n\nPrenda: *${escapeTelegramMarkdown(product.name)}*\nColor: ${escapeTelegramMarkdown(color)}\nTalla: ${escapeTelegramMarkdown(size)}\nCantidad: *${quantity}*\nQuedarán: *${stock - quantity}*`, {
+        await editTelegramMessage(token, senderChatId, sourceMessageId, `🧾 *Confirma la venta física*\n\n*${escapeTelegramMarkdown(product.name)}* · ${escapeTelegramMarkdown(color)} · ${escapeTelegramMarkdown(size)}\nCantidad: *${quantity}* · Quedarán: *${stock - quantity}*`, {
           reply_markup: { inline_keyboard: [
-            [{ text: "✅ Confirmar descuento", callback_data: `inv:sell:${productToken}:${colorIndex}:${sizeIndex}:${quantity}` }],
+            [{ text: "✅ Registrar venta", callback_data: `inv:sell:${productToken}:${colorIndex}:${sizeIndex}:${quantity}` }],
             [{ text: "↩️ Cambiar cantidad", callback_data: `inv:size:${productToken}:${colorIndex}:${sizeIndex}` }],
           ] },
         });
@@ -537,13 +759,15 @@ export default async function handler(req, res) {
         quantity: Number(rawQuantity),
       });
       if (result?.duplicate) {
-        await sendTelegramMessage(token, senderChatId, "ℹ️ Esta venta ya había sido procesada.");
+        await editTelegramMessage(token, senderChatId, sourceMessageId, "ℹ️ Esta venta ya fue procesada.", {
+          reply_markup: buildInventoryMenu().reply_markup,
+        });
       } else if (result?.ok) {
-        await sendTelegramMessage(token, senderChatId, `✅ *Venta física registrada*\n\n${escapeTelegramMarkdown(result.event.productName)} · ${escapeTelegramMarkdown(result.event.color)} · ${escapeTelegramMarkdown(result.event.size)}\nDescontadas: *${result.event.quantity}*\nStock restante: *${result.stock}*`, {
+        await editTelegramMessage(token, senderChatId, sourceMessageId, `✅ *Venta registrada*\n\n${escapeTelegramMarkdown(result.event.productName)} · ${escapeTelegramMarkdown(result.event.color)} · ${escapeTelegramMarkdown(result.event.size)}\nVendidas: *${result.event.quantity}* · Stock: *${result.stock}*`, {
           reply_markup: { inline_keyboard: [[{ text: "↩️ Deshacer venta", callback_data: `undo-stock:${result.event.id}` }], [{ text: "➕ Registrar otra", callback_data: "inv:search" }], [{ text: "📋 Ver reposición", callback_data: "inv:restock" }]] },
         });
       } else {
-        await sendTelegramMessage(token, senderChatId, `⚠️ El stock cambió y no se descontó. Disponible ahora: *${result?.stock || 0}*.`, { reply_markup: { inline_keyboard: [[{ text: "🔄 Volver a buscar", callback_data: "inv:search" }]] } });
+        await editTelegramMessage(token, senderChatId, sourceMessageId, `⚠️ El stock cambió y no se descontó. Disponible ahora: *${result?.stock || 0}*.`, { reply_markup: { inline_keyboard: [[{ text: "🔄 Volver a buscar", callback_data: "inv:search" }]] } });
       }
     } else if (data.startsWith("undo-stock:")) {
       const eventId = data.slice("undo-stock:".length);
@@ -551,9 +775,9 @@ export default async function handler(req, res) {
       const result = await undoPhysicalStockSale(senderChatId, eventId);
       if (result?.ok) {
         const event = result.event;
-        await sendTelegramMessage(token, senderChatId, `↩️ *Venta física deshecha*\n\nSe devolvió *${event.quantity}* unidad(es) de *${escapeTelegramMarkdown(event.productName)}* (${escapeTelegramMarkdown(event.color)} / ${escapeTelegramMarkdown(event.size)}).\nStock actual: *${result.stock}*.`);
+        await editTelegramMessage(token, senderChatId, sourceMessageId, `↩️ *Venta deshecha*\n\n${escapeTelegramMarkdown(event.productName)} · ${escapeTelegramMarkdown(event.color)} · ${escapeTelegramMarkdown(event.size)}\nDevueltas: *${event.quantity}* · Stock: *${result.stock}*`, { reply_markup: buildInventoryMenu().reply_markup });
       } else {
-        await sendTelegramMessage(token, senderChatId, "⚠️ Esta salida ya fue deshecha o no se pudo encontrar la variante.");
+        await answerCallbackQuery(token, cb.id, "Esta venta ya fue deshecha.");
       }
     } else if (data.startsWith("status:")) {
       const parts = data.split(":");
@@ -593,64 +817,13 @@ export default async function handler(req, res) {
       }
 
       if (updatedOrder) {
-        const rawPhone = String(updatedOrder.customerPhone || "").replace(/\D/g, "");
-        let intlPhone = rawPhone;
-        if (rawPhone.startsWith("0") && rawPhone.length === 10) {
-          intlPhone = "593" + rawPhone.slice(1);
-        } else if (rawPhone.length === 9) {
-          intlPhone = "593" + rawPhone;
-        }
-
-        const customerName = updatedOrder.customerName || "Cliente";
-        let waText = "";
-        if (targetAction === "ready") {
-          waText = "¡Hola " + customerName + "! ✨ Te saludamos de Adriego Store. Tu pedido " + orderCode + " ya está LISTO PARA RETIRO en nuestro local de El Tejar. 🏬👗 ¡Te esperamos!";
-        } else if (targetAction === "shipped") {
-          const destCity = updatedOrder.deliveryCity ? " a " + updatedOrder.deliveryCity : "";
-          waText = "¡Hola " + customerName + "! ✨ Te saludamos de Adriego Store. Tu pedido " + orderCode + " ya va EN CAMINO" + destCity + " 🚚📦. ¡Muchas gracias por tu compra!";
-        } else if (targetAction === "completed") {
-          waText = "¡Hola " + customerName + "! ✨ Te saludamos de Adriego Store. Confirmamos que tu pedido " + orderCode + " fue ENTREGADO con éxito. 🥰👗 ¡Que disfrutes tus prendas!";
-        } else {
-          waText = "¡Hola " + customerName + "! ✨ Te saludamos de Adriego Store respecto a tu pedido " + orderCode + ".";
-        }
-
-        const waUrl = intlPhone ? "https://wa.me/" + intlPhone + "?text=" + encodeURIComponent(waText) : null;
-
-        const actionButtons = [];
-        const topRow = [];
-        if (waUrl) {
-          topRow.push({ text: "💬 Avisar Cliente por WhatsApp", url: waUrl });
-        }
-        if (updatedOrder.deliveryType === "delivery") {
-          topRow.push({ text: "📦 Asignar Guía", callback_data: "setguia:" + orderCode });
-        }
-        if (topRow.length > 0) {
-          actionButtons.push(topRow);
-        }
-
-        const bottomRow = [];
-        bottomRow.push({ text: "📦 Ver Pendientes", callback_data: "quick_pendientes" });
-        if (updatedOrder.deliveryType === "delivery") {
-          bottomRow.push({ text: "📋 Formato Courier", callback_data: "courier:" + orderCode });
-        }
-        actionButtons.push(bottomRow);
-
-        const deliveryInfo = updatedOrder.deliveryType === "delivery"
-          ? "\n📍 *Envío a:* " + escapeTelegramMarkdown(updatedOrder.deliveryCity || "") + " — " + escapeTelegramMarkdown(updatedOrder.deliveryAddress || "")
-          : "\n🏬 *Retiro en local*";
-
-        await sendTelegramMessage(
-          token,
-          senderChatId,
-          "✅ *Estado Actualizado con Éxito*\n━━━━━━━━━━━━━━━━━━━━\n📦 *Pedido:* `" + orderCode + "`\n🏷️ *Nuevo Estado:* *" + newStatus + "*" + deliveryInfo + "\n⏰ *Hora:* " + new Date().toLocaleTimeString("es-EC") + "\n👤 *Cliente:* " + escapeTelegramMarkdown(updatedOrder.customerName || "Cliente") + "\n━━━━━━━━━━━━━━━━━━━━\n👇 _Toca abajo para avisar al cliente por WhatsApp con el mensaje ya redactado:_ ",
-          {
-            reply_markup: {
-              inline_keyboard: actionButtons,
-            },
-          },
-        );
+        await editTelegramMessage(token, senderChatId, sourceMessageId, formatTelegramOrderMessage(updatedOrder), {
+          reply_markup: buildTelegramOrderKeyboard(updatedOrder),
+        });
       } else {
-        await sendTelegramMessage(token, senderChatId, "⚠️ Pedido `" + orderCode + "` no encontrado en la base de datos.");
+        await editTelegramMessage(token, senderChatId, sourceMessageId, "⚠️ No encontré el pedido `" + orderCode + "`.", {
+          reply_markup: { inline_keyboard: [[{ text: "↩️ Pedidos pendientes", callback_data: "pending:0" }]] },
+        });
       }
     } else if (data.startsWith("address:")) {
       // Handle "Ver Dirección de Envío" button
@@ -675,15 +848,17 @@ export default async function handler(req, res) {
           if (found.deliveryCity) addressLines.push("🏙️ *Ciudad:* " + escapeTelegramMarkdown(found.deliveryCity));
           if (found.deliveryAddress) addressLines.push("🏠 *Dirección:* " + escapeTelegramMarkdown(found.deliveryAddress));
           if (found.deliveryReference) addressLines.push("🧭 *Referencia:* " + escapeTelegramMarkdown(found.deliveryReference));
-          addressLines.push("━━━━━━━━━━━━━━━━━━━━");
-
-          await sendTelegramMessage(token, senderChatId, addressLines.join("\n"));
+          await editTelegramMessage(token, senderChatId, sourceMessageId, addressLines.filter((line) => line !== "━━━━━━━━━━━━━━━━━━━━").join("\n"), {
+            reply_markup: { inline_keyboard: [[{ text: "↩️ Volver al pedido", callback_data: `view:${orderCode}` }]] },
+          });
         } else {
-          await sendTelegramMessage(token, senderChatId, "⚠️ Pedido `" + orderCode + "` no encontrado.");
+          await editTelegramMessage(token, senderChatId, sourceMessageId, "⚠️ No encontré el pedido `" + orderCode + "`.", {
+            reply_markup: { inline_keyboard: [[{ text: "↩️ Pedidos pendientes", callback_data: "pending:0" }]] },
+          });
         }
       } catch (err) {
         console.error("[address-lookup-error]", err?.message || err);
-        await sendTelegramMessage(token, senderChatId, "⚠️ Error al consultar la dirección.");
+        await answerCallbackQuery(token, cb.id, "No pude consultar la dirección.");
       }
     } else if (data.startsWith("proof:")) {
       // Handle "Ver Comprobante" button
@@ -697,29 +872,45 @@ export default async function handler(req, res) {
         const found = orders.find((o) => String(o.code).toUpperCase() === String(orderCode).toUpperCase());
 
         if (!found) {
-          await sendTelegramMessage(token, senderChatId, "⚠️ Pedido `" + orderCode + "` no encontrado.");
+          await editTelegramMessage(token, senderChatId, sourceMessageId, "⚠️ Pedido `" + orderCode + "` no encontrado.", {
+            reply_markup: { inline_keyboard: [[{ text: "↩️ Pedidos pendientes", callback_data: "pending:0" }]] },
+          });
         } else if (!found.paymentProof) {
-          await sendTelegramMessage(
+          await editTelegramMessage(
             token,
             senderChatId,
+            sourceMessageId,
             "ℹ️ El pedido `" + orderCode + "` no tiene comprobante de pago adjunto (posiblemente pagó con tarjeta o aún no ha subido el comprobante).",
+            {
+              reply_markup: { inline_keyboard: [[{ text: "↩️ Volver al pedido", callback_data: `view:${orderCode}` }]] },
+            }
           );
         } else {
           const bankName = found.paymentBankAccount?.bankName || "";
           const caption = "📸 *Comprobante de Pago*\n━━━━━━━━━━━━━━━━━━━━\n📦 *Pedido:* `" + found.code + "`\n👤 *Cliente:* " + escapeTelegramMarkdown(found.customerName || "Cliente") + "\n💰 *Monto:* *" + currency(found.total ?? found.subtotal) + "*" + (bankName ? "\n🏦 *Banco:* " + escapeTelegramMarkdown(bankName) : "") + "\n━━━━━━━━━━━━━━━━━━━━\n⚡ [Ver en Panel Admin](https://adriego.vercel.app/admin)";
 
-          const photoResult = await sendTelegramPhoto(token, senderChatId, found.paymentProof, caption);
+          const photoResult = await sendTelegramPhoto(token, senderChatId, found.paymentProof, caption, {
+            reply_markup: {
+              inline_keyboard: [[{ text: "↩️ Volver al pedido", callback_data: `view:${orderCode}` }]],
+            },
+          });
           if (!photoResult?.ok) {
-            await sendTelegramMessage(
+            await editTelegramMessage(
               token,
               senderChatId,
+              sourceMessageId,
               "⚠️ No pudimos enviar la foto directamente por Telegram. Puedes revisarlo en el [Panel Admin](https://adriego.vercel.app/admin).",
+              {
+                reply_markup: { inline_keyboard: [[{ text: "↩️ Volver al pedido", callback_data: `view:${orderCode}` }]] },
+              }
             );
           }
         }
       } catch (err) {
         console.error("[proof-lookup-error]", err?.message || err);
-        await sendTelegramMessage(token, senderChatId, "⚠️ Error al consultar el comprobante de pago.");
+        await editTelegramMessage(token, senderChatId, sourceMessageId, "⚠️ Error al consultar el comprobante de pago.", {
+          reply_markup: { inline_keyboard: [[{ text: "↩️ Volver al pedido", callback_data: `view:${orderCode}` }]] },
+        });
       }
     } else if (data.startsWith("view:")) {
       // Handle "Ver ORDER-XXXX" button
@@ -735,13 +926,17 @@ export default async function handler(req, res) {
         if (found) {
           const cardText = formatTelegramOrderMessage(found);
           const keyboard = buildTelegramOrderKeyboard(found);
-          await sendTelegramMessage(token, senderChatId, cardText, { reply_markup: keyboard });
+          await editTelegramMessage(token, senderChatId, sourceMessageId, cardText, { reply_markup: keyboard });
         } else {
-          await sendTelegramMessage(token, senderChatId, "⚠️ Pedido `" + orderCode + "` no encontrado.");
+          await editTelegramMessage(token, senderChatId, sourceMessageId, "⚠️ Pedido `" + orderCode + "` no encontrado.", {
+            reply_markup: { inline_keyboard: [[{ text: "↩️ Pedidos pendientes", callback_data: "pending:0" }]] },
+          });
         }
       } catch (err) {
         console.error("[view-order-error]", err?.message || err);
-        await sendTelegramMessage(token, senderChatId, "⚠️ Error al abrir el pedido.");
+        await editTelegramMessage(token, senderChatId, sourceMessageId, "⚠️ Error al abrir el pedido.", {
+          reply_markup: { inline_keyboard: [[{ text: "↩️ Pedidos pendientes", callback_data: "pending:0" }]] },
+        });
       }
     } else if (data.startsWith("courier:")) {
       // Handle "Formato Courier" button
@@ -771,58 +966,19 @@ export default async function handler(req, res) {
             "✂️ _Copia este texto para la app o guía de Servientrega / Courier._",
           );
 
-          await sendTelegramMessage(token, senderChatId, courierLines.join("\n"));
+          await editTelegramMessage(token, senderChatId, sourceMessageId, courierLines.filter((line) => line !== "━━━━━━━━━━━━━━━━━━━━").join("\n"), {
+            reply_markup: { inline_keyboard: [[{ text: "↩️ Volver al pedido", callback_data: `view:${orderCode}` }]] },
+          });
         } else {
-          await sendTelegramMessage(token, senderChatId, "⚠️ Pedido `" + orderCode + "` no encontrado.");
-        }
-      } catch (err) {
-        console.error("[courier-format-error]", err?.message || err);
-        await sendTelegramMessage(token, senderChatId, "⚠️ Error al generar formato courier.");
-      }
-    } else if (data === "quick_pendientes") {
-      // Handle "Ver Siguiente Pendiente" button
-      await answerCallbackQuery(token, cb.id, "Consultando pendientes...");
-
-      try {
-        const store = await readStore();
-        const orders = Array.isArray(store?.orders) ? store.orders : [];
-        const pendingOrders = orders.filter((o) => {
-          const s = String(o.status || "").toLowerCase();
-          return s === "pendiente" || s === "en preparación" || s === "listo para retiro" || s === "enviado";
-        });
-
-        if (pendingOrders.length === 0) {
-          await sendTelegramMessage(token, senderChatId, "✅ *¡Al día!* No hay más pedidos pendientes por despachar en este momento.");
-        } else {
-          const list = pendingOrders
-            .slice(0, 8)
-            .map((o, idx) => {
-              const typeIcon = o.deliveryType === "delivery" ? "🚚" : "🏬";
-              return (idx + 1) + ". `" + o.code + "` " + typeIcon + " · " + escapeTelegramMarkdown(o.customerName || "Cliente") + " · *" + currency(o.total ?? o.subtotal) + "* (" + o.status + ")";
-            })
-            .join("\n");
-
-          const sliceOrders = pendingOrders.slice(0, 8);
-          const orderButtons = [];
-          for (let i = 0; i < sliceOrders.length; i += 2) {
-            const row = [];
-            row.push({ text: "🔍 Ver " + sliceOrders[i].code, callback_data: "view:" + sliceOrders[i].code });
-            if (sliceOrders[i + 1]) {
-              row.push({ text: "🔍 Ver " + sliceOrders[i + 1].code, callback_data: "view:" + sliceOrders[i + 1].code });
-            }
-            orderButtons.push(row);
-          }
-
-          const msg = "📦 *Pedidos Pendientes (" + pendingOrders.length + "):*\n━━━━━━━━━━━━━━━━━━━━\n" + list + "\n━━━━━━━━━━━━━━━━━━━━\n👇 _Toca un botón para abrir la ficha del pedido:_";
-          await sendTelegramMessage(token, senderChatId, msg, {
-            reply_markup: {
-              inline_keyboard: orderButtons,
-            },
+          await editTelegramMessage(token, senderChatId, sourceMessageId, "⚠️ Pedido `" + orderCode + "` no encontrado.", {
+            reply_markup: { inline_keyboard: [[{ text: "↩️ Pedidos pendientes", callback_data: "pending:0" }]] },
           });
         }
       } catch (err) {
-        console.error("[quick-pendientes-error]", err?.message || err);
-        await sendTelegramMessage(token, senderChatId, "⚠️ Error al consultar pendientes.");
+        console.error("[courier-format-error]", err?.message || err);
+        await editTelegramMessage(token, senderChatId, sourceMessageId, "⚠️ Error al generar formato courier.", {
+          reply_markup: { inline_keyboard: [[{ text: "↩️ Pedidos pendientes", callback_data: "pending:0" }]] },
+        });
       }
     } else if (data.startsWith("setguia:")) {
       const orderCode = data.slice("setguia:".length);
@@ -840,9 +996,9 @@ export default async function handler(req, res) {
         ],
       ];
 
-      await sendTelegramMessage(token, senderChatId, promptMsg, {
+      await editTelegramMessage(token, senderChatId, sourceMessageId, promptMsg, {
         reply_markup: {
-          inline_keyboard: courierButtons,
+          inline_keyboard: [...courierButtons, [{ text: "↩️ Volver al pedido", callback_data: `view:${orderCode}` }]],
         },
       });
     } else if (data.startsWith("quick_guia:")) {
@@ -851,19 +1007,43 @@ export default async function handler(req, res) {
       const courierName = parts[2];
       await answerCallbackQuery(token, cb.id, courierName + " seleccionado");
 
-      PENDING_GUIDE_PROMPTS.set(senderChatId, {
-        orderCode,
-        courierName,
-        expiresAt: Date.now() + 15 * 60 * 1000,
-      });
-
-      const instructMsg = "🚚 *Courier seleccionado:* " + courierName + "\n📦 *Pedido:* `" + orderCode + "`\n━━━━━━━━━━━━━━━━━━━━\n✍️ _Escribe aquí abajo ÚNICAMENTE el número de guía:_";
-      await sendTelegramMessage(token, senderChatId, instructMsg, {
+      const instructMsg = "📦 Pedido: `" + orderCode + "`\n🚚 Courier: *" + courierName + "*\n\nResponde únicamente con el número de guía.";
+      const promptResult = await sendTelegramMessage(token, senderChatId, instructMsg, {
         reply_markup: {
           force_reply: true,
           selective: true,
+          input_field_placeholder: "Número de guía",
         },
       });
+
+      if (Number.isSafeInteger(sourceMessageId) && sourceMessageId > 0) {
+        await deleteTelegramMessage(token, senderChatId, sourceMessageId);
+      }
+
+      const promptData = {
+        orderCode,
+        courierName,
+        promptMessageId: Number(promptResult?.result?.message_id) || null,
+        expiresAt: Date.now() + 15 * 60 * 1000,
+      };
+
+      PENDING_GUIDE_PROMPTS.set(senderChatId, promptData);
+
+      try {
+        await updateStore((draft) => {
+          if (!draft.meta) draft.meta = {};
+          const pending = { ...(draft.meta.pendingGuidePrompts || {}) };
+          const now = Date.now();
+          for (const [cid, data] of Object.entries(pending)) {
+            if (!data?.expiresAt || data.expiresAt < now) delete pending[cid];
+          }
+          pending[senderChatId] = promptData;
+          draft.meta.pendingGuidePrompts = pending;
+          return draft;
+        });
+      } catch (persistErr) {
+        console.error("[persist-guide-prompt-error]", persistErr?.message || persistErr);
+      }
     }
 
     res.status(200).json({ ok: true, handledCallback: true });
@@ -908,7 +1088,26 @@ export default async function handler(req, res) {
   // 1. Instant Guide Registration (Click Courier -> Type Number -> Done!)
   const replyText = String(message.reply_to_message?.text || "");
   if (replyText.includes("Buscar producto para venta física") && text && !text.startsWith("/")) {
-    await sendInventorySearchResults(token, senderChatId, text);
+    await sendInventorySearchResults(token, senderChatId, text, message.reply_to_message?.message_id);
+    res.status(200).json({ ok: true, authorized: true });
+    return;
+  }
+  if (replyText.includes("Buscar pedido") && text && !text.startsWith("/")) {
+    const store = await readStore();
+    const query = text.toUpperCase();
+    const found = (store.orders || []).find((order) => (
+      String(order.code || "").toUpperCase().includes(query)
+      || String(order.customerName || "").toUpperCase().includes(query)
+    ));
+    if (found) {
+      await editTelegramMessage(token, senderChatId, message.reply_to_message?.message_id, formatTelegramOrderMessage(found), {
+        reply_markup: buildTelegramOrderKeyboard(found),
+      });
+    } else {
+      await editTelegramMessage(token, senderChatId, message.reply_to_message?.message_id, `🔍 *Sin resultados*\n\nNo encontré un pedido para “${escapeTelegramMarkdown(text)}”.`, {
+        reply_markup: { inline_keyboard: [[{ text: "🔎 Buscar otra vez", callback_data: "search-order" }], [{ text: "⌂ Inicio", callback_data: "home" }]] },
+      });
+    }
     res.status(200).json({ ok: true, authorized: true });
     return;
   }
@@ -918,120 +1117,76 @@ export default async function handler(req, res) {
     const courierName = replyMatch[2].trim();
     const trackingNumber = text.trim();
     PENDING_GUIDE_PROMPTS.delete(senderChatId);
-    await applyOrderGuideRegistration(token, senderChatId, orderCode, courierName, trackingNumber);
+    await applyOrderGuideRegistration(token, senderChatId, orderCode, courierName, trackingNumber, message.reply_to_message?.message_id);
     res.status(200).json({ ok: true, authorized: true });
     return;
   }
 
-  const pendingPrompt = PENDING_GUIDE_PROMPTS.get(senderChatId);
+  let pendingPrompt = PENDING_GUIDE_PROMPTS.get(senderChatId);
+  if (!pendingPrompt || pendingPrompt.expiresAt <= Date.now()) {
+    try {
+      const store = await readStore();
+      const persisted = store?.meta?.pendingGuidePrompts?.[senderChatId];
+      if (persisted && persisted.expiresAt > Date.now()) {
+        pendingPrompt = persisted;
+      }
+    } catch (err) {
+      console.error("[read-persisted-guide-prompt-error]", err?.message || err);
+    }
+  }
+
   if (
     pendingPrompt
     && pendingPrompt.expiresAt > Date.now()
     && text
     && !text.startsWith("/")
     && !lowerText.includes("ventas")
+    && !lowerText.includes("resumen")
     && !lowerText.includes("pendientes")
+    && !lowerText.includes("pedidos")
     && !lowerText.includes("stock")
     && !lowerText.includes("buscar")
     && !lowerText.includes("inventario")
+    && !lowerText.includes("ayuda")
+    && !lowerText.includes("help")
     && lowerText !== "deshacer venta"
   ) {
     PENDING_GUIDE_PROMPTS.delete(senderChatId);
     const trackingNumber = text.trim();
-    await applyOrderGuideRegistration(token, senderChatId, pendingPrompt.orderCode, pendingPrompt.courierName, trackingNumber);
+    await applyOrderGuideRegistration(token, senderChatId, pendingPrompt.orderCode, pendingPrompt.courierName, trackingNumber, pendingPrompt.promptMessageId);
     res.status(200).json({ ok: true, authorized: true });
     return;
   }
 
   // Command Handlers for Admin
   if (lowerText === "/start" || lowerText === "hola" || lowerText === "/menu" || lowerText === "menu") {
-    const welcome = "👑 *Panel Administrativo · Adriego Store*\n\n¡Hola " + senderName + "! Tu sesión está protegida y lista.\n\n⚡ *Toca cualquiera de los botones de abajo:*";
-    await sendTelegramMessage(token, senderChatId, welcome);
-  } else if (lowerText === "📊 ventas de hoy" || lowerText === "/ventas" || lowerText === "ventas") {
     const store = await readStore();
-    const orders = Array.isArray(store?.orders) ? store.orders : [];
-    const todayIso = new Date().toISOString().slice(0, 10);
-    const todayOrders = orders.filter((o) => String(o.createdAt || "").startsWith(todayIso));
-    const todayTotal = todayOrders.reduce((sum, o) => sum + (Number(o.total ?? o.subtotal) || 0), 0);
-    const allTotal = orders.reduce((sum, o) => sum + (Number(o.total ?? o.subtotal) || 0), 0);
-
-    const report = "📊 *Resumen de Ventas · Adriego Store*\n━━━━━━━━━━━━━━━━━━━━\n📅 *Ventas de Hoy (" + todayIso + "):*\n• *Pedidos:* " + todayOrders.length + "\n• *Total Facturado:* *" + currency(todayTotal) + "*\n\n📈 *Ventas Totales Registradas:*\n• *Total Pedidos:* " + orders.length + "\n• *Monto Acumulado:* *" + currency(allTotal) + "*\n━━━━━━━━━━━━━━━━━━━━\n⚡ [Ver Historial en Panel Admin](https://adriego.vercel.app/admin)";
-    await sendTelegramMessage(token, senderChatId, report);
-  } else if (lowerText === "📦 pedidos pendientes" || lowerText === "/pendientes" || lowerText === "pendientes") {
+    const home = buildAdminHome(store, senderName);
+    await sendTelegramMessage(token, senderChatId, home.text, { reply_markup: home.reply_markup });
+  } else if (lowerText === "📊 resumen" || lowerText === "📊 ventas de hoy" || lowerText === "/ventas" || lowerText === "ventas" || lowerText === "/resumen" || lowerText === "resumen") {
     const store = await readStore();
-    const orders = Array.isArray(store?.orders) ? store.orders : [];
-    const pendingOrders = orders.filter((o) => {
-      const s = String(o.status || "").toLowerCase();
-      return s === "pendiente" || s === "en preparación" || s === "listo para retiro" || s === "enviado";
-    });
-
-    if (pendingOrders.length === 0) {
-      await sendTelegramMessage(token, senderChatId, "✅ *¡Al día!* No hay pedidos pendientes por despachar en este momento.");
-    } else {
-      const list = pendingOrders
-        .slice(0, 8)
-        .map((o, idx) => {
-          const typeIcon = o.deliveryType === "delivery" ? "🚚" : "🏬";
-          return (idx + 1) + ". `" + o.code + "` " + typeIcon + " · " + escapeTelegramMarkdown(o.customerName || "Cliente") + " · *" + currency(o.total ?? o.subtotal) + "* (" + o.status + ")";
-        })
-        .join("\n");
-
-      const sliceOrders = pendingOrders.slice(0, 8);
-      const orderButtons = [];
-      for (let i = 0; i < sliceOrders.length; i += 2) {
-        const row = [];
-        row.push({ text: "🔍 Ver " + sliceOrders[i].code, callback_data: "view:" + sliceOrders[i].code });
-        if (sliceOrders[i + 1]) {
-          row.push({ text: "🔍 Ver " + sliceOrders[i + 1].code, callback_data: "view:" + sliceOrders[i + 1].code });
-        }
-        orderButtons.push(row);
-      }
-
-      const msg = "📦 *Pedidos Pendientes (" + pendingOrders.length + "):*\n━━━━━━━━━━━━━━━━━━━━\n" + list + "\n━━━━━━━━━━━━━━━━━━━━\n👇 _Toca un botón abajo para abrir la ficha del pedido:_";
-      await sendTelegramMessage(token, senderChatId, msg, {
-        reply_markup: {
-          inline_keyboard: orderButtons,
-        },
-      });
-    }
+    const view = buildSummaryView(store.orders);
+    await sendTelegramMessage(token, senderChatId, view.text, { reply_markup: view.reply_markup });
+  } else if (lowerText === "📦 pedidos" || lowerText === "📦 pedidos pendientes" || lowerText === "/pendientes" || lowerText === "pendientes" || lowerText === "/pedidos" || lowerText === "pedidos") {
+    const store = await readStore();
+    const view = buildPendingOrdersView(store.orders, 0);
+    await sendTelegramMessage(token, senderChatId, view.text, { reply_markup: view.reply_markup });
   } else if (lowerText === "⚠️ stock bajo" || lowerText === "/stock_bajo" || lowerText === "stock bajo") {
     const store = await readStore();
-    const products = Array.isArray(store?.products) ? store.products : [];
-    const lowList = [];
-
-    products.forEach((product) => {
-      const variants = Array.isArray(product.variants) ? product.variants : [];
-      variants.forEach((variant) => {
-        const stock = Number(variant.stock) || 0;
-        if (stock <= 2) {
-          lowList.push({
-            name: product.name,
-            color: variant.color,
-            size: variant.size,
-            stock,
-          });
-        }
-      });
+    const view = buildLowStockView(store.products);
+    await sendTelegramMessage(token, senderChatId, view.text, { reply_markup: view.reply_markup });
+  } else if (lowerText === "/ayuda" || lowerText === "/help" || lowerText === "/comandos" || lowerText === "ayuda") {
+    await sendTelegramMessage(token, senderChatId, formatHelpMessage(), {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "📦 Pedidos pendientes", callback_data: "pending:0" }],
+          [{ text: "⌂ Inicio", callback_data: "home" }],
+        ],
+      },
     });
-
-    if (lowList.length === 0) {
-      await sendTelegramMessage(token, senderChatId, "✅ *Inventario Saludable:* Todas las prendas tienen buen nivel de stock.");
-    } else {
-      const list = lowList
-        .slice(0, 12)
-        .map((item) => "• *" + escapeTelegramMarkdown(item.name) + "* (" + item.color + " | " + item.size + ") ➔ *" + (item.stock === 0 ? "🛑 AGOTADO" : "⚠️ " + item.stock + " unid.") + "*")
-        .join("\n");
-      const msg = "⚠️ *Prendas con Stock Bajo / Agotadas (" + lowList.length + "):*\n━━━━━━━━━━━━━━━━━━━━\n" + list + "\n━━━━━━━━━━━━━━━━━━━━\n⚡ [Reponer en Panel Admin](https://adriego.vercel.app/admin)";
-      await sendTelegramMessage(token, senderChatId, msg);
-    }
-  } else if (lowerText.includes("inventario físico") || lowerText.includes("inventario fisico")) {
-    await sendTelegramMessage(token, senderChatId, "🛍️ *Inventario físico*\n\nElige una acción. También puedes usar `/stock nombre`, `/venta nombre | color | talla | cantidad` o `/deshacer venta`.", {
-      reply_markup: { inline_keyboard: [
-        [{ text: "➖ Registrar venta", callback_data: "inv:search" }],
-        [{ text: "📋 Lista para proveedor", callback_data: "inv:restock" }],
-        [{ text: "↩️ Deshacer última venta", callback_data: "inv:undo-last" }],
-      ] },
-    });
+  } else if (lowerText === "🛍️ inventario" || lowerText.includes("inventario físico") || lowerText.includes("inventario fisico")) {
+    const menu = buildInventoryMenu();
+    await sendTelegramMessage(token, senderChatId, menu.text, { reply_markup: menu.reply_markup });
   } else if (lowerText.startsWith("/stock ")) {
     const query = text.replace(/^\/stock\s+/i, "").trim().toLowerCase();
     const store = await readStore();
@@ -1113,9 +1268,11 @@ export default async function handler(req, res) {
     await applyOrderGuideRegistration(token, senderChatId, orderQuery, courierName, trackingNumber);
     res.status(200).json({ ok: true, authorized: true });
     return;
-  } else if (lowerText.includes("buscar pedido") || lowerText === "🔍 buscar pedido") {
-    const msg = "🔍 *Buscar Pedido*\n━━━━━━━━━━━━━━━━━━━━\nEscribe el código del pedido o nombre del cliente:\n\n*Ejemplo:* `/buscar ORDER-10099` o `/buscar Maria`";
-    await sendTelegramMessage(token, senderChatId, msg);
+  } else if (lowerText === "🔍 buscar" || lowerText.includes("buscar pedido") || lowerText === "🔍 buscar pedido") {
+    const msg = "🔍 *Buscar pedido*\n\nResponde con el código o el nombre del cliente.";
+    await sendTelegramMessage(token, senderChatId, msg, {
+      reply_markup: { force_reply: true, selective: true, input_field_placeholder: "Ej. ORDER-10099 o María" },
+    });
   } else if (lowerText.startsWith("/buscar") || lowerText.startsWith("buscar")) {
     const query = text.replace(/^[/]?buscar\s*/i, "").trim().toUpperCase();
     const store = await readStore();
@@ -1139,3 +1296,19 @@ export default async function handler(req, res) {
 
   res.status(200).json({ ok: true, authorized: true });
 }
+
+export {
+  deleteTelegramMessage,
+  sendTelegramMessage,
+  editTelegramMessage,
+  sendTelegramPhoto,
+  buildSummaryView,
+  buildLowStockView,
+  buildPendingOrdersView,
+  buildAdminHome,
+  buildInventoryMenu,
+  formatHelpMessage,
+  TELEGRAM_BOT_COMMANDS,
+  registerTelegramBotCommands,
+  PENDING_GUIDE_PROMPTS,
+};
