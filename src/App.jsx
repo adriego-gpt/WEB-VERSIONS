@@ -410,15 +410,14 @@ function normalizeManagedEntity(entry, prefix = "item") {
   };
 }
 
-function buildManagedEntities(rawEntries = [], fallbackNames = [], discoveredNames = [], prefix = "item") {
-  const combined = [
-    ...fallbackNames.map((item) => normalizeManagedEntity(item, prefix)),
-    ...(Array.isArray(rawEntries) ? rawEntries.map((item) => normalizeManagedEntity(item, prefix)) : []),
-    ...discoveredNames.map((item) => normalizeManagedEntity(item, prefix)),
-  ];
+function buildManagedEntities(rawEntries = null, fallbackNames = [], discoveredNames = [], prefix = "item") {
+  const sourceEntries = Array.isArray(rawEntries)
+    ? rawEntries
+    : [...(fallbackNames || []), ...(discoveredNames || [])];
 
   const map = new Map();
-  combined.forEach((entry) => {
+  sourceEntries.forEach((item) => {
+    const entry = normalizeManagedEntity(item, prefix);
     if (!entry.name) return;
     const key = entry.name.toLowerCase();
     if (!map.has(key)) {
@@ -429,10 +428,10 @@ function buildManagedEntities(rawEntries = [], fallbackNames = [], discoveredNam
     map.set(key, {
       ...previous,
       id: previous.id || entry.id,
-      active: previous.active || entry.active,
+      active: previous.active ?? entry.active,
       slug: previous.slug || entry.slug,
-      draftName: previous.name || entry.name,
-      draftSlug: previous.slug || entry.slug,
+      draftName: previous.draftName || previous.name || entry.name,
+      draftSlug: previous.draftSlug || previous.slug || entry.slug,
     });
   });
 
@@ -462,23 +461,6 @@ function ensureManagedEntity(records = [], rawName, prefix = "item") {
   ];
 }
 
-function ensureManagedEntityExists(records = [], rawName, prefix = "item") {
-  const name = normalizeOptionLabel(rawName);
-  if (!name) return records;
-  if (records.some((item) => item.name.toLowerCase() === name.toLowerCase())) return records;
-  const slug = slugify(name);
-  return [
-    ...records,
-    {
-      id: `${prefix}-${slug || createUid()}`,
-      name,
-      slug,
-      active: true,
-      draftName: name,
-      draftSlug: slug,
-    },
-  ];
-}
 
 const initialProducts = [
   {
@@ -1676,7 +1658,6 @@ export default function App() {
   const [selections, setSelections] = useState({});
   const [cart, setCart] = useState(() => normalizeStoredCart(readStorage(STORAGE_KEYS.cart, [])));
   const [favorites, setFavorites] = useState(() => normalizeStoredFavorites(readStorage(STORAGE_KEYS.favorites, [])));
-  const managedCatalogDirtyRef = useRef(false);
   const [recentlyViewedProductIds, setRecentlyViewedProductIds] = useState(() => (
     normalizeRecentlyViewedProductIds(readStorage(STORAGE_KEYS.recentlyViewedProducts, []))
   ));
@@ -1688,15 +1669,15 @@ export default function App() {
   const [adminSession, setAdminSession] = useState(null);
   const [adminSessionReady, setAdminSessionReady] = useState(false);
   const [productTypeRecords, setProductTypeRecords] = useState(() => buildManagedEntities(
-    [],
+    null,
     PRODUCT_TYPE_OPTIONS,
-    getStoredProducts().map((product) => product.productType || "General"),
+    [],
     "product-type",
   ));
   const [filterTagRecords, setFilterTagRecords] = useState(() => buildManagedEntities(
+    null,
     [],
-    initialProducts.flatMap((product) => product.filterTags || []),
-    getStoredProducts().flatMap((product) => product.filterTags || []),
+    [],
     "filter-tag",
   ));
   const [initialCatalogRouteState] = useState(readCatalogRouteState);
@@ -3119,18 +3100,22 @@ export default function App() {
         setStoreSettings(mergeStoreSettings(data.storeSettings));
       }
 
-      setProductTypeRecords(buildManagedEntities(
+      const nextProductTypeRecords = buildManagedEntities(
         data.productTypeRecords,
         PRODUCT_TYPE_OPTIONS,
-        resolvedProducts.map((product) => product.productType || "General"),
+        [],
         "product-type",
-      ));
-      setFilterTagRecords(buildManagedEntities(
+      );
+      const nextFilterTagRecords = buildManagedEntities(
         data.filterTagRecords,
         [],
-        resolvedProducts.flatMap((product) => product.filterTags || []),
+        [],
         "filter-tag",
-      ));
+      );
+      setProductTypeRecords(nextProductTypeRecords);
+      productTypeRecordsRef.current = nextProductTypeRecords;
+      setFilterTagRecords(nextFilterTagRecords);
+      filterTagRecordsRef.current = nextFilterTagRecords;
     }
   }, []);
 
@@ -3192,13 +3177,6 @@ export default function App() {
     return enqueueAsyncOperation(catalogSyncQueueRef, runSync);
   }, [applyCatalogStateFromServer, catalogReady, isAdmin, showToastMessage]);
 
-  useEffect(() => {
-    if (!managedCatalogDirtyRef.current) return;
-    managedCatalogDirtyRef.current = false;
-    void syncCatalogSnapshot({ products, productTypeRecords, filterTagRecords }).then((result) => {
-      if (!result.ok) setEditorError(result.message || "No se guardaron los cambios. Inténtalo nuevamente.");
-    });
-  }, [products, productTypeRecords, filterTagRecords, syncCatalogSnapshot]);
 
   const resolveCatalogConflict = useCallback(async (decision) => {
     const conflict = catalogConflict;
@@ -3987,10 +3965,6 @@ export default function App() {
     });
   }, [catalogReady, products, productsById]);
 
-  useEffect(() => {
-    setProductTypeRecords((previous) => products.reduce((records, product) => ensureManagedEntityExists(records, product.productType || "General", "product-type"), previous));
-    setFilterTagRecords((previous) => products.flatMap((product) => product.filterTags || []).reduce((records, tag) => ensureManagedEntityExists(records, tag, "filter-tag"), previous));
-  }, [products]);
 
   useEffect(() => {
     if (isAdmin || !catalogReady) return;
@@ -6419,18 +6393,30 @@ export default function App() {
     setProductForm((previous) => ({ ...previous, [field]: nextValue }));
   };
 
-  const addManagedProductType = () => {
+  const addManagedProductType = async () => {
     const normalizedValue = normalizeOptionLabel(customProductTypeInput);
     if (!normalizedValue) {
       setEditorError("Ingresa un nombre valido para el tipo de producto.");
       return;
     }
-    managedCatalogDirtyRef.current = true;
-    setProductTypeRecords((previous) => ensureManagedEntity(previous, normalizedValue, "product-type"));
+    const previousRecords = productTypeRecordsRef.current;
+    const nextRecords = ensureManagedEntity(previousRecords, normalizedValue, "product-type");
+    setProductTypeRecords(nextRecords);
+    productTypeRecordsRef.current = nextRecords;
     setProductForm((previous) => ({ ...previous, productType: normalizedValue }));
     setCustomProductTypeInput("");
     setEditorMessage(`Tipo de prenda "${normalizedValue}" agregado.`);
     setEditorError("");
+
+    const result = await syncCatalogSnapshot({ productTypeRecords: nextRecords }, { silent: true });
+    if (!result.ok) {
+      setProductTypeRecords(previousRecords);
+      productTypeRecordsRef.current = previousRecords;
+      setEditorError(result.message || "No pudimos guardar el tipo de producto.");
+      showToastMessage(result.message || "No pudimos guardar el tipo de producto.", "error");
+      return;
+    }
+    showToastMessage(`Tipo de prenda "${normalizedValue}" agregado y sincronizado.`, "success");
   };
 
   const handleManagedProductTypeDraftChange = (recordId, field, value) => {
@@ -6451,50 +6437,98 @@ export default function App() {
     }));
   };
 
-  const saveManagedProductType = (recordId) => {
-    const record = productTypeRecords.find((entry) => entry.id === recordId);
+  const saveManagedProductType = async (recordId) => {
+    const currentRecords = productTypeRecordsRef.current;
+    const record = currentRecords.find((entry) => entry.id === recordId);
     if (!record) return;
 
     const nextName = normalizeOptionLabel(record.draftName || record.name);
     const nextSlug = slugify(record.draftSlug || record.slug || nextName);
 
     if (!nextName) {
-      setEditorError("El tipo de producto no puede quedar vaco.");
+      setEditorError("El tipo de producto no puede quedar vacío.");
       return;
     }
 
-    const duplicated = productTypeRecords.some((entry) => entry.id !== recordId && entry.name.toLowerCase() === nextName.toLowerCase());
+    const duplicated = currentRecords.some((entry) => entry.id !== recordId && entry.name.toLowerCase() === nextName.toLowerCase());
     if (duplicated) {
       setEditorError("Ya existe otro tipo de producto con ese nombre.");
       return;
     }
 
-    managedCatalogDirtyRef.current = true;
-    setProductTypeRecords((previous) => previous.map((entry) => entry.id === recordId ? { ...entry, name: nextName, slug: nextSlug, draftName: nextName, draftSlug: nextSlug, active: true } : entry));
+    const previousRecords = currentRecords;
+    const previousProducts = productsRef.current;
+    const previousProductForm = productForm;
 
-    if (record.name.toLowerCase() !== nextName.toLowerCase()) {
-      setProducts((previous) => previous.map((product) => normalizeOptionLabel(product.productType || "").toLowerCase() === record.name.toLowerCase() ? { ...product, productType: nextName } : product));
+    const nextRecords = currentRecords.map((entry) => entry.id === recordId ? { ...entry, name: nextName, slug: nextSlug, draftName: nextName, draftSlug: nextSlug, active: true } : entry);
+    const nameChanged = record.name.toLowerCase() !== nextName.toLowerCase();
+    const nextProducts = nameChanged
+      ? previousProducts.map((product) => normalizeOptionLabel(product.productType || "").toLowerCase() === record.name.toLowerCase() ? normalizeProduct({ ...product, productType: nextName }) : product)
+      : previousProducts;
+
+    setProductTypeRecords(nextRecords);
+    productTypeRecordsRef.current = nextRecords;
+
+    if (nameChanged) {
+      setProducts(nextProducts);
+      productsRef.current = nextProducts;
       setProductForm((previous) => normalizeOptionLabel(previous.productType || "").toLowerCase() === record.name.toLowerCase() ? { ...previous, productType: nextName } : previous);
       setProductTypeFilter((previous) => previous.toLowerCase() === record.name.toLowerCase() ? nextName : previous);
     }
 
+    const result = await syncCatalogSnapshot(
+      { products: nextProducts, productTypeRecords: nextRecords },
+      { silent: true }
+    );
+
+    if (!result.ok) {
+      setProductTypeRecords(previousRecords);
+      productTypeRecordsRef.current = previousRecords;
+      if (nameChanged) {
+        setProducts(previousProducts);
+        productsRef.current = previousProducts;
+        setProductForm(previousProductForm);
+      }
+      setEditorError(result.message || "No pudimos guardar los cambios.");
+      showToastMessage(result.message || "No pudimos guardar los cambios.", "error");
+      return;
+    }
+
     setEditorMessage(`Tipo de producto actualizado a "${nextName}".`);
     setEditorError("");
+    showToastMessage(`Tipo de producto "${nextName}" actualizado y sincronizado.`, "success");
   };
 
-  const toggleManagedProductTypeActive = (recordId) => {
-    managedCatalogDirtyRef.current = true;
-    setProductTypeRecords((previous) => previous.map((record) => record.id === recordId ? { ...record, active: !record.active } : record));
+  const toggleManagedProductTypeActive = async (recordId) => {
+    const previousRecords = productTypeRecordsRef.current;
+    const nextRecords = previousRecords.map((record) => record.id === recordId ? { ...record, active: !record.active } : record);
+    setProductTypeRecords(nextRecords);
+    productTypeRecordsRef.current = nextRecords;
+
+    const result = await syncCatalogSnapshot({ productTypeRecords: nextRecords }, { silent: true });
+    if (!result.ok) {
+      setProductTypeRecords(previousRecords);
+      productTypeRecordsRef.current = previousRecords;
+      showToastMessage(result.message || "No pudimos actualizar la visibilidad del tipo.", "error");
+      return;
+    }
+    const updated = nextRecords.find((r) => r.id === recordId);
+    showToastMessage(`Tipo "${updated?.name}" ${updated?.active ? "activado" : "ocultado"}.`, "success");
   };
 
   const deleteManagedProductType = async (recordId, replacementName) => {
-    const record = productTypeRecords.find((entry) => entry.id === recordId);
+    const currentRecords = productTypeRecordsRef.current;
+    const record = currentRecords.find((entry) => entry.id === recordId);
     if (!record) return;
 
-    const associatedCount = products.filter((product) => normalizeOptionLabel(product.productType || "").toLowerCase() === record.name.toLowerCase()).length;
+    const currentProducts = productsRef.current;
+    const recordNameLower = record.name.toLowerCase();
+    const associatedCount = currentProducts.filter(
+      (product) => normalizeOptionLabel(product.productType || "").toLowerCase() === recordNameLower
+    ).length;
     const replacement = normalizeOptionLabel(replacementName);
-    const fallbackReplacement = productTypeRecords.find((entry) => entry.id !== recordId && entry.active)?.name
-      || (record.name.toLowerCase() === "general" ? "Sin tipo" : "General");
+    const fallbackReplacement = currentRecords.find((entry) => entry.id !== recordId && entry.active)?.name
+      || (recordNameLower === "general" ? "Sin tipo" : "General");
     const effectiveReplacement = associatedCount > 0 ? (replacement || fallbackReplacement) : replacement;
 
     if (associatedCount > 0 && !effectiveReplacement) {
@@ -6510,21 +6544,58 @@ export default function App() {
     });
     if (!confirmed) return;
 
-    if (associatedCount > 0) {
-      setProducts((previous) => previous.map((product) => normalizeOptionLabel(product.productType || "").toLowerCase() === record.name.toLowerCase() ? { ...product, productType: effectiveReplacement } : product));
-      setProductForm((previous) => normalizeOptionLabel(previous.productType || "").toLowerCase() === record.name.toLowerCase() ? { ...previous, productType: effectiveReplacement } : previous);
-      setProductTypeFilter((previous) => previous.toLowerCase() === record.name.toLowerCase() ? effectiveReplacement : previous);
+    const previousRecords = currentRecords;
+    const previousProducts = currentProducts;
+    const previousProductForm = productForm;
+
+    let nextRecords = currentRecords.filter((entry) => entry.id !== recordId);
+    if (associatedCount > 0 && effectiveReplacement) {
+      nextRecords = ensureManagedEntity(nextRecords, effectiveReplacement, "product-type");
     }
 
-    setProductTypeRecords((previous) => {
-      const withFallback = associatedCount > 0
-        ? ensureManagedEntity(previous, effectiveReplacement, "product-type")
-        : previous;
-      return withFallback.filter((entry) => entry.id !== recordId);
-    });
-    managedCatalogDirtyRef.current = true;
-    setEditorMessage(`Tipo de producto "${record.name}" eliminado${effectiveReplacement ? ` y reasignado a "${effectiveReplacement}"` : ""}.`);
+    const nextProducts = associatedCount > 0
+      ? currentProducts.map((product) =>
+          normalizeOptionLabel(product.productType || "").toLowerCase() === recordNameLower
+            ? normalizeProduct({ ...product, productType: effectiveReplacement })
+            : product
+        )
+      : currentProducts;
+
+    setProductTypeRecords(nextRecords);
+    productTypeRecordsRef.current = nextRecords;
+    setProducts(nextProducts);
+    productsRef.current = nextProducts;
+
+    if (associatedCount > 0) {
+      setProductForm((previous) =>
+        normalizeOptionLabel(previous.productType || "").toLowerCase() === recordNameLower
+          ? { ...previous, productType: effectiveReplacement }
+          : previous
+      );
+      setProductTypeFilter((previous) =>
+        previous.toLowerCase() === recordNameLower ? effectiveReplacement : previous
+      );
+    }
+
+    const result = await syncCatalogSnapshot(
+      { products: nextProducts, productTypeRecords: nextRecords },
+      { silent: true }
+    );
+
+    if (!result.ok) {
+      setProductTypeRecords(previousRecords);
+      productTypeRecordsRef.current = previousRecords;
+      setProducts(previousProducts);
+      productsRef.current = previousProducts;
+      setProductForm(previousProductForm);
+      setEditorError(result.message || "No pudimos eliminar el tipo de producto.");
+      showToastMessage(result.message || "No pudimos eliminar el tipo de producto.", "error");
+      return;
+    }
+
+    setEditorMessage(`Tipo de producto "${record.name}" eliminado${associatedCount > 0 && effectiveReplacement ? ` y reasignado a "${effectiveReplacement}"` : ""}.`);
     setEditorError("");
+    showToastMessage(`Tipo "${record.name}" eliminado y sincronizado.`, "success");
   };
 
   const bulkSetManagedProductTypesActive = async (recordIds = [], active = true) => {
@@ -6601,8 +6672,9 @@ export default function App() {
     const normalizedValue = normalizeOptionLabel(rawTag);
     if (!normalizedValue) return;
 
-    managedCatalogDirtyRef.current = true;
-    setFilterTagRecords((previous) => ensureManagedEntity(previous, normalizedValue, "filter-tag"));
+    const nextRecords = ensureManagedEntity(filterTagRecordsRef.current, normalizedValue, "filter-tag");
+    setFilterTagRecords(nextRecords);
+    filterTagRecordsRef.current = nextRecords;
     setProductForm((previous) => {
       const currentTags = splitFilterTagsText(previous.filterTagsText);
       if (currentTags.some((tag) => tag.toLowerCase() === normalizedValue.toLowerCase())) return previous;
@@ -6620,20 +6692,32 @@ export default function App() {
     }));
   };
 
-  const addManagedFilterTag = () => {
+  const addManagedFilterTag = async () => {
     const normalizedValue = normalizeOptionLabel(customFilterTagInput);
     if (!normalizedValue) {
       setEditorError("Ingresa un nombre valido para el filtro.");
       return;
     }
-    managedCatalogDirtyRef.current = true;
-    setFilterTagRecords((previous) => ensureManagedEntity(previous, normalizedValue, "filter-tag"));
+    const previousRecords = filterTagRecordsRef.current;
+    const nextRecords = ensureManagedEntity(previousRecords, normalizedValue, "filter-tag");
+    setFilterTagRecords(nextRecords);
+    filterTagRecordsRef.current = nextRecords;
     if (adminTab === "producto") {
       appendFilterTagToForm(normalizedValue);
     }
     setCustomFilterTagInput("");
     setEditorMessage(`Filtro "${normalizedValue}" agregado.`);
     setEditorError("");
+
+    const result = await syncCatalogSnapshot({ filterTagRecords: nextRecords }, { silent: true });
+    if (!result.ok) {
+      setFilterTagRecords(previousRecords);
+      filterTagRecordsRef.current = previousRecords;
+      setEditorError(result.message || "No pudimos guardar el filtro.");
+      showToastMessage(result.message || "No pudimos guardar el filtro.", "error");
+      return;
+    }
+    showToastMessage(`Filtro "${normalizedValue}" agregado y sincronizado.`, "success");
   };
 
   const handleManagedFilterTagDraftChange = (recordId, field, value) => {
@@ -6654,56 +6738,102 @@ export default function App() {
     }));
   };
 
-  const saveManagedFilterTag = (recordId) => {
-    const record = filterTagRecords.find((entry) => entry.id === recordId);
+  const saveManagedFilterTag = async (recordId) => {
+    const currentRecords = filterTagRecordsRef.current;
+    const record = currentRecords.find((entry) => entry.id === recordId);
     if (!record) return;
 
     const nextName = normalizeOptionLabel(record.draftName || record.name);
     const nextSlug = slugify(record.draftSlug || record.slug || nextName);
 
     if (!nextName) {
-      setEditorError("El filtro no puede quedar vaco.");
+      setEditorError("El filtro no puede quedar vacío.");
       return;
     }
 
-    const duplicated = filterTagRecords.some((entry) => entry.id !== recordId && entry.name.toLowerCase() === nextName.toLowerCase());
+    const duplicated = currentRecords.some((entry) => entry.id !== recordId && entry.name.toLowerCase() === nextName.toLowerCase());
     if (duplicated) {
       setEditorError("Ya existe otro filtro con ese nombre.");
       return;
     }
 
-    managedCatalogDirtyRef.current = true;
-    setFilterTagRecords((previous) => previous.map((entry) => entry.id === recordId ? { ...entry, name: nextName, slug: nextSlug, draftName: nextName, draftSlug: nextSlug, active: true } : entry));
+    const previousRecords = currentRecords;
+    const previousProducts = productsRef.current;
+    const previousProductForm = productForm;
 
-    if (record.name.toLowerCase() !== nextName.toLowerCase()) {
-      setProducts((previous) => previous.map((product) => {
-        const nextTags = (product.filterTags || []).map((tag) => normalizeOptionLabel(tag).toLowerCase() === record.name.toLowerCase() ? nextName : tag);
-        return { ...product, filterTags: [...new Set(nextTags.map((tag) => normalizeOptionLabel(tag)).filter(Boolean))] };
-      }));
+    const nextRecords = currentRecords.map((entry) => entry.id === recordId ? { ...entry, name: nextName, slug: nextSlug, draftName: nextName, draftSlug: nextSlug, active: true } : entry);
+    const nameChanged = record.name.toLowerCase() !== nextName.toLowerCase();
+    const nextProducts = nameChanged
+      ? previousProducts.map((product) => {
+          const nextTags = (product.filterTags || []).map((tag) => normalizeOptionLabel(tag).toLowerCase() === record.name.toLowerCase() ? nextName : tag);
+          return normalizeProduct({ ...product, filterTags: [...new Set(nextTags.map((tag) => normalizeOptionLabel(tag)).filter(Boolean))] });
+        })
+      : previousProducts;
+
+    setFilterTagRecords(nextRecords);
+    filterTagRecordsRef.current = nextRecords;
+
+    if (nameChanged) {
+      setProducts(nextProducts);
+      productsRef.current = nextProducts;
       setProductForm((previous) => ({
         ...previous,
         filterTagsText: splitFilterTagsText(previous.filterTagsText).map((tag) => tag.toLowerCase() === record.name.toLowerCase() ? nextName : tag).join(", "),
       }));
     }
 
+    const result = await syncCatalogSnapshot(
+      { products: nextProducts, filterTagRecords: nextRecords },
+      { silent: true }
+    );
+
+    if (!result.ok) {
+      setFilterTagRecords(previousRecords);
+      filterTagRecordsRef.current = previousRecords;
+      if (nameChanged) {
+        setProducts(previousProducts);
+        productsRef.current = previousProducts;
+        setProductForm(previousProductForm);
+      }
+      setEditorError(result.message || "No pudimos guardar los cambios del filtro.");
+      showToastMessage(result.message || "No pudimos guardar los cambios del filtro.", "error");
+      return;
+    }
+
     setEditorMessage(`Filtro actualizado a "${nextName}".`);
     setEditorError("");
+    showToastMessage(`Filtro "${nextName}" actualizado y sincronizado.`, "success");
   };
 
-  const toggleManagedFilterTagActive = (recordId) => {
-    managedCatalogDirtyRef.current = true;
-    setFilterTagRecords((previous) => previous.map((record) => record.id === recordId ? { ...record, active: !record.active } : record));
+  const toggleManagedFilterTagActive = async (recordId) => {
+    const previousRecords = filterTagRecordsRef.current;
+    const nextRecords = previousRecords.map((record) => record.id === recordId ? { ...record, active: !record.active } : record);
+    setFilterTagRecords(nextRecords);
+    filterTagRecordsRef.current = nextRecords;
+
+    const result = await syncCatalogSnapshot({ filterTagRecords: nextRecords }, { silent: true });
+    if (!result.ok) {
+      setFilterTagRecords(previousRecords);
+      filterTagRecordsRef.current = previousRecords;
+      showToastMessage(result.message || "No pudimos actualizar la visibilidad del filtro.", "error");
+      return;
+    }
+    const updated = nextRecords.find((r) => r.id === recordId);
+    showToastMessage(`Filtro "${updated?.name}" ${updated?.active ? "activado" : "ocultado"}.`, "success");
   };
 
   const deleteManagedFilterTag = async (recordId, replacementName) => {
-    const record = filterTagRecords.find((entry) => entry.id === recordId);
+    const currentRecords = filterTagRecordsRef.current;
+    const record = currentRecords.find((entry) => entry.id === recordId);
     if (!record) return;
 
+    const currentProducts = productsRef.current;
+    const recordNameLower = record.name.toLowerCase();
     const replacement = normalizeOptionLabel(replacementName);
 
-    const associatedCount = products.filter((product) => (
+    const associatedCount = currentProducts.filter((product) => (
       product.filterTags || []
-    ).some((tag) => normalizeOptionLabel(tag).toLowerCase() === record.name.toLowerCase())).length;
+    ).some((tag) => normalizeOptionLabel(tag).toLowerCase() === recordNameLower)).length;
     const confirmed = await requestDestructiveConfirmation({
       title: `¿Eliminar el filtro “${record.name}”?`,
       description: associatedCount > 0
@@ -6712,23 +6842,52 @@ export default function App() {
     });
     if (!confirmed) return;
 
-    setProducts((previous) => previous.map((product) => {
+    const previousRecords = currentRecords;
+    const previousProducts = currentProducts;
+    const previousProductForm = productForm;
+
+    let nextRecords = currentRecords.filter((entry) => entry.id !== recordId);
+    if (associatedCount > 0 && replacement) {
+      nextRecords = ensureManagedEntity(nextRecords, replacement, "filter-tag");
+    }
+
+    const nextProducts = currentProducts.map((product) => {
       const currentTags = splitFilterTagsText((product.filterTags || []).join(", "));
-      const withoutDeleted = currentTags.filter((tag) => tag.toLowerCase() !== record.name.toLowerCase());
+      const withoutDeleted = currentTags.filter((tag) => tag.toLowerCase() !== recordNameLower);
       const nextTags = replacement ? [...withoutDeleted, replacement] : withoutDeleted;
-      return { ...product, filterTags: [...new Set(nextTags)] };
-    }));
+      return normalizeProduct({ ...product, filterTags: [...new Set(nextTags)] });
+    });
+
+    setFilterTagRecords(nextRecords);
+    filterTagRecordsRef.current = nextRecords;
+    setProducts(nextProducts);
+    productsRef.current = nextProducts;
 
     setProductForm((previous) => {
-      const currentTags = splitFilterTagsText(previous.filterTagsText).filter((tag) => tag.toLowerCase() !== record.name.toLowerCase());
+      const currentTags = splitFilterTagsText(previous.filterTagsText).filter((tag) => tag.toLowerCase() !== recordNameLower);
       const nextTags = replacement ? [...currentTags, replacement] : currentTags;
       return { ...previous, filterTagsText: [...new Set(nextTags)].join(", ") };
     });
 
-    setFilterTagRecords((previous) => previous.filter((entry) => entry.id !== recordId));
-    managedCatalogDirtyRef.current = true;
+    const result = await syncCatalogSnapshot(
+      { products: nextProducts, filterTagRecords: nextRecords },
+      { silent: true }
+    );
+
+    if (!result.ok) {
+      setFilterTagRecords(previousRecords);
+      filterTagRecordsRef.current = previousRecords;
+      setProducts(previousProducts);
+      productsRef.current = previousProducts;
+      setProductForm(previousProductForm);
+      setEditorError(result.message || "No pudimos eliminar el filtro.");
+      showToastMessage(result.message || "No pudimos eliminar el filtro.", "error");
+      return;
+    }
+
     setEditorMessage(`Filtro "${record.name}" eliminado${replacement ? ` y reemplazado por "${replacement}"` : ""}.`);
     setEditorError("");
+    showToastMessage(`Filtro "${record.name}" eliminado y sincronizado.`, "success");
   };
 
   const bulkSetManagedFilterTagsActive = async (recordIds = [], active = true) => {
