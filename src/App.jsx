@@ -4117,6 +4117,8 @@ export default function App() {
     || legalModalState.open
     || destructiveConfirmation
     || (showMobileNav && isMobileViewport)
+    || (showAdminPanel && isAdmin)
+    || adminRouteActive
   );
 
   useEffect(() => {

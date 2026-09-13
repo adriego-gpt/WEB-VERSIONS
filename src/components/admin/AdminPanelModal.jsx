@@ -17,6 +17,7 @@ import { OrderStatusProgress } from '../orders/OrderStatusProgress';
 import { normalizeOrderStatusForOrder, formatOrderDate, getOrderStatusMeta, getOrderStatusOptions } from '../../domain/orders/status';
 import { getImagesForColor } from '../../domain/products/variants';
 import { pruneSelection } from '../../domain/admin/selection';
+import { useBodyScrollLock } from '../../hooks/useBodyScrollLock';
 import {
   STORAGE_KEYS, PASSWORD_SECURITY, AUTH_FORM_DEFAULTS,
   AUTH_FIELD_LIMITS, FILE_SECURITY, PRODUCT_FORM_LIMITS, FALLBACK_IMAGE,
@@ -256,6 +257,7 @@ export function AdminPanelModal({
   copyAdminUserResetLink,
   requestDestructiveConfirmation,
 }) {
+  useBodyScrollLock(open !== false);
   const [catalogPhotoFiles, setCatalogPhotoFiles] = useState([]);
   const [offerDraftById, setOfferDraftById] = useState({});
   const [offerDirtyById, setOfferDirtyById] = useState({});

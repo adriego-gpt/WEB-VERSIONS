@@ -26,3 +26,27 @@ test("modal accessibility keeps the focused field mounted while callbacks change
     "Changing a callback while typing must not restore focus to the trigger.",
   );
 });
+
+test("admin panel locks document body scroll preventing double scrollbars", () => {
+  const appContent = fs.readFileSync("src/App.jsx", "utf8");
+  assert.match(
+    appContent,
+    /showAdminPanel && isAdmin/,
+    "App.jsx must lock body when admin panel is open",
+  );
+
+  const adminContent = fs.readFileSync("src/components/admin/AdminPanelModal.jsx", "utf8");
+  assert.match(
+    adminContent,
+    /useBodyScrollLock\(open !== false\)/,
+    "AdminPanelModal must lock body scroll when open",
+  );
+
+  const cssContent = fs.readFileSync("src/App.css", "utf8");
+  assert.match(
+    cssContent,
+    /html:has\(\.admin-workspace-root\),\s*body:has\(\.admin-workspace-root\)\s*\{[\s\S]*?overflow:\s*hidden\s*!important/i,
+    "CSS must isolate root scrollbar when admin workspace is active",
+  );
+});
+

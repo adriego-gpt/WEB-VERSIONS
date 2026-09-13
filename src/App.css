@@ -11797,6 +11797,11 @@ body,
 }
 
 /* Full-page admin workspace */
+html:has(.admin-workspace-root),
+body:has(.admin-workspace-root) {
+  overflow: hidden !important;
+}
+
 .admin-workspace-root {
   position: fixed;
   inset: 0;
@@ -11805,6 +11810,7 @@ body,
   overflow: hidden;
   background: var(--bg-soft);
   color: var(--text-main);
+  overscroll-behavior: none;
 }
 
 .admin-workspace-root .admin-modal-shell {
@@ -11814,6 +11820,7 @@ body,
   border-radius: 0;
   box-shadow: none;
   grid-template-columns: 264px minmax(0, 1fr);
+  overflow: hidden;
 }
 
 .admin-workspace-root .admin-sidebar-nav {
@@ -11827,6 +11834,7 @@ body,
   background: var(--bg-soft);
   scrollbar-color: #aaa49a transparent;
   scroll-padding-top: 96px;
+  overscroll-behavior: contain;
 }
 
 .admin-skip-link {
