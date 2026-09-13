@@ -5836,14 +5836,21 @@ body,
   position: absolute;
   left: 50%;
   transform: translateX(-50%);
-  bottom: 16px;
+  bottom: 14px;
   display: flex;
+  align-items: center;
+  justify-content: center;
   width: max-content;
   max-width: calc(100% - 32px);
-  gap: 0;
-  padding: 0 6px;
-  border-radius: 12px;
-  background: var(--surface-elevated);
+  gap: 2px;
+  padding: 3px 6px;
+  height: 28px;
+  border-radius: var(--radius-full);
+  background: rgba(18, 20, 26, 0.48);
+  backdrop-filter: blur(16px) saturate(180%);
+  -webkit-backdrop-filter: blur(16px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.22), inset 0 1px 1px rgba(255, 255, 255, 0.12);
   overflow-x: auto;
   scrollbar-width: none;
   overscroll-behavior-inline: contain;
@@ -5870,42 +5877,53 @@ body,
 
 .product-gallery-page {
   position: relative;
-  flex: 0 0 44px;
-  width: 44px;
-  height: 44px;
+  flex: 0 0 28px;
+  width: 28px;
+  height: 22px;
   padding: 0;
-  display: grid;
-  place-items: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   border: none;
   background: transparent;
-  color: var(--text-muted);
   cursor: pointer;
+  border-radius: var(--radius-full);
+  transition: opacity var(--time-fast) var(--ease-standard);
 }
 
 .product-gallery-page-line {
-  width: 24px;
-  height: 2px;
-  border-radius: 2px;
-  background: currentColor;
-  transition: background-color var(--time-fast) var(--ease-standard);
-}
-
-.product-gallery-page.active {
-  color: var(--text-strong);
+  display: block;
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-full);
+  background: rgba(255, 255, 255, 0.45);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+  transition: width 0.3s cubic-bezier(0.16, 1, 0.3, 1),
+              background-color 0.2s ease,
+              transform 0.2s ease,
+              box-shadow 0.2s ease;
 }
 
 .product-gallery-page.active .product-gallery-page-line {
-  height: 4px;
+  width: 22px;
+  height: 7px;
+  background: #ffffff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35), 0 0 8px rgba(255, 255, 255, 0.35);
 }
 
-.product-gallery-page:hover {
-  color: var(--brand-accent);
+.product-gallery-page:hover .product-gallery-page-line {
+  background: rgba(255, 255, 255, 0.8);
+  transform: scale(1.15);
+}
+
+.product-gallery-page.active:hover .product-gallery-page-line {
+  transform: none;
 }
 
 .product-gallery-page:focus-visible {
-  outline: 2px solid var(--brand-accent);
-  outline-offset: -4px;
-  border-radius: 8px;
+  outline: 2px solid rgba(255, 255, 255, 0.9);
+  outline-offset: 2px;
+  border-radius: var(--radius-full);
 }
 
 .upload-box {

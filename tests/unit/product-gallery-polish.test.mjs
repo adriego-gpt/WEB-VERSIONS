@@ -17,7 +17,7 @@ test("gallery line controls keep individual photo selection and announce the act
 
 test("gallery controls have real non-overlapping touch targets and visible focus", async () => {
   const css = await fs.readFile(cssPath, "utf8");
-  assert.match(css, /\.product-gallery-page\s*\{[^}]*flex: 0 0 44px;[^}]*width: 44px;[^}]*height: 44px;/);
+  assert.match(css, /\.product-gallery-page\s*\{[^}]*flex: 0 0 28px;[^}]*width: 28px;[^}]*height: 22px;/);
   assert.match(css, /\.product-gallery-page:focus-visible\s*\{[^}]*outline: 2px/);
   assert.doesNotMatch(css, /\.dot::after/);
 });
