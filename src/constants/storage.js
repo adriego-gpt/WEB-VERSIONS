@@ -4,6 +4,7 @@ export const STORAGE_KEYS = {
   store: "adriego-store-v2",
   cart: "adriego-cart-v1",
   favorites: "adriego-favorites-v1",
+  pendingWhatsAppConfirmation: "adriego-pending-whatsapp-confirmation-v1",
   recentlyViewedProducts: "adriego-recently-viewed-products-v1",
   productTypes: "adriego-product-types-v2",
   filterTags: "adriego-filter-tags-v2",

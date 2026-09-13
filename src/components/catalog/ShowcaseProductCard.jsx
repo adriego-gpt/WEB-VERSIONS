@@ -1,17 +1,11 @@
 import React from "react";
 import { currency, discountPercent } from "../../utils/currency";
 import { FALLBACK_IMAGE } from "../../constants/product";
+import { getResponsiveImageSources, applyImageFallback } from "../../domain/products/imageSources.js";
 import {
   getCurrentImageForProduct,
   getSelectionForColor,
 } from "../../domain/products/variants";
-
-function getResponsiveSources(src) {
-  if (!/^https:\/\/images\.unsplash\.com\//i.test(src)) return undefined;
-  return [320, 640, 960]
-    .map((width) => src.replace(/([?&])w=\d+/i, `$1w=${width}`))
-    .join(", ");
-}
 
 export function ShowcaseProductCard({ product, onOpenDetail, isDuplicate = false }) {
   const principalSelection = getSelectionForColor(product, { color: product.catalogColor });
@@ -37,15 +31,13 @@ export function ShowcaseProductCard({ product, onOpenDetail, isDuplicate = false
           <span className="featured-product-image-wrap">
             <img
               src={previewImage}
-              srcSet={getResponsiveSources(previewImage)}
+              srcSet={getResponsiveImageSources(previewImage)}
               sizes="(max-width: 768px) 50vw, (max-width: 1100px) 33vw, 25vw"
               alt={isDuplicate ? "" : product.name}
               className="featured-product-image"
               loading="lazy"
               decoding="async"
-              onError={(event) => {
-                if (event.currentTarget.src !== FALLBACK_IMAGE) event.currentTarget.src = FALLBACK_IMAGE;
-              }}
+              onError={(event) => applyImageFallback(event.currentTarget, FALLBACK_IMAGE)}
             />
             {product.offerEnabled && discount > 0 ? <span className="featured-product-discount">-{discount}%</span> : null}
           </span>

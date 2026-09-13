@@ -1,5 +1,5 @@
 import { isValidEmail } from '../../utils';
-import React, { useState, useMemo, useCallback, useEffect } from 'react';
+import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import { RotateCcw, Plus, Package, UserRound, Navigation, ShieldCheck, Search, PencilLine, Mail, Copy, Trash2, CheckCircle2, Star, Link, Eye, EyeOff, AlertCircle, AlertTriangle, Play, RefreshCw, Upload, Image as ImageIcon, MapPin, SearchX, Clock, CreditCard, Tag, Tags, X, Image, ChevronDown, SlidersHorizontal, ZoomIn, MessageCircle, ExternalLink, Truck } from 'lucide-react';
 import { ShowcaseProductCard } from "../catalog/ShowcaseProductCard";
 import { CatalogProductCard } from "../catalog/CatalogProductCard";
@@ -177,6 +177,7 @@ export function AdminPanelModal({
   adminOrderCustomerOptions,
   updateOrderStatus,
   bulkUpdateOrderStatus,
+  bulkDeleteOrders,
   updateOrderGuide,
   updateOrderCourier,
   updateOrderInternalNote,
@@ -186,6 +187,7 @@ export function AdminPanelModal({
   clearOrderPaymentProof,
   handleOrderProofUpload,
   deleteOrder,
+  deletingOrderIds = [],
   onCopyOrderCode,
   liveOrdersEnabled,
   setLiveOrdersEnabled,
@@ -278,6 +280,8 @@ export function AdminPanelModal({
   const [selectedOrderIds, setSelectedOrderIds] = useState([]);
   const [orderBulkStatus, setOrderBulkStatus] = useState("Preparando");
   const [orderBulkBusy, setOrderBulkBusy] = useState(false);
+  const orderBulkActionRef = useRef(false);
+  const [orderBulkAction, setOrderBulkAction] = useState("");
   const [orderBulkFeedback, setOrderBulkFeedback] = useState(null);
   const [expandedOrderId, setExpandedOrderId] = useState(null);
   const [catalogQuickView, setCatalogQuickView] = useState("all");
@@ -355,6 +359,7 @@ export function AdminPanelModal({
   };
 
   const toggleOrderSelection = (orderId) => {
+    if (orderBulkBusy) return;
     const id = String(orderId);
     setOrderBulkFeedback(null);
     if (!selectedOrderSet.has(id) && selectedOrderSet.size >= 25) {
@@ -365,6 +370,7 @@ export function AdminPanelModal({
   };
 
   const toggleAllVisibleOrders = () => {
+    if (orderBulkBusy) return;
     const limitedIds = operationalOrderIds.slice(0, 25);
     const allSelected = limitedIds.length > 0 && limitedIds.every((id) => selectedOrderSet.has(id));
     setSelectedOrderIds(allSelected ? [] : limitedIds);
@@ -374,18 +380,21 @@ export function AdminPanelModal({
   };
 
   const applyBulkOrderStatus = async () => {
-    if (!selectedOrderSet.size || orderBulkBusy) return;
-    if (orderBulkStatus === "Cancelado") {
-      const confirmed = await requestDestructiveConfirmation({
-        title: `¿Cancelar ${selectedOrderSet.size} pedido${selectedOrderSet.size === 1 ? "" : "s"}?`,
-        description: "El stock reservado puede reintegrarse. Revisa los pedidos seleccionados antes de continuar.",
-      });
-      if (!confirmed) return;
-    }
+    if (!selectedOrderSet.size || orderBulkActionRef.current || deletingOrderIds.length) return;
+    const ids = [...selectedOrderSet];
+    orderBulkActionRef.current = true;
     setOrderBulkBusy(true);
+    setOrderBulkAction("status");
     setOrderBulkFeedback(null);
     try {
-      const result = await bulkUpdateOrderStatus([...selectedOrderSet], orderBulkStatus);
+      if (orderBulkStatus === "Cancelado") {
+        const confirmed = await requestDestructiveConfirmation({
+          title: `¿Cancelar ${ids.length} pedido${ids.length === 1 ? "" : "s"}?`,
+          description: "El stock reservado puede reintegrarse. Revisa los pedidos seleccionados antes de continuar.",
+        });
+        if (!confirmed) return;
+      }
+      const result = await bulkUpdateOrderStatus(ids, orderBulkStatus);
       if (result?.ok) {
         setSelectedOrderIds([]);
         setOrderBulkFeedback({ tone: "success", message: `${result.updated} pedido(s) actualizados.` });
@@ -395,7 +404,34 @@ export function AdminPanelModal({
     } catch {
       setOrderBulkFeedback({ tone: "error", message: "La conexión falló. Los pedidos siguen seleccionados para que puedas reintentar." });
     } finally {
+      orderBulkActionRef.current = false;
       setOrderBulkBusy(false);
+      setOrderBulkAction("");
+    }
+  };
+
+  const deleteSelectedOrders = async () => {
+    if (!selectedOrderSet.size || orderBulkActionRef.current || deletingOrderIds.length) return;
+    const ids = [...selectedOrderSet];
+    orderBulkActionRef.current = true;
+    setOrderBulkBusy(true);
+    setOrderBulkAction("delete");
+    setOrderBulkFeedback(null);
+    try {
+      const result = await bulkDeleteOrders(ids);
+      if (result?.cancelled) return;
+      if (result?.ok) {
+        setSelectedOrderIds((previous) => previous.filter((id) => !ids.includes(id)));
+        setOrderBulkFeedback({ tone: result.warning ? "warning" : "success", message: [result.message, result.warning].filter(Boolean).join(" ") });
+      } else {
+        setOrderBulkFeedback({ tone: "error", message: result?.message || "No pudimos eliminar los pedidos. La selección se conserva para reintentar." });
+      }
+    } catch {
+      setOrderBulkFeedback({ tone: "error", message: "La conexión falló. Los pedidos siguen seleccionados para que puedas reintentar." });
+    } finally {
+      orderBulkActionRef.current = false;
+      setOrderBulkBusy(false);
+      setOrderBulkAction("");
     }
   };
 
@@ -468,7 +504,7 @@ export function AdminPanelModal({
       tabs: [
         { id: "catalogo", label: "Catálogo", description: "Busca, filtra y administra todos los productos.", icon: Package },
         { id: "producto", label: productForm.id ? "Editar producto" : "Nuevo producto", description: "Información, variantes, fotografías y publicación.", icon: Plus },
-        { id: "importar", label: "Importar", description: "Carga y valida catálogos CSV sin modificar datos por error.", icon: Upload },
+        { id: "importar", label: "Importar", description: "Crea productos desde fotos o valida un catálogo CSV antes de guardarlo.", icon: Upload },
         { id: "inventario", label: "Inventario", description: "Controla existencias y registra cada movimiento.", icon: Package, badge: adminLowStockCount + adminOutOfStockCount },
         { id: "ofertas", label: "Ofertas", description: "Configura precios promocionales y cambios pendientes.", icon: Star },
         { id: "cupones", label: "Cupones", description: "Crea reglas, vigencias y simulaciones de descuento.", icon: Tag },
@@ -1957,20 +1993,21 @@ export function AdminPanelModal({
                   {operationalOrderHistory.length > 0 && (
                     <div className={`order-bulk-bar${selectedOrderSet.size ? " has-selection" : ""}`}>
                       <label className="admin-selection-control">
-                        <input type="checkbox" checked={operationalOrderIds.length > 0 && operationalOrderIds.slice(0, 25).every((id) => selectedOrderSet.has(id))} onChange={toggleAllVisibleOrders} />
+                        <input type="checkbox" disabled={orderBulkBusy} checked={operationalOrderIds.length > 0 && operationalOrderIds.slice(0, 25).every((id) => selectedOrderSet.has(id))} onChange={toggleAllVisibleOrders} />
                         <span>{selectedOrderSet.size ? `${selectedOrderSet.size} seleccionados` : "Seleccionar visibles"}</span>
                       </label>
                       {selectedOrderSet.size > 0 && (
                         <div className="order-bulk-actions">
-                          <select className="select" aria-label="Nuevo estado para los pedidos seleccionados" value={orderBulkStatus} onChange={(event) => setOrderBulkStatus(event.target.value)}>
+                          <select className="select" disabled={orderBulkBusy || deletingOrderIds.length > 0} aria-label="Nuevo estado para los pedidos seleccionados" value={orderBulkStatus} onChange={(event) => setOrderBulkStatus(event.target.value)}>
                             <option value="Confirmado">Confirmar</option>
                             <option value="Preparando">Marcar preparando</option>
                             <option value="Enviado">Enviado / listo para retiro</option>
                             <option value="Entregado">Marcar entregado</option>
                             <option value="Cancelado">Cancelar pedidos</option>
                           </select>
-                          <button className="btn btn-primary" type="button" disabled={orderBulkBusy} onClick={() => { void applyBulkOrderStatus(); }}>{orderBulkBusy ? "Actualizando…" : "Aplicar estado"}</button>
+                          <button className="btn btn-primary" type="button" disabled={orderBulkBusy || deletingOrderIds.length > 0} onClick={() => { void applyBulkOrderStatus(); }}>{orderBulkAction === "status" ? "Actualizando…" : "Aplicar estado"}</button>
                           <button className="btn btn-outline" type="button" disabled={orderBulkBusy} onClick={() => setSelectedOrderIds([])}>Limpiar</button>
+                          <button className="btn btn-danger order-bulk-delete" type="button" disabled={orderBulkBusy || deletingOrderIds.length > 0} aria-busy={orderBulkAction === "delete"} onClick={() => { void deleteSelectedOrders(); }}><Trash2 size={15} />{orderBulkAction === "delete" ? "Eliminando…" : "Eliminar seleccionados"}</button>
                         </div>
                       )}
                     </div>
@@ -2020,7 +2057,7 @@ export function AdminPanelModal({
                         <article key={order.id} className={`admin-order-row${isExpanded ? " is-expanded" : ""}`}>
                           <div className="admin-order-row-summary">
                             <label className="admin-order-selector" aria-label={`Seleccionar pedido ${order.code}`}>
-                              <input type="checkbox" checked={selectedOrderSet.has(String(order.id))} onChange={() => toggleOrderSelection(order.id)} />
+                              <input type="checkbox" disabled={orderBulkBusy} checked={selectedOrderSet.has(String(order.id))} onChange={() => toggleOrderSelection(order.id)} />
                             </label>
                             <button
                               className="admin-order-disclosure"
@@ -2303,8 +2340,14 @@ export function AdminPanelModal({
                               </section>
 
                               <div className="admin-order-danger-actions">
-                                <button type="button" className="btn btn-outline admin-danger-icon" onClick={() => deleteOrder(order.id)}>
-                                  <Trash2 size={15} />Eliminar pedido definitivamente
+                                <button
+                                  type="button"
+                                  className="btn btn-outline admin-danger-icon"
+                                  onClick={() => deleteOrder(order.id)}
+                                  disabled={orderBulkBusy || deletingOrderIds.includes(order.id)}
+                                  aria-busy={deletingOrderIds.includes(order.id)}
+                                >
+                                  <Trash2 size={15} />{deletingOrderIds.includes(order.id) ? "Eliminando…" : "Eliminar pedido y adjuntos"}
                                 </button>
                               </div>
                             </div>

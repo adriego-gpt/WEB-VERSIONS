@@ -18,7 +18,7 @@ process.env.TELEGRAM_WEBHOOK_SECRET = 'stress-secret';
 process.env.SECURITY_LOG_ENABLED = 'false';
 
 const fromRoot = (file) => import(pathToFileURL(path.join(root, file)).href);
-const { default: webhookHandler } = await fromRoot('api/telegram-webhook.js');
+const { default: webhookHandler, buildInventoryRestockView } = await fromRoot('api/telegram-webhook.js');
 const { readStore, updateStore } = await fromRoot('api/_lib/store.js');
 const { escapeTelegramMarkdown } = await fromRoot('api/_lib/notifications.js');
 const { catalogToCsv, parseCatalogCsv } = await fromRoot('src/domain/admin/catalogCsv.js');
@@ -307,7 +307,42 @@ test('Exhaustive Telegram Bot & Inventory Stress Testing', async (t) => {
     assert.match(recordedFetches[0].body.text, /Uso del comando \/guia/);
   });
 
-  await t.test('8. Catalog Domain: CSV Round-trip with exotic UTF-8 names, commas and quotes', () => {
+  await t.test('8. Restock Concurrency: repeated confirmation cannot add stock twice', async () => {
+    await updateStore((draft) => {
+      draft.products = [{
+        id: 'prod-restock-stress',
+        name: 'Blusa Reposición Stress',
+        productType: 'Cortas',
+        variants: [{ color: 'Negro', size: 'M', stock: 1 }],
+      }];
+      draft.physicalStockEvents = [];
+      draft.meta = { ...(draft.meta || {}), inventoryCallbackIds: [] };
+      return draft;
+    });
+
+    const store = await readStore();
+    const productAction = buildInventoryRestockView(store, 0).reply_markup.inline_keyboard
+      .flat()
+      .find((button) => button.callback_data?.startsWith('inv:add:product:'))
+      .callback_data;
+    const productToken = productAction.split(':').at(-1);
+    const confirmAction = `inv:add:confirm:${productToken}:0:0:5`;
+    await Promise.all(Array.from({ length: 10 }, (_, index) => postWebhook({
+      callback_query: {
+        id: `cb-restock-stress-${index}`,
+        from: { id: 1037173906 },
+        message: { message_id: 6000, chat: { id: 1037173906 } },
+        data: confirmAction,
+      },
+    })));
+
+    const updated = await readStore();
+    assert.equal(updated.products[0].variants[0].stock, 6);
+    assert.equal(updated.physicalStockEvents.length, 1);
+    assert.equal(updated.physicalStockEvents[0].delta, 5);
+  });
+
+  await t.test('9. Catalog Domain: CSV Round-trip with exotic UTF-8 names, commas and quotes', () => {
     const complexProducts = [
       {
         id: 'p-utf8',

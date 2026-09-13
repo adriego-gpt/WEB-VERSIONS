@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client'
 import App from './App.jsx'
 import './index.css'
 import { ErrorBoundary } from './components/ui/ErrorBoundary.jsx'
+import { tryReloadStaleChunk } from './utils/chunkRecovery.js'
 
 // Global recovery for stale chunks after new deployments
 // Guarded with a flag to prevent duplicate listeners during Vite HMR (#12)
@@ -16,13 +17,7 @@ if (typeof window !== 'undefined' && !window.__adriegoChunkListenersAdded) {
         event?.message || ''
       )
     );
-    if (isChunkError) {
-      const hasReloaded = window.sessionStorage.getItem('adriego_chunk_reload') === 'true';
-      if (!hasReloaded) {
-        window.sessionStorage.setItem('adriego_chunk_reload', 'true');
-        window.location.reload();
-      }
-    }
+    if (isChunkError) tryReloadStaleChunk(window);
   });
 
   window.addEventListener('unhandledrejection', (event) => {
@@ -32,21 +27,11 @@ if (typeof window !== 'undefined' && !window.__adriegoChunkListenersAdded) {
         event?.reason?.message || ''
       )
     );
-    if (isChunkError) {
-      const hasReloaded = window.sessionStorage.getItem('adriego_chunk_reload') === 'true';
-      if (!hasReloaded) {
-        window.sessionStorage.setItem('adriego_chunk_reload', 'true');
-        window.location.reload();
-      }
-    }
+    if (isChunkError) tryReloadStaleChunk(window);
   });
 
-  // Reset stale reload token on fresh successful bootstrap
-  try {
-    window.sessionStorage.removeItem('adriego_chunk_reload');
-  } catch {
-    // Ignore storage access errors in restricted browser environments
-  }
+  // Keep the token across reloads. Clearing it here creates infinite refreshes
+  // when the next chunk is still unavailable or the browser is offline.
 }
 
 ReactDOM.createRoot(document.getElementById('root')).render(

@@ -1,5 +1,6 @@
 {
   "framework": "vite",
+  "functions": { "api/seo.js": { "includeFiles": "dist/index.html" } },
   "headers": [
     {
       "source": "/assets/(.*)",
@@ -11,13 +12,25 @@
       ]
     },
     {
-      "source": "/(favicon.svg|manifest.json|og-cover.jpg|robots.txt|sitemap.xml)",
+      "source": "/(favicon.svg|manifest.json|og-cover.jpg)",
       "headers": [
         {
           "key": "Cache-Control",
           "value": "public, max-age=86400, stale-while-revalidate=604800"
         }
       ]
+    },
+    {
+      "source": "/admin/:path*",
+      "headers": [ { "key": "X-Robots-Tag", "value": "noindex, nofollow" }, { "key": "Cache-Control", "value": "no-store" } ]
+    },
+    {
+      "source": "/cuenta/:path*",
+      "headers": [ { "key": "X-Robots-Tag", "value": "noindex, nofollow" }, { "key": "Cache-Control", "value": "no-store" } ]
+    },
+    {
+      "source": "/(carrito|favoritos|pedidos|buscar)",
+      "headers": [ { "key": "X-Robots-Tag", "value": "noindex, nofollow" }, { "key": "Cache-Control", "value": "no-store" } ]
     },
     {
       "source": "/index.html",
@@ -72,19 +85,20 @@
   ],
   "rewrites": [
     {
+      "source": "/robots.txt",
+      "destination": "/api/seo?action=robots"
+    },
+    {
       "source": "/sitemap.xml",
       "destination": "/api/seo?action=sitemap"
     },
     {
+      "source": "/",
+      "destination": "/api/seo?action=page&path=/"
+    },
+    {
       "source": "/producto/:slug",
-      "has": [
-        {
-          "type": "header",
-          "key": "user-agent",
-          "value": "(?i).*(bot|crawl|spider|slurp|facebookexternalhit|WhatsApp|Twitterbot|LinkedInBot|TelegramBot|Discordbot|Googlebot|Bingbot|Baiduspider|DuckDuckBot|Yandex|Sogou|Exabot|ia_archiver|Pinterest|Slack|vkShare|W3C_Validator|redditbot|Applebot|MJ12bot|AhrefsBot|SemrushBot).*"
-        }
-      ],
-      "destination": "/api/seo?action=prerender&path=/producto/:slug"
+      "destination": "/api/seo?action=page&path=/producto/:slug"
     },
     {
       "source": "/((?!api/.*).*)",

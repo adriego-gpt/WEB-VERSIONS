@@ -1,18 +1,22 @@
 import React, { useMemo, useRef, useState } from "react";
-import { Download, FileSpreadsheet, Images, PencilLine, ShieldCheck, Upload, X } from "lucide-react";
+import { Download, FileSpreadsheet, FolderOpen, Images, PencilLine, ShieldCheck, Upload, X } from "lucide-react";
 import { catalogToCsv, downloadCsv, MAX_IMPORT_PRODUCTS, MAX_IMPORT_VARIANTS, parseCatalogCsv } from "../../domain/admin/catalogCsv";
-import { groupCatalogPhotoFiles, validateCatalogPhotoFiles } from "../../domain/admin/catalogPhotoNames";
+import { groupCatalogPhotoFiles, mergeCatalogPhotoFiles } from "../../domain/admin/catalogPhotoNames";
 import { AdminSectionHeader } from "./AdminSectionHeader";
 
 export function CatalogImportPanel({ products = [], onImport, onCreatePhotoDraft, photoFiles = [], onPhotoFilesChange }) {
   const [fileName, setFileName] = useState("");
   const [preview, setPreview] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [preparingProduct, setPreparingProduct] = useState("");
   const [actionError, setActionError] = useState("");
   const [sourceText, setSourceText] = useState("");
   const [reading, setReading] = useState(false);
   const readSequence = useRef(0);
+  const actionLock = useRef(false);
   const validatedCatalog = useRef("");
+  const photosInput = useRef(null);
+  const folderInput = useRef(null);
   const photoPreview = useMemo(() => groupCatalogPhotoFiles(photoFiles), [photoFiles]);
   const setPhotoFiles = (nextValue) => {
     if (typeof onPhotoFilesChange !== "function") return;
@@ -27,6 +31,7 @@ export function CatalogImportPanel({ products = [], onImport, onCreatePhotoDraft
     setActionError("");
     setSourceText("");
     if (file.size > 2 * 1024 * 1024) {
+      setReading(false);
       setFileName(file.name);
       setPreview({ products: [], errors: ["El CSV supera 2 MB. Divídelo en archivos más pequeños."], summary: null });
       return;
@@ -47,7 +52,7 @@ export function CatalogImportPanel({ products = [], onImport, onCreatePhotoDraft
   };
 
   const importProducts = async () => {
-    if (!preview?.products?.length || preview.errors?.length || busy || reading) return;
+    if (!preview?.products?.length || preview.errors?.length || actionLock.current || reading) return;
     const refreshed = parseCatalogCsv(sourceText, products);
     const currentCatalog = JSON.stringify(products);
     if (validatedCatalog.current !== currentCatalog || JSON.stringify(refreshed) !== JSON.stringify(preview)) {
@@ -56,6 +61,7 @@ export function CatalogImportPanel({ products = [], onImport, onCreatePhotoDraft
       setActionError("El catálogo cambió desde que seleccionaste el archivo. Revisa la vista previa actualizada antes de confirmar otra vez.");
       return;
     }
+    actionLock.current = true;
     setBusy(true);
     setActionError("");
     try {
@@ -65,13 +71,17 @@ export function CatalogImportPanel({ products = [], onImport, onCreatePhotoDraft
     } catch {
       setActionError("No se pudo importar. Revisa la conexión y vuelve a intentarlo.");
     } finally {
+      actionLock.current = false;
       setBusy(false);
+      setPreparingProduct("");
     }
   };
 
   const preparePhotoDraft = async (product) => {
-    if (busy) return;
+    if (actionLock.current || reading) return;
+    actionLock.current = true;
     setBusy(true);
+    setPreparingProduct(product.name);
     setActionError("");
     try {
       const result = await onCreatePhotoDraft?.(product);
@@ -82,51 +92,64 @@ export function CatalogImportPanel({ products = [], onImport, onCreatePhotoDraft
     } catch {
       setActionError("No se pudieron preparar las fotos. Revisa la conexión y vuelve a intentarlo.");
     } finally {
+      actionLock.current = false;
       setBusy(false);
+      setPreparingProduct("");
     }
   };
 
   const template = "sku,nombre,precio,precio_anterior,categoria,tipo,descripcion,tags,publico,destacado,nuevo,calificacion,oferta_activa,oferta_modo,oferta_valor,color,color_hex,talla,stock,imagenes_urls\r\nVES-001,Vestido lino,39.90,49.90,Mujer,Vestidos,Lino ligero,verano;casual,si,no,si,5,no,percent,0,Negro,#171717,M,0,";
 
   const selectPhotos = (event) => {
-    const result = validateCatalogPhotoFiles(event.target.files);
+    const files = Array.from(event.target.files || []);
+    // Folder selection includes unrelated documents; only images enter the batch.
+    const candidates = event.target.hasAttribute("webkitdirectory")
+      ? files.filter((file) => ["image/jpeg", "image/png", "image/webp"].includes(file.type))
+      : files;
+    const result = mergeCatalogPhotoFiles(photoFiles, candidates);
     setPhotoFiles(result.files);
-    setActionError(result.errors.join(" "));
+    setActionError(!candidates.length && files.length ? "La carpeta no contiene fotos JPG, PNG o WebP. Selecciona otra carpeta." : result.errors.join(" "));
     event.target.value = "";
   };
 
   return (
     <section className="admin-workspace catalog-import-workspace" aria-labelledby="catalog-import-title">
       {actionError && <p role="alert" className="catalog-import-errors">{actionError}</p>}
-      <AdminSectionHeader title="Importar catálogo" titleId="catalog-import-title" description="Carga o actualiza productos desde un CSV compatible con Excel. Nada se guarda hasta que confirmes la vista previa." actions={<button className="btn btn-outline" type="button" onClick={() => downloadCsv("plantilla-catalogo.csv", template)}><Download size={16} />Descargar plantilla</button>} />
-      <div className="catalog-import-limit-note"><FileSpreadsheet size={20} /><div><strong>Procesamiento local y ligero</strong><span>Máximo {MAX_IMPORT_PRODUCTS} productos y {MAX_IMPORT_VARIANTS} variantes. Las imágenes deben ser URLs HTTPS; no se incluyen archivos ni Base64.</span></div></div>
+      <AdminSectionHeader headingLevel={2} title="Importar productos" titleId="catalog-import-title" description="Empieza con tus fotos o importa un CSV. Revisa los datos antes de guardar o publicar." />
       <section className="catalog-photo-import" aria-labelledby="catalog-photo-import-title">
         <div className="catalog-photo-import-head">
           <div>
-            <span className="catalog-photo-import-kicker">Desde fotos profesionales</span>
-            <h5 id="catalog-photo-import-title">Crear productos desde nombres de imagen</h5>
-            <p>Usa <code>clasica-azul-frontal.png</code>. Para colores de varias palabras, usa <code>clasica__azul-marino__frontal.png</code>. La selección se conserva al cambiar de sección.</p>
+            <h3 id="catalog-photo-import-title">Crear productos desde fotos</h3>
+            <p>Selecciona fotos o una carpeta de tu dispositivo. Si están en Drive, descarga la carpeta primero y descomprime el ZIP.</p>
           </div>
-          <label className="btn btn-primary catalog-photo-import-picker">
-            <Images size={16} />Seleccionar fotos
-            <input type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={selectPhotos} />
-          </label>
+          <div className="catalog-photo-import-pickers">
+            <button className="btn btn-primary" type="button" disabled={busy || reading} onClick={() => photosInput.current?.click()}><Images size={16} />Añadir fotos</button>
+            <button className="btn btn-outline" type="button" disabled={busy || reading} onClick={() => folderInput.current?.click()}><FolderOpen size={16} />Elegir carpeta</button>
+            <input ref={photosInput} type="file" accept="image/jpeg,image/png,image/webp" multiple hidden disabled={busy || reading} onChange={selectPhotos} />
+            <input ref={folderInput} type="file" accept="image/jpeg,image/png,image/webp" multiple webkitdirectory="" hidden disabled={busy || reading} onChange={selectPhotos} />
+          </div>
         </div>
+        <p className="catalog-photo-import-help">Nombra las fotos <code>clasica-azul-frontal.png</code> o <code>clasica__azul-marino__frontal.png</code>. Detectamos modelo, color y vista; tú completas precio, tallas y stock. Añadir más fotos no borra las anteriores. La selección se conserva al cambiar de sección, no al recargar.</p>
         {photoFiles.length > 0 && (
           <div className="catalog-photo-import-preview">
-            <div className="catalog-photo-import-summary"><strong>{photoPreview.products.length} producto{photoPreview.products.length === 1 ? "" : "s"} detectado{photoPreview.products.length === 1 ? "" : "s"}</strong><span>{photoFiles.length} foto{photoFiles.length === 1 ? "" : "s"} listas para revisar</span><button className="link-btn" type="button" onClick={() => setPhotoFiles([])}>Limpiar</button></div>
+            <div className="catalog-photo-import-summary"><strong>{photoPreview.products.length} producto{photoPreview.products.length === 1 ? "" : "s"} detectado{photoPreview.products.length === 1 ? "" : "s"}</strong><span>{photoFiles.length} foto{photoFiles.length === 1 ? "" : "s"} listas para revisar</span><button className="link-btn" type="button" disabled={busy} onClick={() => setPhotoFiles([])}>Limpiar</button></div>
             {photoPreview.errors.length > 0 && <div className="catalog-import-errors" role="alert"><strong>Algunos archivos se omitieron</strong>{photoPreview.errors.slice(0, 6).map((error) => <span key={error}>{error}</span>)}</div>}
             <div className="catalog-photo-product-list">
               {photoPreview.products.map((product) => (
                 <article key={product.name} className="catalog-photo-product-card">
                   <div><strong>{product.name}</strong><span>{product.colors.map((color) => `${color.name}: ${color.photos.map((photo) => photo.view.toLowerCase()).join(", ")}`).join(" · ")}</span></div>
-                  <button className="btn btn-outline" type="button" disabled={busy} onClick={() => preparePhotoDraft(product)}><PencilLine size={15} />{busy ? "Preparando…" : "Completar producto"}</button>
+                  <button className="btn btn-outline" type="button" disabled={busy || reading} onClick={() => preparePhotoDraft(product)}><PencilLine size={15} />{preparingProduct === product.name ? "Preparando…" : "Completar producto"}</button>
                 </article>
               ))}
             </div>
           </div>
         )}
       </section>
+      <details className="catalog-csv-import">
+      <summary><FileSpreadsheet size={18} />Importar o actualizar desde Excel / CSV</summary>
+      <p>Esta opción permite actualizar varios productos a la vez. Nada se guarda hasta confirmar la vista previa.</p>
+      <button className="btn btn-outline" type="button" onClick={() => downloadCsv("plantilla-catalogo.csv", template)}><Download size={16} />Descargar plantilla CSV</button>
+      <div className="catalog-import-limit-note"><FileSpreadsheet size={20} /><div><strong>Procesamiento local y ligero</strong><span>Máximo {MAX_IMPORT_PRODUCTS} productos y {MAX_IMPORT_VARIANTS} variantes. Las imágenes deben ser URLs HTTPS; no se incluyen archivos ni Base64.</span></div></div>
       {!preview ? (
         <label className="catalog-import-dropzone">
           <Upload size={30} />
@@ -143,6 +166,7 @@ export function CatalogImportPanel({ products = [], onImport, onCreatePhotoDraft
           <div className="catalog-import-actions"><button className="btn btn-outline" type="button" disabled={busy} onClick={() => setPreview(null)}>Elegir otro archivo</button><button className="btn btn-primary" type="button" disabled={busy || reading || preview.errors?.length || !preview.products?.length} onClick={importProducts}><ShieldCheck size={16} />{busy ? "Guardando…" : "Confirmar importación"}</button></div>
         </div>
       )}
+      </details>
       <div className="catalog-export-row"><div><strong>Exportar catálogo actual</strong><span>Descarga una copia editable sin consumir funciones de Vercel.</span></div><button className="btn btn-soft" type="button" onClick={() => downloadCsv("catalogo-adriego.csv", catalogToCsv(products))}><Download size={16} />Exportar CSV</button></div>
     </section>
   );

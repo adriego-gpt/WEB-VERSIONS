@@ -193,6 +193,20 @@ function applyOrderStockSync(draft = {}, order = {}, direction = "restore") {
   return { ok: true, touched: touchedProductIndexes.size > 0, warnings };
 }
 
+// Shared server-side mutation: web and Telegram must release a reservation
+// exactly once, and use updateStore's existing scoped proof/backup erasure.
+export function deleteOrderFromDraft(draft, orderId, { bumpVersion = true } = {}) {
+  const orders = Array.isArray(draft.orders) ? draft.orders : [];
+  const target = orders.find((order) => String(order.id) === String(orderId));
+  if (!target) return { deleted: false };
+  const status = normalizeOrderStatus(target.status);
+  const reservation = normalizeStockReservation(target.stockReservation, status === CANCELLED_STATUS ? "released" : "reserved");
+  const sync = reservation.state !== "released" ? applyOrderStockSync(draft, target, "restore") : { touched: false, warnings: [] };
+  draft.orders = orders.filter((order) => String(order.id) !== String(orderId));
+  if (bumpVersion) bumpRealtimeMeta(draft, sync.touched ? ["orders", "catalog"] : ["orders"]);
+  return { deleted: true, catalogTouched: sync.touched, warning: (sync.warnings || []).join(" ") };
+}
+
 export default async function handler(req, res) {
   monitorApiRequest(req, res, ENDPOINT_NAME);
   setCommonSecurityHeaders(res);
@@ -281,6 +295,40 @@ export default async function handler(req, res) {
 
   const body = requireJsonBody(req, res, { endpoint: ENDPOINT_NAME });
   if (!body) return;
+  if (action === "delete-many") {
+    // OWASP Authorization Cheat Sheet: privileged deletion is checked server-side
+    // above, including CSRF. Bound and validate the whole batch before mutation.
+    if (!Array.isArray(body.orderIds) || !body.orderIds.length || body.orderIds.length > 25
+      || body.orderIds.some((id) => typeof id !== "string" || !id.trim() || id.length > 200 || normalizeLine(id) !== id)) {
+      res.status(400).json({ ok: false, message: "Selecciona entre 1 y 25 pedidos con identificadores válidos." });
+      return;
+    }
+    const orderIds = [...new Set(body.orderIds)];
+    const deletedIds = [];
+    const missingIds = [];
+    const warnings = [];
+    let nextStore;
+    try {
+      // One locked transaction: stock and scoped proof/backup erasure commit together.
+      nextStore = await updateStore((draft) => {
+        let catalogTouched = false;
+        for (const id of orderIds) {
+          const result = deleteOrderFromDraft(draft, id, { bumpVersion: false });
+          if (!result.deleted) { missingIds.push(id); continue; }
+          deletedIds.push(id);
+          catalogTouched ||= result.catalogTouched;
+          if (result.warning) warnings.push(result.warning);
+        }
+        if (deletedIds.length) bumpRealtimeMeta(draft, catalogTouched ? ["orders", "catalog"] : ["orders"]);
+        return draft;
+      });
+    } catch {
+      res.status(503).json({ ok: false, message: "No pudimos completar la eliminación de los pedidos y sus adjuntos. Inténtalo nuevamente." });
+      return;
+    }
+    res.status(200).json({ ok: true, deleted: deletedIds.length, deletedIds, missingIds, warning: [...new Set(warnings)].join(" "), orderHistory: Array.isArray(nextStore.orders) ? nextStore.orders : [] });
+    return;
+  }
   const orderId = normalizeLine(body.orderId || "");
   if (!orderId) {
     res.status(400).json({ ok: false, message: "orderId requerido" });
@@ -397,26 +445,16 @@ export default async function handler(req, res) {
 
   if (action === "delete") {
     let deleted = false;
-    let shouldBumpCatalog = false;
-    const nextStore = await updateStore((draft) => {
-      const previousOrders = Array.isArray(draft.orders) ? draft.orders : [];
-      const targetOrder = previousOrders.find((order) => String(order.id) === orderId);
-      if (targetOrder) {
-        const currentStatus = normalizeOrderStatus(targetOrder.status);
-        const fallbackReservationState = currentStatus === CANCELLED_STATUS ? "released" : "reserved";
-        const currentReservation = normalizeStockReservation(targetOrder.stockReservation, fallbackReservationState);
-        if (currentReservation.state !== "released") {
-          const syncResult = applyOrderStockSync(draft, targetOrder, "restore");
-          if (syncResult.touched) {
-            shouldBumpCatalog = true;
-          }
-        }
-        draft.orders = previousOrders.filter((order) => String(order.id) !== orderId);
-        deleted = true;
-        bumpRealtimeMeta(draft, shouldBumpCatalog ? ["orders", "catalog"] : ["orders"]);
-      }
-      return draft;
-    });
+    let nextStore;
+    try {
+      nextStore = await updateStore((draft) => {
+        deleted = deleteOrderFromDraft(draft, orderId).deleted;
+        return draft;
+      });
+    } catch {
+      res.status(503).json({ ok: false, message: "No pudimos completar la eliminación del pedido y sus adjuntos. Inténtalo nuevamente." });
+      return;
+    }
 
     if (!deleted) {
       res.status(404).json({ ok: false, message: "Pedido no encontrado" });

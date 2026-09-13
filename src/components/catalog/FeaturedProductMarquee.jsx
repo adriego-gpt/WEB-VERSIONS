@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { MemoShowcaseProductCard } from "./ShowcaseProductCard";
 import { CatalogSkeletonCard } from "./CatalogSkeletonCard";
+import { Pause, Play } from "lucide-react";
 
 export function FeaturedProductMarquee({ products = [], catalogReady, onOpenDetail }) {
   const sectionRef = useRef(null);
@@ -15,6 +16,7 @@ export function FeaturedProductMarquee({ products = [], catalogReady, onOpenDeta
   const [isInteracting, setIsInteracting] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [hasFocus, setHasFocus] = useState(false);
+  const [userPaused, setUserPaused] = useState(false);
   const [prefersReducedMotion, setPrefersReducedMotion] = useState(() => (
     typeof window !== "undefined"
     && typeof window.matchMedia === "function"
@@ -117,6 +119,7 @@ export function FeaturedProductMarquee({ products = [], catalogReady, onOpenDeta
     && !isInteracting
     && !isDragging
     && !hasFocus
+    && !userPaused
   );
 
   // GPU transform loop with no layout reads in the hot path.
@@ -261,8 +264,12 @@ export function FeaturedProductMarquee({ products = [], catalogReady, onOpenDeta
   return (
     <section id="destacados" ref={sectionRef} className="section-shell featured-runway-section" aria-labelledby="featured-runway-title">
       <div className="container featured-runway-header">
-        <h3 id="featured-runway-title">Productos destacados</h3>
+        <h2 id="featured-runway-title">Productos destacados</h2>
         <p>Explora la selección de la tienda.</p>
+        {catalogReady && hasProducts && !prefersReducedMotion && <button className="btn btn-outline featured-motion-control" type="button" aria-pressed={userPaused} onClick={() => setUserPaused((paused) => !paused)}>
+          {userPaused ? <Play size={15} aria-hidden="true" /> : <Pause size={15} aria-hidden="true" />}
+          {userPaused ? "Reanudar movimiento" : "Pausar movimiento"}
+        </button>}
       </div>
 
       {!catalogReady ? (

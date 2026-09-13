@@ -105,7 +105,10 @@ function buildVariantKey(productId = "", color = "", size = "") {
 }
 
 function sanitizeCart(rawCart = [], productsById = new Map()) {
-  const safeCart = Array.isArray(rawCart) ? rawCart.slice(0, CART_ITEM_LIMIT) : [];
+  if (!Array.isArray(rawCart) || rawCart.length > CART_ITEM_LIMIT) {
+    return { ok: false, message: `El carrito admite hasta ${CART_ITEM_LIMIT} prendas distintas. Divide tu compra en pedidos.` };
+  }
+  const safeCart = rawCart;
   const normalized = [];
   const requestedByVariant = new Map();
 
@@ -113,7 +116,11 @@ function sanitizeCart(rawCart = [], productsById = new Map()) {
     const productId = String(rawItem?.id || "");
     const color = normalizeLine(rawItem?.color || "");
     const size = normalizeLine(rawItem?.size || "");
-    const quantity = Math.max(1, Math.min(LINE_ITEM_LIMIT, Math.floor(Number(rawItem?.quantity) || 1)));
+    const quantity = Number(rawItem?.quantity);
+    // OWASP Input Validation: never silently turn a malformed quantity into a purchase.
+    if (!Number.isSafeInteger(quantity) || quantity < 1 || quantity > LINE_ITEM_LIMIT) {
+      return { ok: false, message: `Cada prenda debe tener una cantidad entera entre 1 y ${LINE_ITEM_LIMIT}.` };
+    }
     const product = productsById.get(productId);
     if (!product || !color || !size) {
       return { ok: false, message: "El carrito contiene productos inválidos." };
@@ -444,6 +451,11 @@ export default async function handler(req, res) {
     const paymentMethod = body?.paymentMethod
       ? normalizePaymentMethod(body.paymentMethod)
       : (transferReady ? PAYMENT_METHODS.transfer : PAYMENT_METHODS.cardLink);
+    if (paymentMethod === PAYMENT_METHODS.cardLink
+      && !normalizeWhatsAppInternationalNumber(draft.contactSettings?.whatsappNumber)) {
+      responsePayload = { ok: false, status: 409, message: "El pago con tarjeta no está disponible por ahora. Elige transferencia o contacta a la tienda." };
+      return draft;
+    }
     if (paymentMethod === PAYMENT_METHODS.transfer && !transferReady) {
       responsePayload = {
         ok: false,
@@ -597,7 +609,8 @@ export default async function handler(req, res) {
       draft.coupons = coupons;
     }
 
-    draft.orders = [nextOrder, ...previousOrders].slice(0, 400);
+    // Creating a new order must never delete another customer's purchase history.
+    draft.orders = [nextOrder, ...previousOrders];
     draft.users = users.map((entry) => (
       String(entry.id) === String(user.id)
         ? {
@@ -640,7 +653,7 @@ export default async function handler(req, res) {
     return;
   }
 
-  if (responsePayload.order) {
+  if (responsePayload.order && !responsePayload.idempotentReplay) {
     try {
       await dispatchOrderNotifications(responsePayload.order, {
         lowStockAlerts: responsePayload.lowStockAlerts,

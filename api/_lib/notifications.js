@@ -1,4 +1,10 @@
 import crypto from "node:crypto";
+import { fetchWithTimeout } from "./network.js";
+import { getPublicSiteOrigin } from "../../src/constants/site.js";
+
+export function getAdminPanelUrl() {
+  return `${getPublicSiteOrigin(process.env.PUBLIC_SITE_URL || process.env.VITE_PUBLIC_SITE_URL)}/admin`;
+}
 
 export function getAllowedAdminChatIds() {
   const configured = String(process.env.TELEGRAM_ADMIN_CHAT_ID || "").trim();
@@ -69,6 +75,9 @@ export function buildTelegramOrderKeyboard(order = {}) {
   }
 
   const statusRow = [];
+  if (normalizedStatus === "pendiente") {
+    statusRow.push({ text: "✅ Confirmar pedido", callback_data: `status:confirmed:${code}` });
+  }
   if (normalizedStatus !== "entregado") {
     if (order.deliveryType === "pickup" && normalizedStatus !== "listo para retiro") {
       statusRow.push({ text: "🏬 Listo para retirar", callback_data: `status:ready:${code}` });
@@ -78,6 +87,7 @@ export function buildTelegramOrderKeyboard(order = {}) {
     }
   }
   if (statusRow.length > 0) rows.push(statusRow);
+  rows.push([{ text: "🗑️ Eliminar pedido", callback_data: `order-delete:request:${code}` }]);
   rows.push([{ text: "↩️ Pedidos pendientes", callback_data: "pending:0" }]);
 
   return { inline_keyboard: rows };
@@ -183,7 +193,7 @@ export async function sendTelegramNotification(order = {}, options = {}) {
   const replyMarkup = buildTelegramOrderKeyboard(order);
 
   try {
-    const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+    const response = await fetchWithTimeout(`https://api.telegram.org/bot${token}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -214,7 +224,7 @@ export async function sendTelegramStockAlert(alert = {}, options = {}) {
   const text = formatTelegramStockAlert(alert);
 
   try {
-    const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+    const response = await fetchWithTimeout(`https://api.telegram.org/bot${token}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -224,7 +234,7 @@ export async function sendTelegramStockAlert(alert = {}, options = {}) {
         disable_web_page_preview: true,
         reply_markup: {
           inline_keyboard: [
-            [{ text: "📦 Gestionar en Panel Admin", url: "https://adriego.vercel.app/admin" }]
+            [{ text: "📦 Gestionar en Panel Admin", url: getAdminPanelUrl() }]
           ]
         }
       }),
@@ -264,7 +274,7 @@ export async function sendTelegramStockDigest(alerts = [], options = {}) {
   ].filter(Boolean).join("\n");
 
   try {
-    const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+    const response = await fetchWithTimeout(`https://api.telegram.org/bot${token}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -272,7 +282,7 @@ export async function sendTelegramStockDigest(alerts = [], options = {}) {
         text,
         parse_mode: "Markdown",
         disable_web_page_preview: true,
-        reply_markup: { inline_keyboard: [[{ text: "Abrir inventario", url: "https://adriego.vercel.app/admin" }]] },
+        reply_markup: { inline_keyboard: [[{ text: "Abrir inventario", url: getAdminPanelUrl() }]] },
       }),
     });
     const result = await response.json();
@@ -306,7 +316,7 @@ export async function sendN8nWebhook(order = {}) {
     .digest("hex");
 
   try {
-    const response = await fetch(webhookUrl, {
+    const response = await fetchWithTimeout(webhookUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -344,17 +354,21 @@ export const TELEGRAM_BOT_COMMANDS = [
   { command: "buscar", description: "Buscar pedidos por código o cliente" },
   { command: "guia", description: "Registrar guía de envío de un pedido" },
   { command: "stock", description: "Consultar stock disponible de una prenda" },
-  { command: "venta", description: "Registrar venta física manual" },
+  { command: "venta", description: "Registrar venta por tipo y modelo" },
+  { command: "reponer", description: "Reponer stock por tipo y modelo" },
   { command: "deshacer", description: "Deshacer la última venta física" },
   { command: "ayuda", description: "Guía de comandos oficiales y ayuda" },
 ];
+
+let registeredCommandsSignature = "";
+let pendingCommandsRegistration = null;
 
 export async function registerTelegramBotCommands(token = "") {
   const botToken = String(token || process.env.TELEGRAM_BOT_TOKEN || "").trim();
   if (!botToken) return { ok: false, message: "Missing Telegram bot token" };
 
   try {
-    const response = await fetch(`https://api.telegram.org/bot${botToken}/setMyCommands`, {
+    const response = await fetchWithTimeout(`https://api.telegram.org/bot${botToken}/setMyCommands`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ commands: TELEGRAM_BOT_COMMANDS }),
@@ -367,3 +381,31 @@ export async function registerTelegramBotCommands(token = "") {
   }
 }
 
+export async function ensureTelegramBotCommandsRegistered(token = "") {
+  const botToken = String(token || process.env.TELEGRAM_BOT_TOKEN || "").trim();
+  if (!botToken) return { ok: false, message: "Missing Telegram bot token" };
+
+  const signature = crypto
+    .createHash("sha256")
+    .update(`${botToken}:${JSON.stringify(TELEGRAM_BOT_COMMANDS)}`)
+    .digest("hex");
+  if (registeredCommandsSignature === signature) {
+    return { ok: true, skipped: true, message: "Telegram bot commands already registered" };
+  }
+  if (pendingCommandsRegistration?.signature === signature) {
+    return pendingCommandsRegistration.promise;
+  }
+
+  const promise = registerTelegramBotCommands(botToken)
+    .then((result) => {
+      if (result?.ok) registeredCommandsSignature = signature;
+      return result;
+    })
+    .finally(() => {
+      if (pendingCommandsRegistration?.promise === promise) {
+        pendingCommandsRegistration = null;
+      }
+    });
+  pendingCommandsRegistration = { signature, promise };
+  return promise;
+}

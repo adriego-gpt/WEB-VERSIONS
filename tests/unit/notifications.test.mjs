@@ -1,6 +1,17 @@
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
-import {
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+const originalCwd = process.cwd();
+const sandbox = await fs.mkdtemp(path.join(os.tmpdir(), 'adriego-notifications-'));
+process.chdir(sandbox);
+process.env.NODE_ENV = 'test';
+process.env.VERCEL_ENV = 'test';
+process.env.KV_REST_API_URL = '';
+process.env.KV_REST_API_TOKEN = '';
+after(async () => { process.chdir(originalCwd); await fs.rm(sandbox, { recursive: true, force: true }); });
+const {
   formatTelegramOrderMessage,
   buildTelegramOrderKeyboard,
   sendTelegramStockDigest,
@@ -11,8 +22,8 @@ import {
   escapeTelegramMarkdown,
   TELEGRAM_BOT_COMMANDS,
   registerTelegramBotCommands,
-} from '../../api/_lib/notifications.js';
-import webhookHandler, {
+} = await import('../../api/_lib/notifications.js');
+const { default: webhookHandler,
   deleteTelegramMessage,
   sendTelegramMessage,
   editTelegramMessage,
@@ -25,12 +36,13 @@ import webhookHandler, {
   buildInventoryTypesView,
   buildInventoryProductsByTypeView,
   buildInventoryInStockView,
+  buildInventoryRestockView,
   getAvailableProductTypes,
   getProductTotalStock,
   formatHelpMessage,
   PENDING_GUIDE_PROMPTS,
-} from '../../api/telegram-webhook.js';
-import { updateStore, readStore } from '../../api/_lib/store.js';
+} = await import('../../api/telegram-webhook.js');
+const { updateStore, readStore } = await import('../../api/_lib/store.js');
 
 test('Order Notifications Engine (Telegram & n8n)', async (t) => {
   const sampleOrder = {
@@ -310,7 +322,7 @@ test('Order Notifications Engine (Telegram & n8n)', async (t) => {
 
     // Inventory menu
     const menu = buildInventoryMenu();
-    assert.match(menu.text, /Inventario físico/);
+    assert.match(menu.text, /Inventario/);
     assert.ok(menu.reply_markup.inline_keyboard.length >= 3);
 
     // Help message
@@ -322,7 +334,8 @@ test('Order Notifications Engine (Telegram & n8n)', async (t) => {
   });
 
   await t.test('13. Official bot commands catalog and registration endpoint', async () => {
-    assert.equal(TELEGRAM_BOT_COMMANDS.length, 10);
+    assert.equal(TELEGRAM_BOT_COMMANDS.length, 11);
+    assert.ok(TELEGRAM_BOT_COMMANDS.some((item) => item.command === 'reponer'));
     const prevFetch = globalThis.fetch;
     const calls = [];
     globalThis.fetch = async (url, options) => {
@@ -395,6 +408,16 @@ test('Order Notifications Engine (Telegram & n8n)', async (t) => {
       assert.equal(editCalls.length, 0, 'Should not edit card when photo is sent');
       assert.equal(sendCalls.length, 0, 'Should not send extra text messages');
       assert.equal(deleteCalls.length, 0);
+      assert.match(String(photoCalls[0].options.body.get('reply_markup')), /proof-close/);
+
+      // Flow A2: closing the proof deletes only the photo and reveals the existing order card
+      calls.length = 0;
+      await callWebhook({
+        callback_query: { id: 'cb-proof-close', from: { id: 1037173906 }, message: { message_id: 107, chat: { id: 1037173906 } }, data: 'proof-close' },
+      });
+      assert.equal(calls.filter((c) => c.endpoint === 'deleteMessage').length, 1);
+      assert.equal(calls.filter((c) => c.endpoint === 'sendMessage').length, 0);
+      assert.equal(calls.filter((c) => c.endpoint === 'editMessageText').length, 0);
 
       // Flow B: proof without proof edits the card and provides back button
       calls.length = 0;
@@ -547,7 +570,7 @@ test('Order Notifications Engine (Telegram & n8n)', async (t) => {
     }
   });
 
-  await t.test('16. Direct message commands /ventas, /stock_bajo, /pedidos, and /ayuda', async () => {
+  await t.test('16. Direct message commands and official Telegram menu registration', async () => {
     const prevFetch = globalThis.fetch;
     const prevSecret = process.env.TELEGRAM_WEBHOOK_SECRET;
     const prevAdmin = process.env.TELEGRAM_ADMIN_CHAT_ID;
@@ -612,6 +635,31 @@ test('Order Notifications Engine (Telegram & n8n)', async (t) => {
       assert.match(calls[0].text, /Comandos oficiales/);
       assert.match(calls[0].text, /\/pedidos/);
       assert.match(calls[0].text, /\/ventas/);
+
+      // Bare /buscar opens the guided prompt instead of returning the first order
+      await sendCmd('/buscar');
+      assert.equal(calls.length, 1);
+      assert.match(calls[0].text, /Buscar pedido/);
+      assert.equal(calls[0].reply_markup.force_reply, true);
+
+      // Bare sale and restock commands start with types, not a mandatory search
+      await sendCmd('/venta');
+      assert.equal(calls.length, 1);
+      assert.match(calls[0].text, /Registrar venta/);
+      assert.match(calls[0].text, /Elige el tipo de prenda|No hay modelos con variantes/);
+      assert.ok(calls[0].reply_markup.inline_keyboard.flat().some((item) => item.callback_data === 'inv:search'));
+
+      await sendCmd('/reponer');
+      assert.equal(calls.length, 1);
+      assert.match(calls[0].text, /Reponer stock/);
+      assert.match(calls[0].text, /Elige el tipo de prenda|No hay modelos con variantes/);
+      assert.ok(calls[0].reply_markup.inline_keyboard.flat().some((item) => item.callback_data === 'inv:add:search'));
+
+      // /menu registers official commands once per warm instance and then renders home
+      await sendCmd('/menu');
+      assert.equal(calls.length, 2);
+      assert.ok(calls.some((body) => Array.isArray(body.commands) && body.commands.some((item) => item.command === 'reponer')));
+      assert.ok(calls.some((body) => /Adriego Store/.test(body.text || '')));
     } finally {
       globalThis.fetch = prevFetch;
       if (prevSecret) process.env.TELEGRAM_WEBHOOK_SECRET = prevSecret;
@@ -678,16 +726,17 @@ test('Order Notifications Engine (Telegram & n8n)', async (t) => {
 
     // 1. Types view
     const typesView = buildInventoryTypesView(store);
-    assert.match(typesView.text, /Filtrar por tipo de prenda/);
+    assert.match(typesView.text, /Registrar venta/);
     const hasCortasBtn = typesView.reply_markup.inline_keyboard.some((row) =>
       row.some((b) => b.text.includes('Cortas') && b.callback_data.startsWith('inv:type:'))
     );
     assert.ok(hasCortasBtn, 'Must render Cortas button with inv:type: callback');
 
     // 2. Products by type view
-    const cortasIndex = getAvailableProductTypes(testProducts).findIndex((t) => t.name.toLowerCase() === 'cortas');
-    const productsView = buildInventoryProductsByTypeView(store, cortasIndex, 0);
-    assert.match(productsView.text, /Prendas: Cortas/);
+    const cortasAction = typesView.reply_markup.inline_keyboard.flat().find((button) => button.text.includes('Cortas')).callback_data;
+    const cortasToken = cortasAction.split(':')[2];
+    const productsView = buildInventoryProductsByTypeView(store, cortasToken, 0);
+    assert.match(productsView.text, /Registrar venta · Cortas/);
     assert.ok(productsView.reply_markup.inline_keyboard[0][0].text.includes('4 disp.'));
     assert.match(productsView.reply_markup.inline_keyboard[0][0].callback_data, /^inv:product:/);
 
@@ -696,7 +745,12 @@ test('Order Notifications Engine (Telegram & n8n)', async (t) => {
     assert.match(inStockView.text, /Prendas con stock disponible/);
     assert.equal(inStockView.reply_markup.inline_keyboard.filter((r) => r[0].callback_data.startsWith('inv:product:')).length, 2);
 
-    // 4. Callback dispatch test via webhook
+    // 4. Restock view makes low-stock products actionable
+    const restockView = buildInventoryRestockView(store, 0);
+    assert.match(restockView.text, /Reponer stock/);
+    assert.ok(restockView.reply_markup.inline_keyboard.some((row) => row[0].callback_data.startsWith('inv:add:product:')));
+
+    // 5. Callback dispatch test via webhook
     const calls = [];
     globalThis.fetch = async (url, options) => {
       const endpoint = url.split('/').pop();
@@ -718,19 +772,171 @@ test('Order Notifications Engine (Telegram & n8n)', async (t) => {
       // Test callback inv:types
       await callWebhook('inv:types');
       assert.equal(calls.filter((c) => c.endpoint === 'editMessageText').length, 1);
-      assert.match(calls.at(-1).body.text, /Filtrar por tipo de prenda/);
+      assert.match(calls.at(-1).body.text, /Registrar venta/);
 
-      // Test callback inv:type:<cortasIndex>:0
+      // Stable type tokens remain valid when the catalog order changes.
       calls.length = 0;
-      await callWebhook(`inv:type:${cortasIndex}:0`);
+      await callWebhook(cortasAction);
       assert.equal(calls.filter((c) => c.endpoint === 'editMessageText').length, 1);
-      assert.match(calls.at(-1).body.text, /Prendas: Cortas/);
+      assert.match(calls.at(-1).body.text, /Registrar venta · Cortas/);
 
       // Test callback inv:instock:0
       calls.length = 0;
       await callWebhook('inv:instock:0');
       assert.equal(calls.filter((c) => c.endpoint === 'editMessageText').length, 1);
       assert.match(calls.at(-1).body.text, /Prendas con stock disponible/);
+    } finally {
+      globalThis.fetch = prevFetch;
+      if (prevSecret) process.env.TELEGRAM_WEBHOOK_SECRET = prevSecret;
+      else delete process.env.TELEGRAM_WEBHOOK_SECRET;
+      if (prevAdmin) process.env.TELEGRAM_ADMIN_CHAT_ID = prevAdmin;
+      else delete process.env.TELEGRAM_ADMIN_CHAT_ID;
+      if (prevToken) process.env.TELEGRAM_BOT_TOKEN = prevToken;
+      else delete process.env.TELEGRAM_BOT_TOKEN;
+    }
+  });
+
+  await t.test('19. Pending guide state rejects unrelated text and supports cancellation', async () => {
+    const prevFetch = globalThis.fetch;
+    const prevSecret = process.env.TELEGRAM_WEBHOOK_SECRET;
+    const prevAdmin = process.env.TELEGRAM_ADMIN_CHAT_ID;
+    const prevToken = process.env.TELEGRAM_BOT_TOKEN;
+    process.env.TELEGRAM_WEBHOOK_SECRET = 'test-secret';
+    process.env.TELEGRAM_ADMIN_CHAT_ID = '1037173906';
+    process.env.TELEGRAM_BOT_TOKEN = 'test-bot-token';
+
+    const seedPrompt = async (promptMessageId) => updateStore((draft) => {
+      draft.orders = [{ code: 'ORDER-SAFE-GUIDE', status: 'Pendiente', guideNumber: '' }];
+      draft.meta = {
+        ...(draft.meta || {}),
+        pendingGuidePrompts: {
+          '1037173906': {
+            orderCode: 'ORDER-SAFE-GUIDE',
+            courierName: 'Tramaco',
+            promptMessageId,
+            expiresAt: Date.now() + 10 * 60 * 1000,
+          },
+        },
+      };
+      return draft;
+    });
+    const calls = [];
+    globalThis.fetch = async (url, options) => {
+      calls.push({ endpoint: String(url).split('/').pop(), body: JSON.parse(options.body) });
+      return { ok: true, json: async () => ({ ok: true }) };
+    };
+    const sendText = async (text, messageId) => {
+      const res = { setHeader() {}, status() { return this; }, json(payload) { this.payload = payload; return this; } };
+      await webhookHandler({
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-telegram-bot-api-secret-token': 'test-secret' },
+        body: { message: { message_id: messageId, chat: { id: 1037173906 }, text } },
+      }, res);
+      return res;
+    };
+
+    try {
+      await seedPrompt(910);
+      PENDING_GUIDE_PROMPTS.clear();
+      await sendText('hola', 911);
+      let store = await readStore();
+      let order = store.orders.find((item) => item.code === 'ORDER-SAFE-GUIDE');
+      assert.equal(order.guideNumber, '');
+      assert.equal(order.status, 'Pendiente');
+      assert.equal(store.meta?.pendingGuidePrompts?.['1037173906'], undefined);
+      assert.ok(calls.some((call) => /Adriego Store/.test(call.body.text || '')));
+
+      await seedPrompt(912);
+      PENDING_GUIDE_PROMPTS.clear();
+      calls.length = 0;
+      await sendText('/cancelar', 913);
+      store = await readStore();
+      order = store.orders.find((item) => item.code === 'ORDER-SAFE-GUIDE');
+      assert.equal(order.guideNumber, '');
+      assert.equal(store.meta?.pendingGuidePrompts?.['1037173906'], undefined);
+      assert.ok(calls.some((call) => /cancelado/.test(call.body.text || '')));
+    } finally {
+      globalThis.fetch = prevFetch;
+      if (prevSecret) process.env.TELEGRAM_WEBHOOK_SECRET = prevSecret;
+      else delete process.env.TELEGRAM_WEBHOOK_SECRET;
+      if (prevAdmin) process.env.TELEGRAM_ADMIN_CHAT_ID = prevAdmin;
+      else delete process.env.TELEGRAM_ADMIN_CHAT_ID;
+      if (prevToken) process.env.TELEGRAM_BOT_TOKEN = prevToken;
+      else delete process.env.TELEGRAM_BOT_TOKEN;
+    }
+  });
+
+  await t.test('20. Guided restock is atomic, idempotent, undoable, and shows stock alerts', async () => {
+    const prevFetch = globalThis.fetch;
+    const prevSecret = process.env.TELEGRAM_WEBHOOK_SECRET;
+    const prevAdmin = process.env.TELEGRAM_ADMIN_CHAT_ID;
+    const prevToken = process.env.TELEGRAM_BOT_TOKEN;
+    process.env.TELEGRAM_WEBHOOK_SECRET = 'test-secret';
+    process.env.TELEGRAM_ADMIN_CHAT_ID = '1037173906';
+    process.env.TELEGRAM_BOT_TOKEN = 'test-bot-token';
+
+    await updateStore((draft) => {
+      draft.products = [{
+        id: 'p-restock-guided',
+        name: 'Vestido Reposición',
+        productType: 'Vestidos',
+        variants: [{ color: 'Negro', size: 'M', stock: 1 }],
+      }];
+      draft.physicalStockEvents = [];
+      draft.meta = { ...(draft.meta || {}), inventoryCallbackIds: [] };
+      return draft;
+    });
+
+    const calls = [];
+    globalThis.fetch = async (url, options) => {
+      calls.push({ endpoint: String(url).split('/').pop(), body: JSON.parse(options.body) });
+      return { ok: true, json: async () => ({ ok: true, result: { message_id: 920 } }) };
+    };
+    const callCallback = async (data, callbackId, messageId = 920) => {
+      calls.length = 0;
+      const res = { setHeader() {}, status() { return this; }, json(payload) { this.payload = payload; return this; } };
+      await webhookHandler({
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-telegram-bot-api-secret-token': 'test-secret' },
+        body: { callback_query: { id: callbackId, from: { id: 1037173906 }, message: { message_id: messageId, chat: { id: 1037173906 } }, data } },
+      }, res);
+      return calls.findLast((call) => call.endpoint === 'editMessageText')?.body;
+    };
+
+    try {
+      const initialStore = await readStore();
+      const restockView = buildInventoryRestockView(initialStore, 0);
+      const productCallback = restockView.reply_markup.inline_keyboard.flat().find((button) => button.callback_data?.startsWith('inv:add:product:')).callback_data;
+      let body = await callCallback(productCallback, 'cb-add-product');
+      const colorCallback = body.reply_markup.inline_keyboard.flat().find((button) => button.callback_data?.startsWith('inv:add:color:')).callback_data;
+      body = await callCallback(colorCallback, 'cb-add-color');
+      const sizeCallback = body.reply_markup.inline_keyboard.flat().find((button) => button.callback_data?.startsWith('inv:add:size:')).callback_data;
+      body = await callCallback(sizeCallback, 'cb-add-size');
+      const quantityCallback = body.reply_markup.inline_keyboard.flat().find((button) => button.text === '+5').callback_data;
+      body = await callCallback(quantityCallback, 'cb-add-qty');
+      const confirmCallback = body.reply_markup.inline_keyboard.flat().find((button) => button.callback_data?.startsWith('inv:add:confirm:')).callback_data;
+
+      await callCallback(confirmCallback, 'cb-add-confirm-1');
+      let store = await readStore();
+      assert.equal(store.products[0].variants[0].stock, 6);
+      assert.equal(store.physicalStockEvents.length, 1);
+      assert.equal(store.physicalStockEvents[0].delta, 5);
+
+      // A second callback id from the same confirmation card must not add stock again.
+      await callCallback(confirmCallback, 'cb-add-confirm-2');
+      store = await readStore();
+      assert.equal(store.products[0].variants[0].stock, 6);
+      assert.equal(store.physicalStockEvents.length, 1);
+
+      const restockEvent = store.physicalStockEvents[0];
+      await callCallback(`undo-restock:${restockEvent.id}`, 'cb-undo-restock');
+      store = await readStore();
+      assert.equal(store.products[0].variants[0].stock, 1);
+      assert.equal(store.physicalStockEvents[0].status, 'reverted');
+
+      await callCallback('inv:nostock', 'cb-no-stock');
+      const alertCall = calls.find((call) => call.endpoint === 'answerCallbackQuery');
+      assert.equal(alertCall.body.show_alert, true);
     } finally {
       globalThis.fetch = prevFetch;
       if (prevSecret) process.env.TELEGRAM_WEBHOOK_SECRET = prevSecret;

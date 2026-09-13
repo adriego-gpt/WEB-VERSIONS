@@ -238,7 +238,7 @@ export function CartSummaryModal({
         : selectedPaymentMethod === PAYMENT_METHODS.cardLink
           ? `Solicitar enlace de pago (+${cardFeePercent}%)`
           : selectedBankAccount
-            ? "Confirmar pago por transferencia"
+            ? "Enviar pedido y comprobante"
             : "Selecciona un banco";
 
   const handleDeliveryDraftChange = (field, value) => {
@@ -371,7 +371,7 @@ export function CartSummaryModal({
         return;
       }
       if (!paymentProof) {
-        setCheckoutFormError("Por favor sube la foto o captura de tu comprobante bancario para confirmar el pedido.");
+        setCheckoutFormError("Sube la foto o captura de tu comprobante bancario para enviar el pedido a revisión.");
         setProofAttention(true);
         proofSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
         return;
@@ -547,17 +547,17 @@ export function CartSummaryModal({
                           <p className="sheet-product-title cart-line-title">{item.name}</p>
                           <p className="muted sheet-product-meta-text cart-line-meta">{item.color} - {item.size}</p>
                           {isOutOfStock ? (
-                            <span className="stock-badge stock-badge-danger stock-badge-compact" style={{ marginTop: 4 }}>
+                            <span className="stock-badge stock-badge-danger stock-badge-compact cart-line-stock-badge">
                               <span className="stock-dot" aria-hidden="true" />
                               <span>Agotado · Quitar prenda</span>
                             </span>
                           ) : isOverStock ? (
-                            <span className="stock-badge stock-badge-warning stock-badge-compact" style={{ marginTop: 4 }}>
+                            <span className="stock-badge stock-badge-warning stock-badge-compact cart-line-stock-badge">
                               <span className="stock-dot" aria-hidden="true" />
                               <span>Solo {availableStock} disponible{availableStock === 1 ? "" : "s"}</span>
                             </span>
                           ) : (
-                            <span className={`stock-badge stock-badge-${stockStatus.tone} stock-badge-compact`} style={{ marginTop: 4 }}>
+                            <span className={`stock-badge stock-badge-${stockStatus.tone} stock-badge-compact cart-line-stock-badge`}>
                               <span className="stock-dot" aria-hidden="true" />
                               <span>{stockStatus.label}</span>
                             </span>
@@ -1139,7 +1139,7 @@ export function CartSummaryModal({
                       <div className="checkout-card-link-note">
                         <CreditCard size={20} aria-hidden="true" />
                         <div>
-                          <strong>Solicitaremos tu enlace seguro por WhatsApp</strong>
+                          <strong>Solicita tu enlace seguro por WhatsApp</strong>
                           <p>No ingreses datos de tarjeta en esta web. La comisión de {cardFeePercent}% equivale a {currency(paymentFeeAmount)}.</p>
                         </div>
                       </div>

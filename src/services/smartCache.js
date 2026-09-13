@@ -116,7 +116,8 @@ async function cachedRequest(cacheKey = "", fetcher, options = {}) {
   const requestPromise = Promise.resolve()
     .then(() => fetcher())
     .then((response) => {
-      if (response?.ok) {
+      // An invalidated or superseded request cannot resurrect stale saved data.
+      if (response?.ok && inflightCache.get(key) === requestPromise) {
         setCacheEntry(key, response, { persist });
       }
       if (!response?.ok && cachedEntry && allowStaleOnError) {

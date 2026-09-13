@@ -162,10 +162,13 @@ function updateServerOrder(payload) {
   });
 }
 
-function deleteServerOrder(payload) {
-  return postJson("/api/orders?action=delete", payload).then((response) => {
+function requestOrderDeletion(action, payload) {
+  return postJson(`/api/orders?action=${action}`, payload).then((response) => {
     if (response?.ok) {
       invalidateCachedRequest([
+        SERVER_CACHE_KEYS.catalogPublic,
+        SERVER_CACHE_KEYS.catalogAdmin,
+        SERVER_CACHE_KEYS.realtimePublic,
         SERVER_CACHE_KEYS.orders,
         SERVER_CACHE_KEYS.security,
         SERVER_CACHE_KEYS.realtimePrivate,
@@ -173,6 +176,14 @@ function deleteServerOrder(payload) {
     }
     return response;
   });
+}
+
+function deleteServerOrder(payload) {
+  return requestOrderDeletion("delete", payload);
+}
+
+function deleteServerOrders(payload) {
+  return requestOrderDeletion("delete-many", payload);
 }
 
 function getSecurityMetricsSnapshot(options = {}) {
@@ -237,6 +248,7 @@ export {
   listServerOrders,
   updateServerOrder,
   deleteServerOrder,
+  deleteServerOrders,
   getSecurityMetricsSnapshot,
   resetSecurityMetricsSnapshot,
   getRealtimeSyncStatus,

@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import { Heart, PencilLine, Trash2, X, Check } from "lucide-react";
 import { motion as Motion, AnimatePresence } from "framer-motion";
 import { currency, discountPercent } from "../../utils/currency";
@@ -7,6 +7,7 @@ import { getProductColorSwatch } from "../../utils/productColor";
 import { triggerHaptic } from "../../utils/haptics";
 import { ANIMATION } from "../../constants/animation";
 import { FALLBACK_IMAGE } from "../../constants/product";
+import { getResponsiveImageSources, applyImageFallback } from "../../domain/products/imageSources.js";
 import { getProductBadgeKinds } from "../../domain/products/catalogPresentation";
 import {
   getSelectionForColor,
@@ -15,13 +16,6 @@ import {
   getStockForVariant,
   getStockStatus,
 } from "../../domain/products/variants";
-
-function getResponsiveSources(src) {
-  if (!/^https:\/\/images\.unsplash\.com\//i.test(src)) return undefined;
-  return [320, 640, 960]
-    .map((width) => src.replace(/([?&])w=\d+/i, `$1w=${width}`))
-    .join(", ");
-}
 
 function getVisibleOptions(options = [], selectedOption, limit) {
   const uniqueOptions = [...new Set(options.filter(Boolean))];
@@ -50,6 +44,8 @@ export function CatalogProductCard({
   const [isSelectingSize, setIsSelectingSize] = useState(false);
   const [justAddedSize, setJustAddedSize] = useState("");
   const [addedFeedback, setAddedFeedback] = useState(false);
+  const feedbackTimerRef = useRef(null);
+  useEffect(() => () => clearTimeout(feedbackTimerRef.current), []);
   const resolvedSelection = getSelectionForColor(product, selection);
   const selectedColor = resolvedSelection.color;
   const selectedSize = resolvedSelection.size;
@@ -74,14 +70,16 @@ export function CatalogProductCard({
   const handleAddToCart = (event) => {
     event.stopPropagation();
     if (availableStock <= 0 || addedFeedback) return;
-    triggerHaptic("medium");
-    setAddedFeedback(true);
-    onAddToCart(
+    const added = onAddToCart(
       product,
       { sourceElement: event.currentTarget, image: currentImage },
       { color: selectedColor, size: selectedSize }
     );
-    setTimeout(() => {
+    if (added === false) return;
+    triggerHaptic("medium");
+    setAddedFeedback(true);
+    clearTimeout(feedbackTimerRef.current);
+    feedbackTimerRef.current = setTimeout(() => {
       setAddedFeedback(false);
     }, 1200);
   };
@@ -89,7 +87,7 @@ export function CatalogProductCard({
   const handleMainButtonClick = (event) => {
     event.stopPropagation();
     if (availableStock <= 0) return;
-    const isMobile = typeof window !== "undefined" && window.innerWidth <= 768;
+    const isMobile = typeof window !== "undefined" && window.innerWidth <= 760;
     if (isMobile) {
       triggerHaptic("selection");
       setIsSelectingSize(true);
@@ -114,7 +112,7 @@ export function CatalogProductCard({
             <Motion.img
               key={`${product.id}-${selectedColor}-${currentImage}`}
               src={currentImage}
-              srcSet={getResponsiveSources(currentImage)}
+              srcSet={getResponsiveImageSources(currentImage)}
               sizes="(max-width: 768px) 50vw, (max-width: 1100px) 33vw, 25vw"
               alt={product.name}
               loading="lazy"
@@ -124,11 +122,7 @@ export function CatalogProductCard({
               exit={{ opacity: 0, scale: 0.99 }}
               transition={{ duration: ANIMATION.fast, ease: ANIMATION.easeOut }}
               className="product-img"
-              onError={(event) => {
-                if (event.currentTarget.src !== FALLBACK_IMAGE) {
-                  event.currentTarget.src = FALLBACK_IMAGE;
-                }
-              }}
+              onError={(event) => applyImageFallback(event.currentTarget, FALLBACK_IMAGE)}
             />
           </AnimatePresence>
         </a>
@@ -168,7 +162,7 @@ export function CatalogProductCard({
                 onOpenDetail(product, { color: selectedColor, size: selectedSize });
               }}
             >
-              <h4 className="product-card-title">{product.name}</h4>
+              <h3 className="product-card-title">{product.name}</h3>
             </a>
           </div>
           <div className="product-card-price-group">
@@ -280,15 +274,17 @@ export function CatalogProductCard({
                     onClick={(event) => {
                       event.stopPropagation();
                       if (isOutOfStock || isLocked) return;
-                      triggerHaptic("medium");
-                      setJustAddedSize(size);
-                      onChange(product.id, "size", size);
-                      onAddToCart(
+                      const added = onAddToCart(
                         product,
                         { sourceElement: event.currentTarget, image: currentImage },
                         { color: selectedColor, size }
                       );
-                      setTimeout(() => {
+                      if (added === false) return;
+                      triggerHaptic("medium");
+                      setJustAddedSize(size);
+                      onChange(product.id, "size", size);
+                      clearTimeout(feedbackTimerRef.current);
+                      feedbackTimerRef.current = setTimeout(() => {
                         setIsSelectingSize(false);
                         setJustAddedSize("");
                       }, 400);
@@ -338,14 +334,7 @@ export function CatalogProductCard({
   );
 }
 
-export const MemoCatalogProductCard = React.memo(
-  CatalogProductCard,
-  (prev, next) => (
-    prev.product === next.product
-    && prev.selection === next.selection
-    && prev.isFavorite === next.isFavorite
-    && prev.isAdmin === next.isAdmin
-  ),
-);
+// Compare callbacks too: ignoring them retains stale cart/stock/edit closures.
+export const MemoCatalogProductCard = React.memo(CatalogProductCard);
 
 export default MemoCatalogProductCard;

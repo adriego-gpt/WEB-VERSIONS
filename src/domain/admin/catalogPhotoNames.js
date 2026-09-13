@@ -129,6 +129,16 @@ export function validateCatalogPhotoFiles(files = []) {
   return { files: accepted, errors: [...new Set(errors)] };
 }
 
+// Keep the current selection when adding another folder or reopening the picker.
+export function mergeCatalogPhotoFiles(currentFiles = [], addedFiles = []) {
+  const unique = new Map();
+  for (const file of [...currentFiles, ...Array.from(addedFiles || [])]) {
+    const key = JSON.stringify([file?.name, file?.type, file?.size, file?.lastModified]);
+    if (!unique.has(key)) unique.set(key, file);
+  }
+  return validateCatalogPhotoFiles([...unique.values()]);
+}
+
 export function groupCatalogPhotoFiles(files = []) {
   const groups = new Map();
   const errors = [];

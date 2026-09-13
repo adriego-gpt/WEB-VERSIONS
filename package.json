@@ -5,23 +5,26 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "node scripts/build-production.mjs",
     "lint": "eslint .",
     "preview": "vite preview",
     "test:e2e:critical": "node tests/e2e/critical-flows.test.mjs",
     "test:e2e:realtime": "node tests/e2e/realtime-sync.test.mjs",
     "test:e2e:security": "node tests/e2e/security-contracts.test.mjs",
     "test:e2e:concurrency": "node --test tests/e2e/concurrency-offensive.test.mjs",
-    "test:e2e": "npm run test:e2e:critical && npm run test:e2e:realtime && npm run test:e2e:security && npm run test:e2e:concurrency && node tests/e2e/inventory-regressions.test.mjs",
+    "test:e2e": "node scripts/run-tests.mjs e2e",
+    "test:all": "node scripts/run-tests.mjs all",
+    "check:release": "npm run lint && npm run test:all && npm run build",
+    "dev:audit": "node scripts/serve-audit.mjs",
     "test:unit:analytics": "node --test tests/unit/analytics-service.test.mjs",
     "test:unit:remote-state": "node --test tests/unit/remote-state.test.mjs",
     "test:unit:sync": "node --test tests/unit/sync-domain.test.mjs tests/unit/sync-hooks.test.mjs",
-    "test:unit": "node --test --test-concurrency=1 tests/unit/*.test.mjs"
+    "test:unit": "node scripts/run-tests.mjs unit"
   },
   "dependencies": {
     "framer-motion": "^12.38.0",
     "lucide-react": "^1.7.0",
-    "nodemailer": "^9.0.5",
+    "nodemailer": "^9.1.1",
     "react": "^19.2.4",
     "react-dom": "^19.2.4"
   },

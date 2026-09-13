@@ -1,11 +1,12 @@
 import React from "react";
 
-export function AdminSectionHeader({ title, description, actions, meta, titleId }) {
+export function AdminSectionHeader({ title, description, actions, meta, titleId, headingLevel = 4 }) {
+  const Heading = headingLevel === 2 ? "h2" : "h4";
   return (
     <header className="admin-workspace-header">
       <div className="admin-workspace-heading">
         <div className="admin-workspace-title-row">
-          <h4 id={titleId}>{title}</h4>
+          <Heading id={titleId}>{title}</Heading>
           {meta}
         </div>
         {description && <p>{description}</p>}
@@ -14,4 +15,3 @@ export function AdminSectionHeader({ title, description, actions, meta, titleId 
     </header>
   );
 }
-

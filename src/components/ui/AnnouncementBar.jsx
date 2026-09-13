@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from "react";
 import { Truck, ShieldCheck, Sparkles } from "lucide-react";
-import { motion as Motion, AnimatePresence } from "framer-motion";
+import { motion as Motion, AnimatePresence, useReducedMotion } from "framer-motion";
 
 const ANNOUNCEMENTS = [
   {
     id: "shipping",
     icon: Truck,
-    text: "Envíos nacionales · Pagos 100% seguros",
+    text: "Envíos nacionales · Transferencia o tarjeta",
   },
   {
     id: "guarantee",
@@ -16,19 +16,22 @@ const ANNOUNCEMENTS = [
   {
     id: "collection",
     icon: Sparkles,
-    text: "Colección 2026 · Ya disponible",
+    text: "Explora la colección · Ya disponible",
   },
 ];
 
-export function AnnouncementBar() {
+export function AnnouncementBar({ paused = false }) {
   const [currentIndex, setCurrentIndex] = useState(0);
+  const reduceMotion = useReducedMotion();
 
   useEffect(() => {
+    if (paused || reduceMotion) return undefined;
     const timer = setInterval(() => {
+      if (document.hidden) return;
       setCurrentIndex((index) => (index + 1) % ANNOUNCEMENTS.length);
     }, 4500);
     return () => clearInterval(timer);
-  }, []);
+  }, [paused, reduceMotion]);
 
   const currentItem = ANNOUNCEMENTS[currentIndex];
   const CurrentIcon = currentItem.icon;

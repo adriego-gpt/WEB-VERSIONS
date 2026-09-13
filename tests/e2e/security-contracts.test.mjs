@@ -175,6 +175,7 @@ async function getCsrfToken(cookieJar) {
 test("Security Contracts", async (t) => {
   await t.test("Setup base catalog", async () => {
     await updateStore((draft) => {
+      draft.contactSettings = { whatsappNumber: "593999999999" };
       draft.products = [
         {
           id: "prod-sec",

@@ -173,6 +173,7 @@ async function getCsrfToken(cookieJar) {
 test("Offensive Concurrency & Race Condition Suite", async (t) => {
   // Setup product with stock = 1
   await updateStore((draft) => {
+    draft.contactSettings = { whatsappNumber: "593999999999" };
     draft.products = [
       {
         id: "prod-scarce",

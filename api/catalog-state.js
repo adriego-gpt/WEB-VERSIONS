@@ -1,6 +1,7 @@
 
 import { createHmac, randomUUID } from "node:crypto";
 import { Buffer } from "node:buffer";
+import { fetchWithTimeout } from "./_lib/network.js";
 import { bumpRealtimeMeta, getStoreBackend, readStore, updateStore } from "./_lib/store.js";
 import {
   sanitizeAdminCatalogPayload,
@@ -138,7 +139,7 @@ function getImageKitAuthorization(privateKey = "") {
   return `Basic ${Buffer.from(`${String(privateKey)}:`).toString("base64")}`;
 }
 
-async function deleteImageKitCatalogAssets(paths = [], privateKey = "", fetchFn = fetch) {
+async function deleteImageKitCatalogAssets(paths = [], privateKey = "", fetchFn = fetchWithTimeout) {
   const pendingPaths = getPendingImageCleanupPaths(paths).slice(0, MAX_IMAGE_CLEANUP_PER_SYNC);
   const deletedPaths = [];
   const retryPaths = [];
@@ -147,13 +148,15 @@ async function deleteImageKitCatalogAssets(paths = [], privateKey = "", fetchFn 
   }
 
   const headers = { Accept: "application/json", Authorization: getImageKitAuthorization(privateKey) };
-  for (const imagePath of pendingPaths) {
+  const signal = AbortSignal.timeout(6000);
+  for (const [index, imagePath] of pendingPaths.entries()) {
+    if (signal.aborted) { retryPaths.push(...pendingPaths.slice(index)); break; }
     const segments = imagePath.split("/").filter(Boolean);
     const fileName = segments.pop();
     const folderPath = `/${segments.join("/")}`;
     try {
       const query = new URLSearchParams({ path: folderPath, searchQuery: `name = "${fileName}"`, fileType: "image", limit: "10" });
-      const lookup = await fetchFn(`${IMAGEKIT_API_URL}?${query.toString()}`, { headers });
+      const lookup = await fetchFn(`${IMAGEKIT_API_URL}?${query.toString()}`, { headers, signal });
       if (!lookup.ok) throw new Error(`imagekit-list-${lookup.status}`);
       const files = await lookup.json();
       const matchingFiles = (Array.isArray(files) ? files : []).filter((file) => (
@@ -165,7 +168,7 @@ async function deleteImageKitCatalogAssets(paths = [], privateKey = "", fetchFn 
         continue;
       }
       const deleteResults = await Promise.all(matchingFiles.map(async (file) => {
-        const response = await fetchFn(`${IMAGEKIT_API_URL}/${encodeURIComponent(file.fileId)}`, { method: "DELETE", headers });
+        const response = await fetchFn(`${IMAGEKIT_API_URL}/${encodeURIComponent(file.fileId)}`, { method: "DELETE", headers, signal });
         if (!response.ok && response.status !== 404) throw new Error(`imagekit-delete-${response.status}`);
       }));
       void deleteResults;
@@ -268,6 +271,10 @@ export default async function handler(req, res) {
   }
 
   if (action === "get" || isPublicRead) {
+    if (!["GET", "HEAD"].includes(String(req.method || "GET").toUpperCase())) {
+      res.setHeader("Allow", "GET, HEAD");
+      return res.status(405).json({ ok: false, message: "Method not allowed" });
+    }
     const rateLimit = await consumeRateLimit(isPublicRead ? "catalog-get-public-ip" : "catalog-get-ip", clientIp, 180, 10 * 60 * 1000, {
       endpoint: ENDPOINT_NAME,
       ip: clientIp,

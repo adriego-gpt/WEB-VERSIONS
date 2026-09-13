@@ -1,50 +1,19 @@
 import { useEffect } from "react";
 import { getCatalogState } from "../services/serverStateService.js";
-import { shouldRevalidateCatalogCache } from "../domain/sync/syncCalculations.js";
+import { bootstrapCatalog } from "../domain/sync/bootstrapCatalog.js";
 
 /**
  * Loads cached catalog state first and then revalidates it when needed.
  * The caller owns state normalization so this hook stays transport-focused.
  */
-export function useCatalogBootstrap({ applyCatalogState, setCatalogReady, admin = false }) {
+export function useCatalogBootstrap({ applyCatalogState, setCatalogReady, setCatalogError, admin = false }) {
   useEffect(() => {
     let cancelled = false;
 
-    const loadCatalog = async () => {
-      try {
-        const result = await getCatalogState({
-          admin: Boolean(admin),
-          preferCache: !admin,
-          force: Boolean(admin),
-        });
-        if (cancelled) return;
-
-        if (result?.ok && result?.data) {
-          applyCatalogState(result.data);
-        }
-        setCatalogReady(true);
-
-        if (!shouldRevalidateCatalogCache(result)) return;
-
-        const freshResult = await getCatalogState({
-          admin: Boolean(admin),
-          preferCache: false,
-          force: true,
-        });
-        if (!cancelled && freshResult?.ok && freshResult?.data) {
-          applyCatalogState(freshResult.data);
-        }
-      } catch {
-        // Guarantee catalog is marked ready even on network/fetch errors
-        if (!cancelled) {
-          setCatalogReady(true);
-        }
-      }
-    };
-
-    void loadCatalog();
+    void bootstrapCatalog({ getCatalogState, applyCatalogState, setCatalogReady, setCatalogError, admin,
+      isCancelled: () => cancelled });
     return () => {
       cancelled = true;
     };
-  }, [admin, applyCatalogState, setCatalogReady]);
+  }, [admin, applyCatalogState, setCatalogReady, setCatalogError]);
 }

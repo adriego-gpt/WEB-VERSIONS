@@ -1,10 +1,11 @@
 
 import fs from "node:fs/promises";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { pathToFileURL, fileURLToPath } from "node:url";
 import { Buffer } from "node:buffer";
 import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
+import { DEFAULT_PUBLIC_SITE_ORIGIN, normalizePublicSiteOrigin } from "./src/constants/site.js";
 
 const MAX_DEV_API_BODY_BYTES = Math.max(64 * 1024, Number(process.env.MAX_DEV_API_BODY_BYTES) || (4 * 1024 * 1024));
 
@@ -59,7 +60,7 @@ async function readRawBody(req) {
 }
 
 function localApiPlugin() {
-  const apiRoot = path.resolve(process.cwd(), "api");
+  const apiRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), "api");
 
   return {
     name: "local-api-plugin",
@@ -72,6 +73,7 @@ function localApiPlugin() {
         }
 
         const routePath = requestUrl.pathname.replace(/^\/api\//, "");
+        if (!/^[a-z][a-z0-9-]*$/.test(routePath)) { res.statusCode = 404; res.end(); return; }
         const filePath = path.join(apiRoot, `${routePath}.js`);
 
         try {
@@ -139,8 +141,18 @@ export default defineConfig(({ mode }) => {
     }
   });
 
+  const configuredSiteUrl = process.env.PUBLIC_SITE_URL || process.env.VITE_PUBLIC_SITE_URL || DEFAULT_PUBLIC_SITE_ORIGIN;
+  const publicSiteOrigin = normalizePublicSiteOrigin(configuredSiteUrl);
+  if (!publicSiteOrigin) throw new Error("PUBLIC_SITE_URL debe ser un origen HTTPS válido, sin rutas, credenciales ni parámetros.");
+
   return {
-    plugins: [react(), localApiPlugin()],
+    plugins: [react(), localApiPlugin(), {
+      name: "public-site-origin",
+      transformIndexHtml(html) {
+        return html.replaceAll(DEFAULT_PUBLIC_SITE_ORIGIN, publicSiteOrigin);
+      },
+    }],
+    define: { "import.meta.env.VITE_PUBLIC_SITE_URL": JSON.stringify(publicSiteOrigin) },
     resolve: {
       // Keep runtime hooks and icon components on the exact same React instance.
       dedupe: ["react", "react-dom"],

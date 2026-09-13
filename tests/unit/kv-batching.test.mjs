@@ -129,3 +129,60 @@ test("corrupt persisted state aborts updates without replacing it with an empty 
     values.set(key, original);
   }
 });
+
+test("order erasure cleans all existing backups and the newly created backup atomically", async () => {
+  const key = "adriego:store:v1";
+  await storeModule.updateStore((draft) => {
+    draft.orders = [
+      { id: "test-delete", paymentProof: "data:image/png;base64,dGVzdA==" },
+      { id: "real-keep", paymentProof: "data:image/png;base64,dGVzdA==" },
+    ];
+    return draft;
+  });
+  const before = JSON.parse(values.get(key));
+  for (let index = 0; index < 3; index += 1) values.set(`${key}:backup:${index}`, JSON.stringify(before));
+  await storeModule.updateStore((draft) => {
+    draft.orders = draft.orders.filter((order) => order.id !== "test-delete");
+    storeModule.bumpRealtimeMeta(draft, ["orders", "catalog"]);
+    return draft;
+  });
+  for (const snapshotKey of [key, ...[0, 1, 2].map((index) => `${key}:backup:${index}`)]) {
+    const snapshot = JSON.parse(values.get(snapshotKey));
+    assert.equal(snapshot.orders.some((order) => order.id === "test-delete"), false);
+    assert.equal(snapshot.orders[0].paymentProof, "data:image/png;base64,dGVzdA==");
+    assert.deepEqual(snapshot.products, before.products);
+  }
+  const transaction = calls.findLast((call) => call.url.endsWith("/multi-exec"));
+  assert.ok(transaction.body.some((command) => command[1] === key));
+  assert.ok(transaction.body.some((command) => command[1] === `${key}:realtime`));
+  assert.equal(transaction.body.filter((command) => command[1].includes(":backup:")).length, 4);
+});
+
+test("proof replacement erases old backup images but preserves the replacement", async () => {
+  const key = "adriego:store:v1";
+  await storeModule.updateStore((draft) => {
+    draft.orders[0].paymentProof = "data:image/png;base64,bmV3";
+    storeModule.bumpRealtimeMeta(draft, ["orders"]);
+    return draft;
+  });
+  assert.equal(JSON.parse(values.get(key)).orders[0].paymentProof, "data:image/png;base64,bmV3");
+  for (let index = 0; index < 3; index += 1) {
+    assert.equal(JSON.parse(values.get(`${key}:backup:${index}`)).orders[0].paymentProof, "");
+  }
+});
+
+test("a corrupt backup blocks erasure without deleting live data or catalog backups", async () => {
+  const key = "adriego:store:v1";
+  const before = values.get(key);
+  const backup = values.get(`${key}:backup:0`);
+  values.set(`${key}:backup:0`, "{corrupt");
+  const count = calls.filter((call) => call.url.endsWith("/multi-exec")).length;
+  try {
+    await assert.rejects(storeModule.updateStore((draft) => { draft.orders = []; return draft; }), /order-backup-corrupt-refusing-erasure/);
+    assert.equal(values.get(key), before);
+    assert.equal(values.get(`${key}:backup:0`), "{corrupt");
+    assert.equal(calls.filter((call) => call.url.endsWith("/multi-exec")).length, count);
+  } finally {
+    values.set(`${key}:backup:0`, backup);
+  }
+});

@@ -39,7 +39,7 @@ process.env.ADMIN_PASSWORD_HASH = crypto.scryptSync(ADMIN_PASSWORD, adminSalt, 6
 
 const importFromProject = (relativePath) => import(pathToFileURL(path.join(PROJECT_ROOT, relativePath)).href);
 
-const [{ updateStore }, { default: csrfTokenHandler }, { default: userAuthHandler }, { default: adminSessionHandler }, { default: catalogStateHandler }, { default: checkoutOrderHandler }, { default: ordersHandler }, { default: couponPreviewHandler }, { default: securityMetricsHandler }, { default: adminUsersHandler }] = await Promise.all([
+const [{ updateStore, readStore }, { default: csrfTokenHandler }, { default: userAuthHandler }, { default: adminSessionHandler }, { default: catalogStateHandler }, { default: checkoutOrderHandler }, { default: ordersHandler }, { default: couponPreviewHandler }, { default: securityMetricsHandler }, { default: adminUsersHandler }] = await Promise.all([
   importFromProject("api/_lib/store.js"),
   importFromProject("api/csrf-token.js"),
   importFromProject("api/user-auth.js"),
@@ -924,6 +924,36 @@ test("critical user/admin flows and security monitoring", async () => {
     .find((order) => String(order.id || "") === transferOrderId);
   assert.equal(transferOrderRecord?.paymentProof, BANK_QR_IMAGE, "The proof should remain visible in order history");
   assert.equal(transferOrderRecord?.paymentBankAccount?.id, "bank-prueba-2");
+
+  const stockBeforeDelete = (await readStore()).products.find((product) => product.id === "prod-1").variants[0].stock;
+  const customerDelete = await callApi(ordersHandler, {
+    method: "POST", query: { action: "delete" }, cookieJar: userCookies, csrfToken: userCsrf,
+    json: { orderId: transferOrderId },
+  });
+  assert.equal(customerDelete.statusCode, 403, "customers cannot permanently delete orders");
+  const deleteWithoutCsrf = await callApi(ordersHandler, {
+    method: "POST", query: { action: "delete" }, cookieJar: adminCookies,
+    json: { orderId: transferOrderId },
+  });
+  assert.equal(deleteWithoutCsrf.statusCode, 403);
+  const deletedTransfer = await callApi(ordersHandler, {
+    method: "POST", query: { action: "delete" }, cookieJar: adminCookies, csrfToken: adminCsrf,
+    json: { orderId: transferOrderId },
+  });
+  assert.equal(deletedTransfer.statusCode, 200);
+  assert.equal(deletedTransfer.jsonBody.orderHistory.some((order) => order.id === transferOrderId), false);
+  const afterDelete = await readStore();
+  assert.equal(afterDelete.orders.some((order) => order.id === transferOrderId), false);
+  assert.equal(afterDelete.products.find((product) => product.id === "prod-1").variants[0].stock, stockBeforeDelete + 1);
+  assert.equal(afterDelete.contactSettings.paymentSettings.bankQrImage, BANK_QR_IMAGE, "shared bank and catalog images must remain");
+  const deleteAgain = await callApi(ordersHandler, {
+    method: "POST", query: { action: "delete" }, cookieJar: adminCookies, csrfToken: adminCsrf,
+    json: { orderId: transferOrderId },
+  });
+  assert.equal(deleteAgain.statusCode, 404);
+  assert.equal((await readStore()).products.find((product) => product.id === "prod-1").variants[0].stock, stockBeforeDelete + 1);
+  const persisted = JSON.parse(await fs.readFile(path.join(sandboxCwd, ".data", "store.json"), "utf8"));
+  assert.equal(persisted.orders.some((order) => order.id === transferOrderId), false, "the order and inline proof are erased from the database file");
 
   await updateStore((draft) => {
     draft.products = (Array.isArray(draft.products) ? draft.products : []).map((product) => (

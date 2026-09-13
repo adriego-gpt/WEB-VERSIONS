@@ -7,7 +7,9 @@ import {
   setCommonSecurityHeaders,
 } from "./_lib/security.js";
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
+import { fetchWithTimeout } from "./_lib/network.js";
 import { bumpRealtimeMeta, readStore, updateStore } from "./_lib/store.js";
+import { deleteOrderFromDraft } from "./orders.js";
 import {
   escapeTelegramMarkdown,
   isAuthorizedAdminChatId,
@@ -15,6 +17,8 @@ import {
   formatTelegramOrderMessage,
   TELEGRAM_BOT_COMMANDS,
   registerTelegramBotCommands,
+  ensureTelegramBotCommandsRegistered,
+  getAdminPanelUrl,
 } from "./_lib/notifications.js";
 
 const ENDPOINT_NAME = "telegram-webhook";
@@ -33,15 +37,15 @@ const ADMIN_KEYBOARD_MARKUP = {
   input_field_placeholder: "Elige una acción",
 };
 
-async function answerCallbackQuery(token, callbackQueryId, text = "") {
+async function answerCallbackQuery(token, callbackQueryId, text = "", options = {}) {
   try {
-    await fetch("https://api.telegram.org/bot" + token + "/answerCallbackQuery", {
+    await fetchWithTimeout("https://api.telegram.org/bot" + token + "/answerCallbackQuery", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         callback_query_id: callbackQueryId,
         text,
-        show_alert: false,
+        show_alert: Boolean(options?.show_alert),
       }),
     });
   } catch (err) {
@@ -59,7 +63,7 @@ async function sendTelegramMessage(token, chatId, text, options = {}) {
       reply_markup: ADMIN_KEYBOARD_MARKUP,
       ...options,
     };
-    const response = await fetch("https://api.telegram.org/bot" + token + "/sendMessage", {
+    const response = await fetchWithTimeout("https://api.telegram.org/bot" + token + "/sendMessage", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -77,7 +81,7 @@ async function editTelegramMessage(token, chatId, messageId, text, options = {})
   }
 
   try {
-    const response = await fetch("https://api.telegram.org/bot" + token + "/editMessageText", {
+    const response = await fetchWithTimeout("https://api.telegram.org/bot" + token + "/editMessageText", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -104,7 +108,7 @@ async function deleteTelegramMessage(token, chatId, messageId) {
     return { ok: false, error: "Invalid messageId" };
   }
   try {
-    const response = await fetch("https://api.telegram.org/bot" + token + "/deleteMessage", {
+    const response = await fetchWithTimeout("https://api.telegram.org/bot" + token + "/deleteMessage", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -125,7 +129,7 @@ async function sendTelegramPhoto(token, chatId, photoSource, caption = "", optio
 
   try {
     if (url.startsWith("http://") || url.startsWith("https://")) {
-      const response = await fetch("https://api.telegram.org/bot" + token + "/sendPhoto", {
+      const response = await fetchWithTimeout("https://api.telegram.org/bot" + token + "/sendPhoto", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -163,7 +167,7 @@ async function sendTelegramPhoto(token, chatId, photoSource, caption = "", optio
           );
         }
 
-        const response = await fetch("https://api.telegram.org/bot" + token + "/sendPhoto", {
+        const response = await fetchWithTimeout("https://api.telegram.org/bot" + token + "/sendPhoto", {
           method: "POST",
           body: formData,
         });
@@ -220,6 +224,7 @@ function getProductTotalStock(product) {
 function normalizeTypeName(name = "") {
   return String(name || "")
     .trim()
+    .replace(/\s+/g, " ")
     .toLowerCase()
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "");
@@ -265,11 +270,11 @@ function getAvailableProductTypes(products = [], declaredTypes = []) {
 
     if (!matched) {
       for (const entry of typesMap.values()) {
-        const needle = entry.name.toLowerCase();
+        const needle = normalizeTypeName(entry.name);
         if (
-          productName.toLowerCase().includes(needle)
-          || productCategory.toLowerCase().includes(needle)
-          || tags.some((tag) => String(tag).toLowerCase().includes(needle))
+          normalizeTypeName(productName).includes(needle)
+          || normalizeTypeName(productCategory).includes(needle)
+          || tags.some((tag) => normalizeTypeName(tag).includes(needle))
         ) {
           entry.count += 1;
           entry.totalStock += stock;
@@ -281,7 +286,7 @@ function getAvailableProductTypes(products = [], declaredTypes = []) {
     }
 
     if (!matched) {
-      const generalKey = "otras";
+      const generalKey = normalizeTypeName("Otras prendas");
       if (!typesMap.has(generalKey)) {
         typesMap.set(generalKey, { name: "Otras prendas", count: 0, totalStock: 0, products: [] });
       }
@@ -295,109 +300,111 @@ function getAvailableProductTypes(products = [], declaredTypes = []) {
   return Array.from(typesMap.values()).filter((entry) => entry.count > 0 || declaredList.includes(entry.name));
 }
 
-function buildInventoryTypesView(store = {}) {
-  const products = Array.isArray(store?.products) ? store.products : [];
-  const productTypes = Array.isArray(store?.productTypes) ? store.productTypes : [];
-  const types = getAvailableProductTypes(products, productTypes);
+function getInventoryBrowseTypes(store = {}) {
+  return getAvailableProductTypes(store.products, store.productTypes)
+    .map((entry) => {
+      const products = entry.products.filter((product) => getProductOptions(product).colors.length > 0);
+      return { ...entry, products, count: products.length };
+    })
+    .filter((entry) => entry.count > 0)
+    .sort((left, right) => left.name.localeCompare(right.name, "es"));
+}
 
-  const keyboard = [];
-  const typeButtons = types.map((entry, index) => {
-    const stockBadge = entry.totalStock > 0 ? `· ${entry.totalStock} disp.` : "· 0 disp.";
-    return {
-      text: `${entry.name} ${stockBadge}`,
-      callback_data: `inv:type:${index}:0`,
-    };
-  });
+function getInventoryTypeToken(typeName) {
+  return createHash("sha256").update(normalizeTypeName(typeName)).digest("base64url").slice(0, 12);
+}
 
-  for (let i = 0; i < typeButtons.length; i += 2) {
-    if (i + 1 < typeButtons.length) {
-      keyboard.push([typeButtons[i], typeButtons[i + 1]]);
-    } else {
-      keyboard.push([typeButtons[i]]);
+function getInventoryModeNavigation(mode) {
+  return mode === "restock"
+    ? { title: "➕ Reponer stock", types: "inv:add:types", type: "inv:add:type", search: "inv:add:search" }
+    : { title: "➖ Registrar venta", types: "inv:types", type: "inv:type", search: "inv:search" };
+}
+
+function getInventoryPage(requestedPage, itemCount, pageSize) {
+  const totalPages = Math.max(1, Math.ceil(itemCount / pageSize));
+  const rawPage = Number(requestedPage);
+  const currentPage = Math.min(Number.isSafeInteger(rawPage) ? Math.max(0, rawPage) : 0, totalPages - 1);
+  return { totalPages, currentPage, start: currentPage * pageSize };
+}
+
+function sortInventoryModels(products, mode) {
+  return products.slice().sort((left, right) => {
+    if (mode !== "restock") {
+      const availableLeft = getProductTotalStock(left) > 0;
+      const availableRight = getProductTotalStock(right) > 0;
+      if (availableLeft !== availableRight) return availableLeft ? -1 : 1;
     }
-  }
+    return String(left.name || "").localeCompare(String(right.name || ""), "es")
+      || String(left.id).localeCompare(String(right.id));
+  });
+}
 
-  keyboard.push([
-    { text: "🔥 Ver con stock disponible", callback_data: "inv:instock:0" },
-    { text: "🔎 Buscar por nombre", callback_data: "inv:search" },
-  ]);
-  keyboard.push([{ text: "↩️ Menú inventario", callback_data: "inv:menu" }]);
-
+function buildInventoryTypesView(store = {}, { mode = "sale", page = 0 } = {}) {
+  const types = getInventoryBrowseTypes(store);
+  const navigation = getInventoryModeNavigation(mode);
+  const pageSize = 8;
+  const { totalPages, currentPage, start } = getInventoryPage(page, types.length, pageSize);
+  const keyboard = types.slice(start, start + pageSize).map((entry) => [{
+    text: `${entry.name.slice(0, 36)} · ${entry.count} modelo${entry.count === 1 ? "" : "s"}`,
+    callback_data: `${navigation.type}:${getInventoryTypeToken(entry.name)}:0`,
+  }]);
+  const pageButtons = [];
+  if (currentPage > 0) pageButtons.push({ text: "← Anterior", callback_data: `${navigation.types}:${currentPage - 1}` });
+  if (currentPage < totalPages - 1) pageButtons.push({ text: "Siguiente →", callback_data: `${navigation.types}:${currentPage + 1}` });
+  if (pageButtons.length) keyboard.push(pageButtons);
+  keyboard.push([{ text: "🔎 Buscar modelo por nombre", callback_data: navigation.search }]);
+  if (mode === "restock") keyboard.push([{ text: "⚠️ Solo stock bajo", callback_data: "inv:restock:0" }]);
+  else keyboard.push([{ text: "🔥 Todos con stock", callback_data: "inv:instock:0" }]);
+  keyboard.push([{ text: "↩️ Inventario", callback_data: "inv:menu" }]);
   return {
-    text: "🗂️ *Filtrar por tipo de prenda*\n━━━━━━━━━━━━━━━━━━━━\nElige una categoría (ej: *Cortas*, *Largas*, etc.) para ver prendas y disponibilidad:",
+    text: `*${navigation.title}*\n\n${types.length ? "Elige el tipo de prenda." : "No hay modelos con variantes registrados. Añádelos al catálogo de la tienda."}${totalPages > 1 ? `\nPágina ${currentPage + 1} de ${totalPages}.` : ""}`,
     reply_markup: { inline_keyboard: keyboard },
   };
 }
 
-function buildInventoryProductsByTypeView(store = {}, typeIndex = 0, page = 0) {
-  const products = Array.isArray(store?.products) ? store.products : [];
-  const productTypes = Array.isArray(store?.productTypes) ? store.productTypes : [];
-  const types = getAvailableProductTypes(products, productTypes);
-  const targetType = types[Number(typeIndex)] || types[0];
-
+function buildInventoryProductsByTypeView(store = {}, typeToken = "", page = 0, { mode = "sale" } = {}) {
+  const navigation = getInventoryModeNavigation(mode);
+  const targetType = getInventoryBrowseTypes(store).find((entry) => getInventoryTypeToken(entry.name) === typeToken);
   if (!targetType) {
-    return {
-      text: "⚠️ No se encontró el tipo de prenda seleccionado.",
-      reply_markup: { inline_keyboard: [[{ text: "↩️ Ver tipos", callback_data: "inv:types" }]] },
-    };
+    // Old numeric callbacks cannot safely identify a type after catalog edits.
+    const view = buildInventoryTypesView(store, { mode });
+    return { ...view, text: `*${navigation.title}*\n\nEl tipo cambió o este menú es anterior. Vuelve a elegir el tipo de prenda.` };
   }
-
-  const typeProducts = (targetType.products || []).slice().sort((a, b) => {
-    const stockA = getProductTotalStock(a);
-    const stockB = getProductTotalStock(b);
-    if ((stockA > 0) !== (stockB > 0)) return stockB - stockA;
-    return stockB - stockA || String(a.name || "").localeCompare(String(b.name || ""), "es");
-  });
-
-  const PAGE_SIZE = 6;
-  const safePage = Math.max(0, Math.floor(Number(page) || 0));
-  const totalPages = Math.max(1, Math.ceil(typeProducts.length / PAGE_SIZE));
-  const currentPage = Math.min(safePage, totalPages - 1);
-  const startIndex = currentPage * PAGE_SIZE;
-  const paginated = typeProducts.slice(startIndex, startIndex + PAGE_SIZE);
-
-  if (!paginated.length) {
-    return {
-      text: `🗂️ *Tipo: ${escapeTelegramMarkdown(targetType.name)}*\n━━━━━━━━━━━━━━━━━━━━\n⚠️ No hay prendas registradas en esta categoría actualmente.`,
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: "🔎 Buscar por nombre", callback_data: "inv:search" }],
-          [{ text: "🗂️ Ver otros tipos", callback_data: "inv:types" }],
-          [{ text: "↩️ Inventario", callback_data: "inv:menu" }],
-        ],
-      },
-    };
-  }
-
-  const keyboard = [];
-  paginated.forEach((product) => {
+  const models = sortInventoryModels(targetType.products, mode);
+  const pageSize = 6;
+  const { totalPages, currentPage, start } = getInventoryPage(page, models.length, pageSize);
+  const keyboard = models.slice(start, start + pageSize).map((product) => {
     const stock = getProductTotalStock(product);
-    const badge = stock > 0 ? `· ${stock} disp.` : "· ❌ Agotado";
-    const label = `${String(product.name || "Producto").slice(0, 32)} ${badge}`;
-    keyboard.push([{
-      text: label,
-      callback_data: stock > 0 ? `inv:product:${getProductToken(product.id)}` : "inv:nostock",
-    }]);
+    return [{
+      text: `${String(product.name || "Modelo").slice(0, 44)} · ${stock > 0 ? `${stock} disp.` : "Agotado"}`,
+      callback_data: mode === "restock"
+        ? `inv:add:product:${getProductToken(product.id)}`
+        : stock > 0 ? `inv:product:${getProductToken(product.id)}` : "inv:nostock",
+    }];
   });
-
-  const navRow = [];
-  if (currentPage > 0) {
-    navRow.push({ text: "⬅️ Anterior", callback_data: `inv:type:${typeIndex}:${currentPage - 1}` });
+  const pageButtons = [];
+  if (currentPage > 0) pageButtons.push({ text: "← Anterior", callback_data: `${navigation.type}:${typeToken}:${currentPage - 1}` });
+  if (currentPage < totalPages - 1) pageButtons.push({ text: "Siguiente →", callback_data: `${navigation.type}:${typeToken}:${currentPage + 1}` });
+  if (pageButtons.length) keyboard.push(pageButtons);
+  if (mode !== "restock" && !targetType.products.some((product) => getProductTotalStock(product) > 0)) {
+    keyboard.push([{ text: "➕ Reponer este tipo", callback_data: `inv:add:type:${typeToken}:0` }]);
   }
-  if (currentPage < totalPages - 1) {
-    navRow.push({ text: "Siguiente ➡️", callback_data: `inv:type:${typeIndex}:${currentPage + 1}` });
-  }
-  if (navRow.length) keyboard.push(navRow);
-
-  keyboard.push([
-    { text: "🗂️ Ver otros tipos", callback_data: "inv:types" },
-    { text: "↩️ Inventario", callback_data: "inv:menu" },
-  ]);
-
-  const pageBadge = totalPages > 1 ? ` · Pág. ${currentPage + 1}/${totalPages}` : "";
+  keyboard.push([{ text: "↩️ Cambiar tipo", callback_data: navigation.types }]);
+  keyboard.push([{ text: "⌂ Inventario", callback_data: "inv:menu" }]);
   return {
-    text: `🗂️ *Prendas: ${escapeTelegramMarkdown(targetType.name)}* (${targetType.totalStock} disp.${pageBadge})\n━━━━━━━━━━━━━━━━━━━━\nSelecciona una prenda para registrar la venta:`,
+    text: `*${navigation.title} · ${escapeTelegramMarkdown(targetType.name)}*\n\nElige el modelo${mode === "restock" ? ", incluso si está agotado" : " que vendiste"}.${totalPages > 1 ? `\nPágina ${currentPage + 1} de ${totalPages}.` : ""}`,
     reply_markup: { inline_keyboard: keyboard },
+  };
+}
+
+function buildInventoryModelsBackButton(store, product, mode = "sale") {
+  const navigation = getInventoryModeNavigation(mode);
+  const type = getInventoryBrowseTypes(store).find((entry) => entry.products.some((model) => String(model.id) === String(product?.id)));
+  if (!type) return { text: "↩️ Elegir tipo", callback_data: navigation.types };
+  const index = sortInventoryModels(type.products, mode).findIndex((model) => String(model.id) === String(product.id));
+  return {
+    text: `↩️ Modelos de ${type.name.slice(0, 28)}`,
+    callback_data: `${navigation.type}:${getInventoryTypeToken(type.name)}:${Math.floor(index / 6)}`,
   };
 }
 
@@ -456,11 +463,10 @@ function buildInventoryInStockView(store = {}, page = 0) {
   };
 }
 
-async function sendInventorySearchResults(token, chatId, query, messageId = null) {
+function findInventoryMatches(products = [], query = "") {
   const normalizedQuery = String(query || "").trim().toLocaleLowerCase("es");
   const cleanNeedle = normalizedQuery.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-  const store = await readStore();
-  const products = Array.isArray(store?.products) ? store.products : [];
+  if (!cleanNeedle) return [];
 
   const matches = products.filter((product) => {
     const name = String(product.name || "").toLocaleLowerCase("es").normalize("NFD").replace(/[\u0300-\u036f]/g, "");
@@ -477,14 +483,22 @@ async function sendInventorySearchResults(token, chatId, query, messageId = null
     if ((stockA > 0) !== (stockB > 0)) return stockB - stockA;
     return stockB - stockA || String(a.name || "").localeCompare(String(b.name || ""), "es");
   });
+  return matches;
+}
+
+async function sendInventorySearchResults(token, chatId, query, messageId = null, options = {}) {
+  const mode = options?.mode === "restock" ? "restock" : "sale";
+  const store = await readStore();
+  const products = Array.isArray(store?.products) ? store.products : [];
+  const matches = findInventoryMatches(products, query);
 
   if (!matches.length) {
-    const text = `🔍 *Sin resultados*\n\nNo encontré prendas para “${escapeTelegramMarkdown(query)}”.\n\nPuedes intentar con otra palabra o explorar directamente por tipos (Cortas, Largas, etc.).`;
+    const text = `🔍 *Sin resultados*\n\nNo encontré prendas para “${escapeTelegramMarkdown(query)}”.\n\nPrueba con otro nombre o tipo de prenda.`;
     const markup = {
       reply_markup: {
         inline_keyboard: [
-          [{ text: "🔎 Buscar otra vez", callback_data: "inv:search" }],
-          [{ text: "🗂️ Ver por tipo de prenda", callback_data: "inv:types" }],
+          [{ text: "🔎 Buscar otra vez", callback_data: mode === "restock" ? "inv:add:search" : "inv:search" }],
+          [{ text: "🗂️ Elegir tipo de prenda", callback_data: getInventoryModeNavigation(mode).types }],
           [{ text: "↩️ Menú inventario", callback_data: "inv:menu" }],
         ],
       },
@@ -498,7 +512,8 @@ async function sendInventorySearchResults(token, chatId, query, messageId = null
     return;
   }
 
-  const text = `👗 *Resultados para “${escapeTelegramMarkdown(query)}” · ${matches.length} prenda${matches.length === 1 ? "" : "s"}*\n\nElige una prenda para registrar la venta:`;
+  const actionLabel = mode === "restock" ? "aumentar su stock" : "registrar la venta";
+  const text = `👗 *Resultados para “${escapeTelegramMarkdown(query)}” · ${matches.length} prenda${matches.length === 1 ? "" : "s"}*\n\nElige una prenda para ${actionLabel}:`;
   const markup = {
     reply_markup: {
       inline_keyboard: [
@@ -508,11 +523,13 @@ async function sendInventorySearchResults(token, chatId, query, messageId = null
           const label = `${String(product.name || "Producto").slice(0, 32)} ${badge}`;
           return [{
             text: label,
-            callback_data: stock > 0 ? `inv:product:${getProductToken(product.id)}` : "inv:nostock",
+            callback_data: mode === "restock"
+              ? `inv:add:product:${getProductToken(product.id)}`
+              : (stock > 0 ? `inv:product:${getProductToken(product.id)}` : "inv:nostock"),
           }];
         }),
-        [{ text: "🔎 Buscar otra", callback_data: "inv:search" }],
-        [{ text: "🗂️ Ver por tipo de prenda", callback_data: "inv:types" }],
+        [{ text: "🔎 Buscar otra", callback_data: mode === "restock" ? "inv:add:search" : "inv:search" }],
+        [{ text: "🗂️ Elegir tipo de prenda", callback_data: getInventoryModeNavigation(mode).types }],
         [{ text: "↩️ Menú inventario", callback_data: "inv:menu" }],
       ],
     },
@@ -528,15 +545,71 @@ async function sendInventorySearchResults(token, chatId, query, messageId = null
 
 function buildInventoryMenu() {
   return {
-    text: "🛍️ *Inventario físico y Venta*\n\nRegistra ventas rápidas con stock en tiempo real o revisa reposición:",
+    text: "🛍️ *Inventario*\n\n¿Qué necesitas hacer?",
     reply_markup: { inline_keyboard: [
-      [{ text: "➖ Registrar venta (Buscar)", callback_data: "inv:search" }],
-      [{ text: "🗂️ Filtrar por tipo (Cortas, Largas...)", callback_data: "inv:types" }],
-      [{ text: "🔥 Prendas con stock disponible", callback_data: "inv:instock:0" }],
-      [{ text: "📋 Revisar reposición", callback_data: "inv:restock" }],
+      [
+        { text: "➖ Registrar venta", callback_data: "inv:types" },
+        { text: "➕ Reponer stock", callback_data: "inv:add:types" },
+      ],
+      [
+        { text: "⚠️ Stock bajo", callback_data: "inv:restock:0" },
+        { text: "🔥 Con stock", callback_data: "inv:instock:0" },
+      ],
       [{ text: "↩️ Deshacer última venta", callback_data: "inv:undo-last" }],
       [{ text: "⌂ Inicio", callback_data: "home" }],
     ] },
+  };
+}
+
+function buildInventoryRestockView(store = {}, requestedPage = 0) {
+  const products = (Array.isArray(store?.products) ? store.products : [])
+    .map((product) => {
+      const lowVariants = (Array.isArray(product?.variants) ? product.variants : [])
+        .filter((variant) => Math.max(0, Number(variant.stock) || 0) <= 2);
+      return {
+        product,
+        lowVariants,
+        minimumStock: lowVariants.length
+          ? Math.min(...lowVariants.map((variant) => Math.max(0, Number(variant.stock) || 0)))
+          : Number.POSITIVE_INFINITY,
+      };
+    })
+    .filter((entry) => entry.lowVariants.length > 0)
+    .sort((left, right) => (
+      left.minimumStock - right.minimumStock
+      || String(left.product?.name || "").localeCompare(String(right.product?.name || ""), "es")
+    ));
+
+  if (!products.length) {
+    return {
+      text: "✅ *Inventario saludable*\n\nNo hay variantes agotadas o con stock bajo. También puedes buscar cualquier prenda para agregar unidades.",
+      reply_markup: { inline_keyboard: [
+        [{ text: "🗂️ Reponer por tipo", callback_data: "inv:add:types" }],
+        [{ text: "🔎 Buscar un modelo", callback_data: "inv:add:search" }],
+        [{ text: "↩️ Menú inventario", callback_data: "inv:menu" }],
+      ] },
+    };
+  }
+
+  const pageSize = 6;
+  const pageCount = Math.max(1, Math.ceil(products.length / pageSize));
+  const page = Math.min(Math.max(0, Math.floor(Number(requestedPage) || 0)), pageCount - 1);
+  const visible = products.slice(page * pageSize, (page + 1) * pageSize);
+  const keyboard = visible.map(({ product, lowVariants, minimumStock }) => [{
+    text: `${String(product?.name || "Producto").slice(0, 28)} · ${minimumStock === 0 ? "agotado" : `${minimumStock} mín.`} · ${lowVariants.length} variante${lowVariants.length === 1 ? "" : "s"}`,
+    callback_data: `inv:add:product:${getProductToken(product?.id)}`,
+  }]);
+  const navigation = [];
+  if (page > 0) navigation.push({ text: "← Anterior", callback_data: `inv:restock:${page - 1}` });
+  if (page < pageCount - 1) navigation.push({ text: "Siguiente →", callback_data: `inv:restock:${page + 1}` });
+  if (navigation.length) keyboard.push(navigation);
+  keyboard.push([{ text: "🔎 Buscar otra prenda", callback_data: "inv:add:search" }]);
+  keyboard.push([{ text: "🗂️ Todos los tipos", callback_data: "inv:add:types" }]);
+  keyboard.push([{ text: "↩️ Menú inventario", callback_data: "inv:menu" }]);
+
+  return {
+    text: `➕ *Reponer stock · Solo stock bajo*\n\n${products.length} modelo${products.length === 1 ? "" : "s"} por revisar. Elige uno para agregar unidades.${pageCount > 1 ? `\nPágina ${page + 1} de ${pageCount}.` : ""}`,
+    reply_markup: { inline_keyboard: keyboard },
   };
 }
 
@@ -544,7 +617,7 @@ function getPendingOrders(orders = []) {
   return (Array.isArray(orders) ? orders : [])
     .filter((order) => {
       const status = String(order?.status || "").toLowerCase();
-      return status === "pendiente" || status === "en preparación" || status === "listo para retiro" || status === "enviado";
+      return ["pendiente", "confirmado", "preparando", "en preparación", "listo para retiro", "enviado"].includes(status);
     })
     .sort((left, right) => String(left.createdAt || "").localeCompare(String(right.createdAt || "")));
 }
@@ -600,7 +673,7 @@ function buildSummaryView(orders = []) {
     `• *Total pedidos:* ${safeOrders.length}`,
     `• *Total acumulado:* *${currency(allTotal)}*`,
     "━━━━━━━━━━━━━━━━━━━━",
-    "⚡ [Ver en Panel Admin](https://adriego.vercel.app/admin)",
+    `⚡ [Ver en Panel Admin](${getAdminPanelUrl()})`,
   ].join("\n");
 
   const reply_markup = {
@@ -676,10 +749,10 @@ function buildAdminHome(store = {}, senderName = "") {
   };
 }
 
-async function registerGuidedPhysicalSale({ chatId, callbackId, productToken, colorIndex, sizeIndex, quantity }) {
+async function registerGuidedPhysicalSale({ chatId, callbackId, operationId = "", productToken, colorIndex, sizeIndex, quantity }) {
   let result = null;
   await updateStore((draft) => {
-    if (!claimInventoryCallback(draft, callbackId)) {
+    if (!claimInventoryCallback(draft, operationId || callbackId)) {
       result = { duplicate: true };
       return draft;
     }
@@ -691,7 +764,7 @@ async function registerGuidedPhysicalSale({ chatId, callbackId, productToken, co
     const size = sizes[sizeIndex];
     const variant = variants.find((entry) => entry.size === size);
     const stock = Number(variant?.stock);
-    if (!product || !variant || !Number.isSafeInteger(stock) || stock < quantity) {
+    if (!product || !variant || !Number.isSafeInteger(stock) || !Number.isSafeInteger(quantity) || quantity < 1 || quantity > 100 || stock < quantity) {
       result = { ok: false, stock: Math.max(0, Number.isFinite(stock) ? stock : 0) };
       return draft;
     }
@@ -705,12 +778,132 @@ async function registerGuidedPhysicalSale({ chatId, callbackId, productToken, co
       color,
       size,
       quantity,
+      delta: -quantity,
+      previousStock: stock,
+      nextStock: variant.stock,
+      reason: "Venta física por Telegram",
+      source: "telegram",
       status: "active",
       createdAt: new Date().toISOString(),
     };
     draft.physicalStockEvents = [...(Array.isArray(draft.physicalStockEvents) ? draft.physicalStockEvents : []), event].slice(-80);
     bumpRealtimeMeta(draft, ["catalog"]);
-    result = { ok: true, stock: variant.stock, event };
+    result = { ok: true, stock: variant.stock, event, modelsBackButton: buildInventoryModelsBackButton(draft, product) };
+    return draft;
+  });
+  return result;
+}
+
+function resolveProductVariant(products, productToken, colorIndex, sizeIndex) {
+  const product = findProductByToken(products, productToken);
+  const { colors, variants } = getProductOptions(product);
+  const color = colors[Number(colorIndex)];
+  const colorVariants = variants.filter((variant) => variant.color === color);
+  const sizes = [...new Set(colorVariants.map((variant) => String(variant.size || "").trim()).filter(Boolean))];
+  const size = sizes[Number(sizeIndex)];
+  const variant = colorVariants.find((entry) => entry.size === size);
+  return { product, color, size, variant };
+}
+
+async function registerGuidedStockRestock({ chatId, callbackId, operationId = "", productToken, colorIndex, sizeIndex, quantity }) {
+  let result = null;
+  await updateStore((draft) => {
+    if (!claimInventoryCallback(draft, operationId || callbackId)) {
+      result = { duplicate: true };
+      return draft;
+    }
+
+    const { product, color, size, variant } = resolveProductVariant(
+      draft.products,
+      productToken,
+      colorIndex,
+      sizeIndex,
+    );
+    const stock = Number(variant?.stock);
+    const safeQuantity = Number(quantity);
+    if (
+      !product
+      || !variant
+      || !Number.isSafeInteger(stock)
+      || stock < 0
+      || !Number.isSafeInteger(safeQuantity)
+      || safeQuantity < 1
+      || safeQuantity > 100
+    ) {
+      result = { ok: false, reason: "invalid", stock: Math.max(0, Number.isFinite(stock) ? stock : 0) };
+      return draft;
+    }
+    if (stock + safeQuantity > 999) {
+      result = { ok: false, reason: "limit", stock, maxQuantity: Math.max(0, 999 - stock) };
+      return draft;
+    }
+
+    variant.stock = stock + safeQuantity;
+    refreshProductStock(product);
+    const event = {
+      id: `restock-${randomUUID()}`,
+      chatId,
+      productId: String(product.id || ""),
+      productName: String(product.name || "Producto"),
+      color,
+      size,
+      quantity: safeQuantity,
+      delta: safeQuantity,
+      previousStock: stock,
+      nextStock: variant.stock,
+      reason: "Reposición por Telegram",
+      source: "telegram",
+      status: "active",
+      createdAt: new Date().toISOString(),
+    };
+    draft.physicalStockEvents = [
+      ...(Array.isArray(draft.physicalStockEvents) ? draft.physicalStockEvents : []),
+      event,
+    ].slice(-80);
+    bumpRealtimeMeta(draft, ["catalog"]);
+    result = { ok: true, previousStock: stock, stock: variant.stock, event, modelsBackButton: buildInventoryModelsBackButton(draft, product, "restock") };
+    return draft;
+  });
+  return result;
+}
+
+async function undoStockRestock(chatId, eventId, callbackId = "") {
+  let result = null;
+  await updateStore((draft) => {
+    if (callbackId && !claimInventoryCallback(draft, callbackId)) {
+      result = { ok: false, reason: "duplicate" };
+      return draft;
+    }
+    const events = Array.isArray(draft.physicalStockEvents) ? draft.physicalStockEvents : [];
+    const event = events.find((item) => (
+      item?.status === "active"
+      && String(item.id || "") === String(eventId || "")
+      && String(item.chatId || "") === String(chatId || "")
+      && Number(item.delta) > 0
+    ));
+    if (!event) {
+      result = { ok: false, reason: "missing" };
+      return draft;
+    }
+    const product = (draft.products || []).find((item) => String(item.id || "") === String(event.productId || ""));
+    const variant = product?.variants?.find((item) => (
+      String(item.color || "").toLowerCase() === String(event.color || "").toLowerCase()
+      && String(item.size || "").toLowerCase() === String(event.size || "").toLowerCase()
+    ));
+    const quantity = Math.max(1, Number(event.delta) || Number(event.quantity) || 1);
+    const stock = Number(variant?.stock);
+    if (!variant || !Number.isSafeInteger(stock) || stock < quantity) {
+      result = { ok: false, reason: "stock-changed", stock: Math.max(0, Number.isFinite(stock) ? stock : 0) };
+      return draft;
+    }
+
+    variant.stock = stock - quantity;
+    refreshProductStock(product);
+    event.status = "reverted";
+    event.revertedAt = new Date().toISOString();
+    draft.physicalStockEvents = events;
+    bumpRealtimeMeta(draft, ["catalog"]);
+    result = { ok: true, event, stock: variant.stock };
     return draft;
   });
   return result;
@@ -737,6 +930,7 @@ async function undoPhysicalStockSale(chatId, eventId = "", messageId = null, cal
     const event = events.slice().reverse().find((item) => (
       item?.status === "active"
       && String(item.chatId || "") === String(chatId)
+      && Number(item.delta ?? -Math.max(1, Number(item.quantity) || 1)) < 0
       && (!eventId || String(item.id) === String(eventId))
     ));
     if (!event) {
@@ -764,7 +958,7 @@ async function undoPhysicalStockSale(chatId, eventId = "", messageId = null, cal
   return result;
 }
 
-async function applyOrderGuideRegistration(token, senderChatId, orderQuery, courierName, trackingNumber, promptMessageId = null) {
+function normalizeGuideRegistrationInput(courierName, trackingNumber) {
   let cleanNumber = String(trackingNumber || "").trim();
   let cleanCourier = String(courierName || "").trim();
 
@@ -781,6 +975,71 @@ async function applyOrderGuideRegistration(token, senderChatId, orderQuery, cour
   }
 
   if (!cleanCourier) cleanCourier = "Servientrega";
+  cleanCourier = cleanCourier.slice(0, 80);
+  cleanNumber = cleanNumber.slice(0, 80);
+  const valid = /^(?=.{4,80}$)(?=.*\d)[\p{L}\p{N}][\p{L}\p{N}._/-]*$/u.test(cleanNumber);
+  return { cleanCourier, cleanNumber, valid };
+}
+
+function formatGuidePrompt(orderCode, courierName, errorMessage = "") {
+  const lines = [
+    `📦 Pedido: \`${escapeTelegramMarkdown(orderCode)}\``,
+    `🚚 Courier: *${escapeTelegramMarkdown(courierName)}*`,
+    "",
+  ];
+  if (errorMessage) lines.push(`⚠️ ${escapeTelegramMarkdown(errorMessage)}`, "");
+  lines.push("Responde únicamente con el número de guía. Debe contener al menos un número y no llevar espacios.", "Escribe /cancelar para salir.");
+  return lines.join("\n");
+}
+
+async function readPendingGuidePrompt(chatId) {
+  const memoryPrompt = PENDING_GUIDE_PROMPTS.get(chatId);
+  if (memoryPrompt?.expiresAt > Date.now()) return memoryPrompt;
+  if (memoryPrompt) PENDING_GUIDE_PROMPTS.delete(chatId);
+  try {
+    const store = await readStore();
+    const persisted = store?.meta?.pendingGuidePrompts?.[chatId];
+    if (persisted?.expiresAt > Date.now()) {
+      PENDING_GUIDE_PROMPTS.set(chatId, persisted);
+      return persisted;
+    }
+  } catch (err) {
+    console.error("[read-persisted-guide-prompt-error]", err?.message || err);
+  }
+  return null;
+}
+
+async function clearPendingGuidePrompt(chatId) {
+  const hadMemoryPrompt = PENDING_GUIDE_PROMPTS.delete(chatId);
+  let hadPersistedPrompt = false;
+  try {
+    await updateStore((draft) => {
+      if (!draft.meta?.pendingGuidePrompts?.[chatId]) return draft;
+      hadPersistedPrompt = true;
+      const pending = { ...draft.meta.pendingGuidePrompts };
+      delete pending[chatId];
+      draft.meta.pendingGuidePrompts = pending;
+      return draft;
+    });
+  } catch (err) {
+    console.error("[clear-persisted-guide-prompt-error]", err?.message || err);
+  }
+  return hadMemoryPrompt || hadPersistedPrompt;
+}
+
+async function applyOrderGuideRegistration(token, senderChatId, orderQuery, courierName, trackingNumber, promptMessageId = null) {
+  const { cleanCourier, cleanNumber, valid } = normalizeGuideRegistrationInput(courierName, trackingNumber);
+  if (!valid) {
+    await editTelegramMessage(
+      token,
+      senderChatId,
+      promptMessageId,
+      formatGuidePrompt(orderQuery, cleanCourier, "El número ingresado no parece una guía válida."),
+      { reply_markup: { force_reply: true, selective: true, input_field_placeholder: "Ej. LAAR-99887766" } },
+    );
+    return false;
+  }
+
   let updatedOrder = null;
 
   try {
@@ -823,7 +1082,7 @@ async function applyOrderGuideRegistration(token, senderChatId, orderQuery, cour
     });
     return true;
   } else {
-    await sendTelegramMessage(token, senderChatId, "⚠️ No se encontró ningún pedido que coincida con `" + orderQuery + "`.");
+    await sendTelegramMessage(token, senderChatId, "⚠️ No se encontró ningún pedido que coincida con `" + escapeTelegramMarkdown(orderQuery) + "`.");
     return false;
   }
 }
@@ -921,16 +1180,21 @@ export default async function handler(req, res) {
       await answerCallbackQuery(token, cb.id);
       const menu = buildInventoryMenu();
       await editTelegramMessage(token, senderChatId, sourceMessageId, menu.text, { reply_markup: menu.reply_markup });
-    } else if (data === "inv:types") {
+    } else if (data === "inv:types" || data.startsWith("inv:types:") || data === "inv:add:types" || data.startsWith("inv:add:types:")) {
       await answerCallbackQuery(token, cb.id, "Cargando tipos de prenda...");
       const store = await readStore();
-      const view = buildInventoryTypesView(store);
+      const mode = data.startsWith("inv:add:") ? "restock" : "sale";
+      const prefix = getInventoryModeNavigation(mode).types;
+      const page = data === prefix ? 0 : Number(data.slice(prefix.length + 1));
+      const view = buildInventoryTypesView(store, { mode, page });
       await editTelegramMessage(token, senderChatId, sourceMessageId, view.text, { reply_markup: view.reply_markup });
-    } else if (data.startsWith("inv:type:")) {
+    } else if (data.startsWith("inv:type:") || data.startsWith("inv:add:type:")) {
       await answerCallbackQuery(token, cb.id);
-      const [, , rawTypeIndex, rawPage] = data.split(":");
+      const mode = data.startsWith("inv:add:") ? "restock" : "sale";
+      const prefix = getInventoryModeNavigation(mode).type;
+      const [typeToken, rawPage] = data.slice(prefix.length + 1).split(":");
       const store = await readStore();
-      const view = buildInventoryProductsByTypeView(store, Number(rawTypeIndex), Number(rawPage || 0));
+      const view = buildInventoryProductsByTypeView(store, typeToken, Number(rawPage || 0), { mode });
       await editTelegramMessage(token, senderChatId, sourceMessageId, view.text, { reply_markup: view.reply_markup });
     } else if (data.startsWith("inv:instock:")) {
       await answerCallbackQuery(token, cb.id);
@@ -946,21 +1210,20 @@ export default async function handler(req, res) {
       if (Number.isSafeInteger(sourceMessageId) && sourceMessageId > 0) {
         await deleteTelegramMessage(token, senderChatId, sourceMessageId);
       }
-    } else if (data === "inv:restock") {
-      await answerCallbackQuery(token, cb.id, "Preparando lista...");
-      const store = await readStore();
-      const items = (store.products || []).flatMap((product) => (product.variants || []).map((variant) => ({
-        name: product.name,
-        color: variant.color,
-        size: variant.size,
-        stock: Math.max(0, Number(variant.stock) || 0),
-      }))).filter((item) => item.stock <= 2).sort((left, right) => left.stock - right.stock || String(left.name).localeCompare(String(right.name), "es"));
-      const lines = items.slice(0, 30).map((item) => `• ${item.stock === 0 ? "🛑" : "⚠️"} *${escapeTelegramMarkdown(item.name)}* · ${escapeTelegramMarkdown(item.color)} · ${escapeTelegramMarkdown(item.size)} · ${item.stock}`);
-      await editTelegramMessage(token, senderChatId, sourceMessageId, lines.length
-        ? `📋 *Lista para revisar con el proveedor*\n\n${lines.join("\n")}${items.length > 30 ? `\n\n_Mostrando 30 de ${items.length} variantes._` : ""}`
-        : "✅ *No hay variantes agotadas o con stock bajo.*", {
-        reply_markup: { inline_keyboard: [[{ text: "🔄 Actualizar lista", callback_data: "inv:restock" }], [{ text: "↩️ Inventario", callback_data: "inv:menu" }]] },
+    } else if (data === "inv:add:search") {
+      await answerCallbackQuery(token, cb.id);
+      await sendTelegramMessage(token, senderChatId, "➕ *Buscar producto para reponer stock*\n\nEscribe el nombre o tipo de prenda:", {
+        reply_markup: { force_reply: true, selective: true, input_field_placeholder: "Ej. Vestido o Cortas" },
       });
+      if (Number.isSafeInteger(sourceMessageId) && sourceMessageId > 0) {
+        await deleteTelegramMessage(token, senderChatId, sourceMessageId);
+      }
+    } else if (data === "inv:restock" || data.startsWith("inv:restock:")) {
+      await answerCallbackQuery(token, cb.id, "Revisando reposición...");
+      const store = await readStore();
+      const page = data.startsWith("inv:restock:") ? Number(data.slice("inv:restock:".length)) : 0;
+      const view = buildInventoryRestockView(store, page);
+      await editTelegramMessage(token, senderChatId, sourceMessageId, view.text, { reply_markup: view.reply_markup });
     } else if (data === "inv:undo-last") {
       await answerCallbackQuery(token, cb.id, "Revirtiendo última venta...");
       const result = await undoPhysicalStockSale(senderChatId, "", null, cb.id);
@@ -971,6 +1234,145 @@ export default async function handler(req, res) {
       });
     } else if (data === "inv:nostock") {
       await answerCallbackQuery(token, cb.id, "⚠️ Esta opción no tiene stock disponible.", { show_alert: true });
+    } else if (data.startsWith("inv:add:product:")) {
+      await answerCallbackQuery(token, cb.id);
+      const productToken = data.slice("inv:add:product:".length);
+      const store = await readStore();
+      const product = findProductByToken(store.products, productToken);
+      const { colors, variants } = getProductOptions(product);
+      if (!product || !colors.length) {
+        await editTelegramMessage(token, senderChatId, sourceMessageId, "⚠️ La prenda ya no está disponible. Busca otra.", {
+          reply_markup: { inline_keyboard: [[{ text: "↩️ Elegir tipo", callback_data: "inv:add:types" }], [{ text: "🔎 Buscar", callback_data: "inv:add:search" }]] },
+        });
+      } else {
+        const colorButtons = colors.map((color, index) => {
+          const colorStock = variants
+            .filter((variant) => variant.color === color)
+            .reduce((sum, variant) => sum + Math.max(0, Number(variant.stock) || 0), 0);
+          return [{
+            text: `${String(color).slice(0, 36)} · ${colorStock} disp.`,
+            callback_data: `inv:add:color:${productToken}:${index}`,
+          }];
+        });
+        await editTelegramMessage(token, senderChatId, sourceMessageId, `➕ *Reponer stock*\n*${escapeTelegramMarkdown(product.name)}*\n\nElige el color:`, {
+          reply_markup: { inline_keyboard: [
+            ...colorButtons,
+            [buildInventoryModelsBackButton(store, product, "restock")],
+            [{ text: "⌂ Inventario", callback_data: "inv:menu" }],
+          ] },
+        });
+      }
+    } else if (data.startsWith("inv:add:color:")) {
+      await answerCallbackQuery(token, cb.id);
+      const [, , , productToken, rawColorIndex] = data.split(":");
+      const colorIndex = Number(rawColorIndex);
+      const store = await readStore();
+      const product = findProductByToken(store.products, productToken);
+      const { colors, variants } = getProductOptions(product);
+      const color = colors[colorIndex];
+      const colorVariants = variants.filter((variant) => variant.color === color);
+      const sizes = [...new Set(colorVariants.map((variant) => String(variant.size || "").trim()).filter(Boolean))];
+      if (!product || !color || !sizes.length) {
+        await editTelegramMessage(token, senderChatId, sourceMessageId, "⚠️ La variante cambió. Vuelve a elegir la prenda.", {
+          reply_markup: { inline_keyboard: [[{ text: "🔎 Buscar", callback_data: "inv:add:search" }]] },
+        });
+      } else {
+        const sizeButtons = sizes.map((size, index) => {
+          const stock = Math.max(0, Number(colorVariants.find((variant) => variant.size === size)?.stock) || 0);
+          return [{
+            text: `${String(size).slice(0, 20)} · stock actual ${stock}`,
+            callback_data: `inv:add:size:${productToken}:${colorIndex}:${index}`,
+          }];
+        });
+        await editTelegramMessage(token, senderChatId, sourceMessageId, `📏 *${escapeTelegramMarkdown(product.name)} · ${escapeTelegramMarkdown(color)}*\n\nSelecciona la talla que recibiste:`, {
+          reply_markup: { inline_keyboard: [
+            ...sizeButtons,
+            [{ text: "↩️ Cambiar color", callback_data: `inv:add:product:${productToken}` }],
+          ] },
+        });
+      }
+    } else if (data.startsWith("inv:add:size:")) {
+      await answerCallbackQuery(token, cb.id);
+      const [, , , productToken, rawColorIndex, rawSizeIndex] = data.split(":");
+      const colorIndex = Number(rawColorIndex);
+      const sizeIndex = Number(rawSizeIndex);
+      const store = await readStore();
+      const { product, color, size, variant } = resolveProductVariant(store.products, productToken, colorIndex, sizeIndex);
+      const stock = Math.max(0, Number(variant?.stock) || 0);
+      if (!product || !variant) {
+        await editTelegramMessage(token, senderChatId, sourceMessageId, "⚠️ La variante cambió. Vuelve a buscar la prenda.", {
+          reply_markup: { inline_keyboard: [[{ text: "🔎 Buscar", callback_data: "inv:add:search" }]] },
+        });
+      } else {
+        const quantities = [1, 2, 3, 5, 10, 20].filter((quantity) => stock + quantity <= 999);
+        if (!quantities.length) {
+          await editTelegramMessage(token, senderChatId, sourceMessageId, `ℹ️ *Stock máximo alcanzado*\n\n${escapeTelegramMarkdown(product.name)} · ${escapeTelegramMarkdown(color)} · ${escapeTelegramMarkdown(size)} ya tiene *${stock}* unidades.`, {
+            reply_markup: { inline_keyboard: [[{ text: "↩️ Elegir otra talla", callback_data: `inv:add:color:${productToken}:${colorIndex}` }]] },
+          });
+        } else {
+          await editTelegramMessage(token, senderChatId, sourceMessageId, `🔢 *Unidades recibidas*\n\n${escapeTelegramMarkdown(product.name)} · ${escapeTelegramMarkdown(color)} · ${escapeTelegramMarkdown(size)}\nStock actual: *${stock}*`, {
+            reply_markup: { inline_keyboard: [
+              quantities.slice(0, 4).map((quantity) => ({ text: `+${quantity}`, callback_data: `inv:add:qty:${productToken}:${colorIndex}:${sizeIndex}:${quantity}` })),
+              quantities.slice(4).map((quantity) => ({ text: `+${quantity}`, callback_data: `inv:add:qty:${productToken}:${colorIndex}:${sizeIndex}:${quantity}` })),
+              [{ text: "↩️ Cambiar talla", callback_data: `inv:add:color:${productToken}:${colorIndex}` }],
+            ].filter((row) => row.length) },
+          });
+        }
+      }
+    } else if (data.startsWith("inv:add:qty:")) {
+      await answerCallbackQuery(token, cb.id);
+      const [, , , productToken, rawColorIndex, rawSizeIndex, rawQuantity] = data.split(":");
+      const colorIndex = Number(rawColorIndex);
+      const sizeIndex = Number(rawSizeIndex);
+      const quantity = Number(rawQuantity);
+      const store = await readStore();
+      const { product, color, size, variant } = resolveProductVariant(store.products, productToken, colorIndex, sizeIndex);
+      const stock = Math.max(0, Number(variant?.stock) || 0);
+      if (!product || !variant || !Number.isSafeInteger(quantity) || quantity < 1 || quantity > 100 || stock + quantity > 999) {
+        await editTelegramMessage(token, senderChatId, sourceMessageId, "⚠️ La cantidad o la variante ya no es válida. Revísala nuevamente.", {
+          reply_markup: { inline_keyboard: [[{ text: "🔄 Revisar", callback_data: `inv:add:size:${productToken}:${colorIndex}:${sizeIndex}` }]] },
+        });
+      } else {
+        await editTelegramMessage(token, senderChatId, sourceMessageId, `🧾 *Confirmar reposición*\n\n*${escapeTelegramMarkdown(product.name)}* · ${escapeTelegramMarkdown(color)} · ${escapeTelegramMarkdown(size)}\nAgregar: *${quantity}* · Stock: *${stock} → ${stock + quantity}*`, {
+          reply_markup: { inline_keyboard: [
+            [{ text: `✅ Agregar ${quantity} al stock`, callback_data: `inv:add:confirm:${productToken}:${colorIndex}:${sizeIndex}:${quantity}` }],
+            [{ text: "↩️ Cambiar cantidad", callback_data: `inv:add:size:${productToken}:${colorIndex}:${sizeIndex}` }],
+          ] },
+        });
+      }
+    } else if (data.startsWith("inv:add:confirm:")) {
+      await answerCallbackQuery(token, cb.id, "Actualizando stock...");
+      const [, , , productToken, rawColorIndex, rawSizeIndex, rawQuantity] = data.split(":");
+      const result = await registerGuidedStockRestock({
+        chatId: senderChatId,
+        callbackId: cb.id,
+        operationId: `restock:${senderChatId}:${sourceMessageId}:${data}`,
+        productToken,
+        colorIndex: Number(rawColorIndex),
+        sizeIndex: Number(rawSizeIndex),
+        quantity: Number(rawQuantity),
+      });
+      if (result?.duplicate) {
+        await editTelegramMessage(token, senderChatId, sourceMessageId, "ℹ️ Esta reposición ya fue procesada.", {
+          reply_markup: buildInventoryMenu().reply_markup,
+        });
+      } else if (result?.ok) {
+        await editTelegramMessage(token, senderChatId, sourceMessageId, `✅ *Stock actualizado*\n\n${escapeTelegramMarkdown(result.event.productName)} · ${escapeTelegramMarkdown(result.event.color)} · ${escapeTelegramMarkdown(result.event.size)}\nAgregadas: *${result.event.quantity}* · Stock: *${result.previousStock} → ${result.stock}*`, {
+          reply_markup: { inline_keyboard: [
+            [{ text: "↩️ Deshacer reposición", callback_data: `undo-restock:${result.event.id}` }],
+            [{ ...result.modelsBackButton, text: "➕ Otro modelo del mismo tipo" }],
+            [{ text: "🗂️ Cambiar tipo", callback_data: "inv:add:types" }],
+            [{ text: "⌂ Inventario", callback_data: "inv:menu" }],
+          ] },
+        });
+      } else {
+        const message = result?.reason === "limit"
+          ? `⚠️ El stock máximo permitido es 999. Stock actual: *${result.stock}*; puedes agregar hasta *${result.maxQuantity}*.`
+          : "⚠️ La variante cambió y no se modificó el stock. Vuelve a revisarla.";
+        await editTelegramMessage(token, senderChatId, sourceMessageId, message, {
+          reply_markup: { inline_keyboard: [[{ text: "🔄 Revisar", callback_data: `inv:add:size:${productToken}:${rawColorIndex}:${rawSizeIndex}` }]] },
+        });
+      }
     } else if (data.startsWith("inv:product:")) {
       await answerCallbackQuery(token, cb.id);
       const productToken = data.slice("inv:product:".length);
@@ -989,10 +1391,10 @@ export default async function handler(req, res) {
             callback_data: colorStock > 0 ? `inv:color:${productToken}:${index}` : "inv:nostock",
           }];
         });
-        await editTelegramMessage(token, senderChatId, sourceMessageId, `🎨 *${escapeTelegramMarkdown(product.name)}*\n\nSelecciona el color:`, {
+        await editTelegramMessage(token, senderChatId, sourceMessageId, `➖ *Registrar venta*\n*${escapeTelegramMarkdown(product.name)}*\n\nElige el color:`, {
           reply_markup: { inline_keyboard: [
             ...colorButtons,
-            [{ text: "🗂️ Ver por tipo", callback_data: "inv:types" }],
+            [buildInventoryModelsBackButton(store, product)],
             [{ text: "↩️ Menú inventario", callback_data: "inv:menu" }],
           ] },
         });
@@ -1074,6 +1476,7 @@ export default async function handler(req, res) {
       const result = await registerGuidedPhysicalSale({
         chatId: senderChatId,
         callbackId: cb.id,
+        operationId: `sale:${senderChatId}:${sourceMessageId}:${data}`,
         productToken,
         colorIndex: Number(rawColorIndex),
         sizeIndex: Number(rawSizeIndex),
@@ -1085,34 +1488,135 @@ export default async function handler(req, res) {
         });
       } else if (result?.ok) {
         await editTelegramMessage(token, senderChatId, sourceMessageId, `✅ *Venta registrada*\n\n${escapeTelegramMarkdown(result.event.productName)} · ${escapeTelegramMarkdown(result.event.color)} · ${escapeTelegramMarkdown(result.event.size)}\nVendidas: *${result.event.quantity}* · Stock: *${result.stock}*`, {
-          reply_markup: { inline_keyboard: [[{ text: "↩️ Deshacer venta", callback_data: `undo-stock:${result.event.id}` }], [{ text: "➕ Registrar otra", callback_data: "inv:search" }], [{ text: "📋 Ver reposición", callback_data: "inv:restock" }]] },
+          reply_markup: { inline_keyboard: [
+            [{ text: "↩️ Deshacer venta", callback_data: `undo-stock:${result.event.id}` }],
+            [{ ...result.modelsBackButton, text: "➖ Otro modelo del mismo tipo" }],
+            [{ text: "🗂️ Cambiar tipo", callback_data: "inv:types" }],
+            [{ text: "⌂ Inventario", callback_data: "inv:menu" }],
+          ] },
         });
       } else {
         await editTelegramMessage(token, senderChatId, sourceMessageId, `⚠️ El stock cambió y no se descontó. Disponible ahora: *${result?.stock || 0}*.`, { reply_markup: { inline_keyboard: [[{ text: "🔄 Volver a buscar", callback_data: "inv:search" }]] } });
       }
+    } else if (data.startsWith("undo-restock:")) {
+      const eventId = data.slice("undo-restock:".length);
+      const result = await undoStockRestock(senderChatId, eventId, cb.id);
+      if (result?.ok) {
+        await answerCallbackQuery(token, cb.id, "Reposición deshecha.");
+        const event = result.event;
+        await editTelegramMessage(token, senderChatId, sourceMessageId, `↩️ *Reposición deshecha*\n\n${escapeTelegramMarkdown(event.productName)} · ${escapeTelegramMarkdown(event.color)} · ${escapeTelegramMarkdown(event.size)}\nRetiradas: *${event.quantity}* · Stock: *${result.stock}*`, {
+          reply_markup: buildInventoryMenu().reply_markup,
+        });
+      } else if (result?.reason === "stock-changed") {
+        await answerCallbackQuery(token, cb.id, "El stock cambió; no se puede deshacer.", { show_alert: true });
+        await editTelegramMessage(token, senderChatId, sourceMessageId, `⚠️ No se puede deshacer: el stock actual es *${result.stock}* y parte de la reposición ya pudo haberse vendido.`, {
+          reply_markup: buildInventoryMenu().reply_markup,
+        });
+      } else {
+        await answerCallbackQuery(token, cb.id, "Esta reposición ya fue deshecha.", { show_alert: true });
+      }
     } else if (data.startsWith("undo-stock:")) {
       const eventId = data.slice("undo-stock:".length);
-      await answerCallbackQuery(token, cb.id, "Revirtiendo salida de stock...");
       const result = await undoPhysicalStockSale(senderChatId, eventId);
       if (result?.ok) {
+        await answerCallbackQuery(token, cb.id, "Venta deshecha.");
         const event = result.event;
         await editTelegramMessage(token, senderChatId, sourceMessageId, `↩️ *Venta deshecha*\n\n${escapeTelegramMarkdown(event.productName)} · ${escapeTelegramMarkdown(event.color)} · ${escapeTelegramMarkdown(event.size)}\nDevueltas: *${event.quantity}* · Stock: *${result.stock}*`, { reply_markup: buildInventoryMenu().reply_markup });
       } else {
-        await answerCallbackQuery(token, cb.id, "Esta venta ya fue deshecha.");
+        await answerCallbackQuery(token, cb.id, "Esta venta ya fue deshecha.", { show_alert: true });
+      }
+    } else if (data.startsWith("order-delete:")) {
+      // OWASP Authorization Cheat Sheet: validate permissions on every request.
+      // The admin allowlist above is rechecked even for confirmation callbacks.
+      const [, operation, ...reference] = data.split(":");
+      const value = reference.join(":");
+      if (String(cb.from?.id || "") !== senderChatId || String(cb.message?.chat?.id || "") !== senderChatId) {
+        await answerCallbackQuery(token, cb.id, "Abre el pedido en tu chat privado con el bot para eliminarlo.", { show_alert: true });
+        res.status(200).json({ ok: true });
+        return;
+      }
+      await answerCallbackQuery(token, cb.id);
+      const back = { inline_keyboard: [[{ text: "↩️ Pedidos pendientes", callback_data: "pending:0" }]] };
+      try {
+        let view = null;
+        await updateStore((draft) => {
+          const orders = Array.isArray(draft.orders) ? draft.orders : [];
+          draft.meta ||= {};
+          const pending = draft.meta.telegramOrderDeletions ||= {};
+          const fingerprint = (order) => createHash("sha256").update(JSON.stringify(order)).digest("hex");
+          const showOrder = (order, text = "") => ({ text: text || formatTelegramOrderMessage(order), reply_markup: buildTelegramOrderKeyboard(order) });
+          if (operation === "request") {
+            const found = orders.find((order) => String(order.code).toUpperCase() === value.toUpperCase());
+            if (!found || !Number.isSafeInteger(sourceMessageId) || sourceMessageId <= 0) {
+              view = { text: "⚠️ Pedido no encontrado. No se eliminó nada.", reply_markup: back };
+              return draft;
+            }
+            const nonce = randomUUID();
+            // One expiring prompt per administrator; no proof or customer data copied.
+            pending[senderChatId] = { nonce, orderId: String(found.id), code: String(found.code), messageId: sourceMessageId, fingerprint: fingerprint(found), expiresAt: Date.now() + 5 * 60 * 1000 };
+            view = {
+              text: `🗑️ *Eliminar pedido ${escapeTelegramMarkdown(found.code)}*\n\nSe borrará de la tienda junto con sus adjuntos y copias administradas. El stock reservado se reintegrará según las reglas de la web.\n\nEsta acción no se puede deshacer. ¿Confirmas?`,
+              reply_markup: { inline_keyboard: [
+                [{ text: "🗑️ Sí, eliminar definitivamente", callback_data: `order-delete:confirm:${nonce}` }],
+                [{ text: "↩️ No, conservar pedido", callback_data: `order-delete:cancel:${nonce}` }],
+              ] },
+            };
+          } else if (operation === "confirm" || operation === "cancel") {
+            const prompt = pending[senderChatId];
+            // Server-held nonce binds consent to admin, message, order and expiry.
+            if (!prompt || prompt.nonce !== value || prompt.messageId !== sourceMessageId || prompt.expiresAt <= Date.now()) {
+              view = { text: "⚠️ Confirmación vencida o ya utilizada. No se eliminó nada. Abre el pedido nuevamente.", reply_markup: back };
+              return draft;
+            }
+            const found = orders.find((order) => String(order.id) === prompt.orderId);
+            delete pending[senderChatId];
+            if (!found) {
+              view = { text: "ℹ️ Este pedido ya no existe. No se realizaron ajustes adicionales de stock.", reply_markup: back };
+            } else if (operation === "cancel") {
+              view = showOrder(found);
+            } else if (fingerprint(found) !== prompt.fingerprint) {
+              view = showOrder(found, `⚠️ El pedido cambió desde que pediste eliminarlo. No se eliminó nada.\n\n${formatTelegramOrderMessage(found)}`);
+            } else {
+              const result = deleteOrderFromDraft(draft, prompt.orderId);
+              view = { text: `🗑️ Pedido *${escapeTelegramMarkdown(found.code)}* eliminado de la tienda junto con sus adjuntos.\n${result.warning ? `⚠️ ${escapeTelegramMarkdown(result.warning)}` : "Stock sincronizado según las reglas de la web."}`, reply_markup: back };
+            }
+          } else {
+            view = { text: "⚠️ Acción no válida. No se eliminó nada.", reply_markup: back };
+          }
+          return draft;
+        });
+        await editTelegramMessage(token, senderChatId, sourceMessageId, view.text, { reply_markup: view.reply_markup });
+      } catch (error) {
+        console.error("[telegram-order-delete-error]", error?.code || "store-write-failed");
+        await editTelegramMessage(token, senderChatId, sourceMessageId, "⚠️ No pudimos completar la eliminación y limpieza del pedido. Abre el pedido y vuelve a intentarlo.", { reply_markup: back });
       }
     } else if (data.startsWith("status:")) {
       const parts = data.split(":");
       const targetAction = parts[1];
       const orderCode = parts.slice(2).join(":");
+      if (targetAction === "confirmed" && String(cb.from?.id || "") !== senderChatId) {
+        await answerCallbackQuery(token, cb.id, "Acción no autorizada.", { show_alert: true });
+        res.status(200).json({ ok: true });
+        return;
+      }
 
       const statusMap = {
+        confirmed: "Confirmado",
         ready: "Listo para retiro",
         shipped: "Enviado",
         completed: "Entregado",
+        preparing: "Preparando",
       };
 
-      const newStatus = statusMap[targetAction] || "En preparación";
+      const newStatus = Object.hasOwn(statusMap, targetAction) ? statusMap[targetAction] : null;
+      if (!newStatus) {
+        await answerCallbackQuery(token, cb.id, "Estado no válido.", { show_alert: true });
+        res.status(200).json({ ok: true });
+        return;
+      }
       let updatedOrder = null;
+      let statusWarning = "";
+      let statusSaveFailed = false;
 
       // Answer Telegram UI immediately so button stops spinning
       await answerCallbackQuery(token, cb.id, "Actualizando pedido " + orderCode + "...");
@@ -1122,6 +1626,15 @@ export default async function handler(req, res) {
           const orders = Array.isArray(draft.orders) ? draft.orders : [];
           const targetIndex = orders.findIndex((order) => String(order.code).toUpperCase() === String(orderCode).toUpperCase());
           if (targetIndex >= 0) {
+            const current = orders[targetIndex];
+            if (targetAction === "confirmed") {
+              updatedOrder = current;
+              if (current.status === "Confirmado") return draft;
+              if ((current.status || "Pendiente") !== "Pendiente" || current.stockReservation?.state === "released") {
+                statusWarning = "El pedido cambió o fue cancelado. No se cambió su estado.";
+                return draft;
+              }
+            }
             orders[targetIndex] = {
               ...orders[targetIndex],
               status: newStatus,
@@ -1134,15 +1647,17 @@ export default async function handler(req, res) {
           return draft;
         });
       } catch (storeError) {
+        statusSaveFailed = true;
+        updatedOrder = null;
         console.error("[store-update-error]", storeError?.message || storeError);
       }
 
       if (updatedOrder) {
-        await editTelegramMessage(token, senderChatId, sourceMessageId, formatTelegramOrderMessage(updatedOrder), {
+        await editTelegramMessage(token, senderChatId, sourceMessageId, `${statusWarning ? `⚠️ ${statusWarning}\n\n` : ""}${formatTelegramOrderMessage(updatedOrder)}`, {
           reply_markup: buildTelegramOrderKeyboard(updatedOrder),
         });
       } else {
-        await editTelegramMessage(token, senderChatId, sourceMessageId, "⚠️ No encontré el pedido `" + orderCode + "`.", {
+        await editTelegramMessage(token, senderChatId, sourceMessageId, statusSaveFailed ? "⚠️ No pudimos guardar el estado del pedido. Abre el pedido para comprobarlo y vuelve a intentarlo." : "⚠️ No encontré el pedido `" + escapeTelegramMarkdown(orderCode) + "`.", {
           reply_markup: { inline_keyboard: [[{ text: "↩️ Pedidos pendientes", callback_data: "pending:0" }]] },
         });
       }
@@ -1181,6 +1696,9 @@ export default async function handler(req, res) {
         console.error("[address-lookup-error]", err?.message || err);
         await answerCallbackQuery(token, cb.id, "No pude consultar la dirección.");
       }
+    } else if (data === "proof-close") {
+      await answerCallbackQuery(token, cb.id);
+      await deleteTelegramMessage(token, senderChatId, sourceMessageId);
     } else if (data.startsWith("proof:")) {
       // Handle "Ver Comprobante" button
       const orderCode = data.slice("proof:".length);
@@ -1208,11 +1726,11 @@ export default async function handler(req, res) {
           );
         } else {
           const bankName = found.paymentBankAccount?.bankName || "";
-          const caption = "📸 *Comprobante de Pago*\n━━━━━━━━━━━━━━━━━━━━\n📦 *Pedido:* `" + found.code + "`\n👤 *Cliente:* " + escapeTelegramMarkdown(found.customerName || "Cliente") + "\n💰 *Monto:* *" + currency(found.total ?? found.subtotal) + "*" + (bankName ? "\n🏦 *Banco:* " + escapeTelegramMarkdown(bankName) : "") + "\n━━━━━━━━━━━━━━━━━━━━\n⚡ [Ver en Panel Admin](https://adriego.vercel.app/admin)";
+          const caption = "📸 *Comprobante de Pago*\n━━━━━━━━━━━━━━━━━━━━\n📦 *Pedido:* `" + found.code + "`\n👤 *Cliente:* " + escapeTelegramMarkdown(found.customerName || "Cliente") + "\n💰 *Monto:* *" + currency(found.total ?? found.subtotal) + "*" + (bankName ? "\n🏦 *Banco:* " + escapeTelegramMarkdown(bankName) : "") + `\n━━━━━━━━━━━━━━━━━━━━\n⚡ [Ver en Panel Admin](${getAdminPanelUrl()})`;
 
           const photoResult = await sendTelegramPhoto(token, senderChatId, found.paymentProof, caption, {
             reply_markup: {
-              inline_keyboard: [[{ text: "↩️ Volver al pedido", callback_data: `view:${orderCode}` }]],
+              inline_keyboard: [[{ text: "↩️ Volver al pedido", callback_data: "proof-close" }]],
             },
           });
           if (!photoResult?.ok) {
@@ -1220,7 +1738,7 @@ export default async function handler(req, res) {
               token,
               senderChatId,
               sourceMessageId,
-              "⚠️ No pudimos enviar la foto directamente por Telegram. Puedes revisarlo en el [Panel Admin](https://adriego.vercel.app/admin).",
+              `⚠️ No pudimos enviar la foto directamente por Telegram. Puedes revisarlo en el [Panel Admin](${getAdminPanelUrl()}).`,
               {
                 reply_markup: { inline_keyboard: [[{ text: "↩️ Volver al pedido", callback_data: `view:${orderCode}` }]] },
               }
@@ -1328,7 +1846,7 @@ export default async function handler(req, res) {
       const courierName = parts[2];
       await answerCallbackQuery(token, cb.id, courierName + " seleccionado");
 
-      const instructMsg = "📦 Pedido: `" + orderCode + "`\n🚚 Courier: *" + courierName + "*\n\nResponde únicamente con el número de guía.";
+      const instructMsg = formatGuidePrompt(orderCode, courierName);
       const promptResult = await sendTelegramMessage(token, senderChatId, instructMsg, {
         reply_markup: {
           force_reply: true,
@@ -1413,6 +1931,11 @@ export default async function handler(req, res) {
     res.status(200).json({ ok: true, authorized: true });
     return;
   }
+  if (replyText.includes("Buscar producto para reponer stock") && text && !text.startsWith("/")) {
+    await sendInventorySearchResults(token, senderChatId, text, message.reply_to_message?.message_id, { mode: "restock" });
+    res.status(200).json({ ok: true, authorized: true });
+    return;
+  }
   if (replyText.includes("Buscar pedido") && text && !text.startsWith("/")) {
     const store = await readStore();
     const query = text.toUpperCase();
@@ -1436,51 +1959,45 @@ export default async function handler(req, res) {
   if (replyMatch && text && !text.startsWith("/")) {
     const orderCode = replyMatch[1];
     const courierName = replyMatch[2].trim();
+    if (lowerText === "cancelar") {
+      await clearPendingGuidePrompt(senderChatId);
+      await editTelegramMessage(token, senderChatId, message.reply_to_message?.message_id, "✅ *Registro de guía cancelado.*", {
+        reply_markup: { inline_keyboard: [[{ text: "↩️ Volver al pedido", callback_data: `view:${orderCode}` }]] },
+      });
+      res.status(200).json({ ok: true, authorized: true, cancelled: true });
+      return;
+    }
     const trackingNumber = text.trim();
-    PENDING_GUIDE_PROMPTS.delete(senderChatId);
     await applyOrderGuideRegistration(token, senderChatId, orderCode, courierName, trackingNumber, message.reply_to_message?.message_id);
     res.status(200).json({ ok: true, authorized: true });
     return;
   }
 
-  let pendingPrompt = PENDING_GUIDE_PROMPTS.get(senderChatId);
-  if (!pendingPrompt || pendingPrompt.expiresAt <= Date.now()) {
-    try {
-      const store = await readStore();
-      const persisted = store?.meta?.pendingGuidePrompts?.[senderChatId];
-      if (persisted && persisted.expiresAt > Date.now()) {
-        pendingPrompt = persisted;
-      }
-    } catch (err) {
-      console.error("[read-persisted-guide-prompt-error]", err?.message || err);
-    }
+  const pendingPrompt = await readPendingGuidePrompt(senderChatId);
+
+  if (pendingPrompt && (lowerText === "cancelar" || lowerText === "/cancelar")) {
+    await clearPendingGuidePrompt(senderChatId);
+    await editTelegramMessage(token, senderChatId, pendingPrompt.promptMessageId, "✅ *Registro de guía cancelado.*", {
+      reply_markup: { inline_keyboard: [[{ text: "↩️ Volver al pedido", callback_data: `view:${pendingPrompt.orderCode}` }]] },
+    });
+    res.status(200).json({ ok: true, authorized: true, cancelled: true });
+    return;
   }
 
-  if (
-    pendingPrompt
-    && pendingPrompt.expiresAt > Date.now()
-    && text
-    && !text.startsWith("/")
-    && !lowerText.includes("ventas")
-    && !lowerText.includes("resumen")
-    && !lowerText.includes("pendientes")
-    && !lowerText.includes("pedidos")
-    && !lowerText.includes("stock")
-    && !lowerText.includes("buscar")
-    && !lowerText.includes("inventario")
-    && !lowerText.includes("ayuda")
-    && !lowerText.includes("help")
-    && lowerText !== "deshacer venta"
-  ) {
-    PENDING_GUIDE_PROMPTS.delete(senderChatId);
+  if (pendingPrompt && !text.startsWith("/") && normalizeGuideRegistrationInput(pendingPrompt.courierName, text).valid) {
     const trackingNumber = text.trim();
     await applyOrderGuideRegistration(token, senderChatId, pendingPrompt.orderCode, pendingPrompt.courierName, trackingNumber, pendingPrompt.promptMessageId);
     res.status(200).json({ ok: true, authorized: true });
     return;
   }
 
+  if (pendingPrompt && text) {
+    await clearPendingGuidePrompt(senderChatId);
+  }
+
   // Command Handlers for Admin
   if (lowerText === "/start" || lowerText === "hola" || lowerText === "/menu" || lowerText === "menu") {
+    await ensureTelegramBotCommandsRegistered(token);
     const store = await readStore();
     const home = buildAdminHome(store, senderName);
     await sendTelegramMessage(token, senderChatId, home.text, { reply_markup: home.reply_markup });
@@ -1505,7 +2022,15 @@ export default async function handler(req, res) {
         ],
       },
     });
-  } else if (lowerText === "🛍️ inventario" || lowerText.includes("inventario físico") || lowerText.includes("inventario fisico") || lowerText === "/stock" || lowerText === "/venta" || lowerText === "stock" || lowerText === "venta") {
+  } else if (lowerText === "/reponer" || lowerText === "reponer" || lowerText === "reponer stock") {
+    const store = await readStore();
+    const view = buildInventoryTypesView(store, { mode: "restock" });
+    await sendTelegramMessage(token, senderChatId, view.text, { reply_markup: view.reply_markup });
+  } else if (lowerText === "/venta" || lowerText === "venta") {
+    const store = await readStore();
+    const view = buildInventoryTypesView(store);
+    await sendTelegramMessage(token, senderChatId, view.text, { reply_markup: view.reply_markup });
+  } else if (lowerText === "🛍️ inventario" || lowerText.includes("inventario físico") || lowerText.includes("inventario fisico") || lowerText === "/stock" || lowerText === "stock") {
     const menu = buildInventoryMenu();
     await sendTelegramMessage(token, senderChatId, menu.text, { reply_markup: menu.reply_markup });
   } else if (lowerText.startsWith("/stock ") || lowerText.startsWith("stock ")) {
@@ -1563,6 +2088,7 @@ export default async function handler(req, res) {
         const product = matches.length === 1 ? matches[0] : null;
         const variant = product?.variants?.find((item) => String(item.color || "").toLowerCase() === parts[1].toLowerCase() && String(item.size || "").toLowerCase() === parts[2].toLowerCase());
         if (!variant || !Number.isSafeInteger(Number(variant.stock)) || Number(variant.stock) < quantity) { result = { ok: false, stock: Math.max(0, Number(variant?.stock) || 0) }; return draft; }
+        const previousStock = Number(variant.stock);
         variant.stock -= quantity;
         refreshProductStock(product);
         const event = {
@@ -1573,6 +2099,11 @@ export default async function handler(req, res) {
           color: String(variant.color || parts[1]),
           size: String(variant.size || parts[2]),
           quantity,
+          delta: -quantity,
+          previousStock,
+          nextStock: variant.stock,
+          reason: "Venta física por Telegram",
+          source: "telegram",
           status: "active",
           createdAt: new Date().toISOString(),
         };
@@ -1614,16 +2145,15 @@ export default async function handler(req, res) {
       trackingNumber = rawArgs.slice(2).join(" ");
     }
 
-    PENDING_GUIDE_PROMPTS.delete(senderChatId);
     await applyOrderGuideRegistration(token, senderChatId, orderQuery, courierName, trackingNumber);
     res.status(200).json({ ok: true, authorized: true });
     return;
-  } else if (lowerText === "🔍 buscar" || lowerText.includes("buscar pedido") || lowerText === "🔍 buscar pedido") {
+  } else if (lowerText === "🔍 buscar" || lowerText === "/buscar" || lowerText === "buscar" || lowerText.includes("buscar pedido") || lowerText === "🔍 buscar pedido") {
     const msg = "🔍 *Buscar pedido*\n\nResponde con el código o el nombre del cliente.";
     await sendTelegramMessage(token, senderChatId, msg, {
       reply_markup: { force_reply: true, selective: true, input_field_placeholder: "Ej. ORDER-10099 o María" },
     });
-  } else if (lowerText.startsWith("/buscar") || lowerText.startsWith("buscar")) {
+  } else if (lowerText.startsWith("/buscar ") || lowerText.startsWith("buscar ")) {
     const query = text.replace(/^[/]?buscar\s*/i, "").trim().toUpperCase();
     const store = await readStore();
     const orders = Array.isArray(store?.orders) ? store.orders : [];
@@ -1636,6 +2166,8 @@ export default async function handler(req, res) {
       const keyboard = buildTelegramOrderKeyboard(found);
       await sendTelegramMessage(token, senderChatId, cardText, { reply_markup: keyboard });
     }
+  } else if (lowerText === "/cancelar" || lowerText === "cancelar") {
+    await sendTelegramMessage(token, senderChatId, "ℹ️ No hay ninguna operación pendiente para cancelar.");
   } else {
     await sendTelegramMessage(
       token,
@@ -1660,6 +2192,7 @@ export {
   buildInventoryTypesView,
   buildInventoryProductsByTypeView,
   buildInventoryInStockView,
+  buildInventoryRestockView,
   getAvailableProductTypes,
   getProductTotalStock,
   sendInventorySearchResults,

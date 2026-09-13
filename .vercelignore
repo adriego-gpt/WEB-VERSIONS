@@ -7,4 +7,6 @@ artifacts
 .tmp*
 .env*
 scripts/recover-catalog.mjs
+scripts/serve-audit.mjs
+scripts/run-tests.mjs
 .data

@@ -108,7 +108,7 @@ test("guided Telegram inventory selects product, variant and quantity without du
   });
 
   await call(message(20, "🛍️ Inventario físico"));
-  assert.equal(lastBotMessage().reply_markup.inline_keyboard[0][0].callback_data, "inv:search");
+  assert.equal(lastBotMessage().reply_markup.inline_keyboard[0][0].callback_data, "inv:types");
   await call(callback("guided-search", "inv:search"));
   const prompt = lastBotMessage().text;
   await call({ message: { message_id: 21, chat: { id: 123 }, text: "Clasica", reply_to_message: { text: prompt } } });
@@ -133,7 +133,7 @@ test("guided Telegram inventory selects product, variant and quantity without du
   assert.equal(store.physicalStockEvents.length, 1);
 
   await call(callback("guided-restock", "inv:restock"));
-  assert.match(lastBotMessage().text, /Lista para revisar con el proveedor/);
+  assert.match(lastBotMessage().text, /Reponer stock/);
   await call(callback("guided-undo", "inv:undo-last"));
   await call(callback("guided-undo", "inv:undo-last"));
   store = await readStore();

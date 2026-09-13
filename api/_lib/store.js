@@ -2,6 +2,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
+import { fetchWithTimeout } from "./network.js";
+import { getOrderErasureChanges, sanitizeOrderBackup } from "./orderErasure.js";
 
 const DATA_DIR = path.join(process.cwd(), ".data");
 const DATA_FILE = path.join(DATA_DIR, "store.json");
@@ -85,7 +87,7 @@ async function runKvCommand(command, ...args) {
     throw new Error("kv-not-configured");
   }
 
-  const response = await fetch(baseUrl, {
+  const response = await fetchWithTimeout(baseUrl, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
@@ -118,7 +120,7 @@ async function runKvPipeline(commands = []) {
   if (!baseUrl || !token) throw new Error("kv-not-configured");
   if (!normalizedCommands.length) return [];
 
-  const response = await fetch(`${baseUrl}/pipeline`, {
+  const response = await fetchWithTimeout(`${baseUrl}/pipeline`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
@@ -154,7 +156,7 @@ async function runKvTransaction(commands = []) {
   if (!baseUrl || !token) throw new Error("kv-not-configured");
   if (!normalizedCommands.length) return [];
 
-  const response = await fetch(`${baseUrl}/multi-exec`, {
+  const response = await fetchWithTimeout(`${baseUrl}/multi-exec`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
@@ -194,13 +196,40 @@ async function readKvStore() {
   }
 }
 
-async function writeKvStore(store, previousStore = null) {
+async function prepareOrderBackupCleanup(store, previousStore) {
+  const changes = getOrderErasureChanges(previousStore, store);
+  if (!changes.deletedOrderIds.size && !changes.clearedProofOrderIds.size) return { changes, commands: [] };
+  const backupKeys = Array.from({ length: 3 }, (_, index) => `${STORE_KEY}:backup:${index}`);
+  const backups = await runKvPipeline(backupKeys.map((key) => ["GET", key]));
+  if (backups.length !== backupKeys.length) throw new Error("order-backup-cleanup-invalid-response");
+  const commands = [];
+  backups.forEach((serialized, index) => {
+    if (serialized == null) return;
+    let snapshot;
+    try {
+      snapshot = typeof serialized === "string" ? JSON.parse(serialized) : serialized;
+      if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) throw new Error("invalid-backup");
+    } catch {
+      // Never destroy a corrupt catalog backup just to report a successful deletion.
+      throw new Error("order-backup-corrupt-refusing-erasure");
+    }
+    const cleaned = sanitizeOrderBackup(snapshot, changes);
+    if (JSON.stringify(cleaned) !== JSON.stringify(snapshot)) {
+      commands.push(["SET", backupKeys[index], JSON.stringify(cleaned)]);
+    }
+  });
+  return { changes, commands };
+}
+
+async function writeKvStore(store, previousStore = null, cleanup = null) {
   const realtime = store?.meta?.realtime && typeof store.meta.realtime === "object"
     ? store.meta.realtime
     : DEFAULT_STORE.meta.realtime;
   await runKvTransaction([
+    ...(cleanup?.commands || []),
     ...(previousStore && previousStore.meta.realtime.catalogVersion !== store.meta.realtime.catalogVersion
-      ? [["SET", `${STORE_KEY}:backup:${previousStore.meta.realtime.catalogVersion % 3}`, JSON.stringify(previousStore)]]
+      ? [["SET", `${STORE_KEY}:backup:${previousStore.meta.realtime.catalogVersion % 3}`,
+        JSON.stringify(cleanup ? sanitizeOrderBackup(previousStore, cleanup.changes) : previousStore)]]
       : []),
     ["SET", STORE_KEY, JSON.stringify(store)],
     ["SET", STORE_REALTIME_KEY, JSON.stringify(realtime)],
@@ -406,10 +435,11 @@ async function updateStore(mutator) {
       const draft = clone(current);
       const mutated = await mutator(draft);
       const next = normalizeStore(mutated ?? draft);
+      const cleanup = await prepareOrderBackupCleanup(next, current);
       if (!await renewKvLock(lockToken)) {
         throw new Error("kv-lock-lost");
       }
-      await writeKvStore(next, current);
+      await writeKvStore(next, current, cleanup);
       return next;
     } finally {
       await releaseKvLock(lockToken);

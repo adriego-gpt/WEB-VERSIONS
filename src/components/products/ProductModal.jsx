@@ -18,6 +18,9 @@ import { useSwipeGesture } from "../../hooks/useSwipeGesture";
 import { currency, discountPercent } from "../../utils/currency";
 import { getProductColorSwatch } from "../../utils/productColor";
 import { triggerHaptic } from "../../utils/haptics";
+import { clampImagePan, zoomImageAtPoint } from "../../domain/products/imageZoom";
+import { getResponsiveImageSources, applyImageFallback } from "../../domain/products/imageSources.js";
+import { createFrameQueue } from "../../utils/frameQueue.js";
 import {
   getSelectionForColor,
   getImagesForColor,
@@ -46,7 +49,6 @@ export function ProductModal({
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
   const [cartFeedback, setCartFeedback] = useState(null);
   const [previewScale, setPreviewScale] = useState(1);
-  const [previewZoomOrigin, setPreviewZoomOrigin] = useState("50% 50%");
   const [previewPan, setPreviewPan] = useState({ x: 0, y: 0 });
   const [previewPanning, setPreviewPanning] = useState(false);
   const previewSwipeStartRef = useRef(null);
@@ -54,20 +56,26 @@ export function ProductModal({
   const previewDidSwipeRef = useRef(false);
   const previewHandledByPointerRef = useRef(false);
   const previewPanStartRef = useRef(null);
+  const previewDraggedRef = useRef(false);
+  const previewShellRef = useRef(null);
+  const previewCloseRef = useRef(null);
   const previewPointersRef = useRef(new Map());
   const previewPinchRef = useRef(null);
   const recommendationTrackRef = useRef(null);
+  const galleryPaginationRef = useRef(null);
   const modalRef = useRef(null);
   const modalRightRef = useRef(null);
   const previewScaleRef = useRef(1);
   const previewPanRef = useRef({ x: 0, y: 0 });
+  const previewFrameRef = useRef(null);
+  const cancelPreviewFrame = useCallback(() => previewFrameRef.current?.cancel(), []);
+  useEffect(() => cancelPreviewFrame, [cancelPreviewFrame]);
   const imagePreviewOpenRef = useRef(false);
   const previewHistoryKeyRef = useRef(null);
   const onCloseRef = useRef(onClose);
   const currentImages = product ? getImagesForColor(product, resolvedSelection?.color) : [];
   const safeImageIndex = currentImages.length ? Math.min(imageIndex, currentImages.length - 1) : 0;
   const activeImage = currentImages[safeImageIndex] || currentImages[0] || FALLBACK_IMAGE;
-  const activeImageView = product?.imageViewsByColor?.[resolvedSelection?.color]?.[safeImageIndex] || "";
   const discount = product ? discountPercent(product.price, product.oldPrice) : 0;
   const sizesForSelectedColor = product ? getSizesForColor(product, resolvedSelection?.color) : [];
   const selectedStock = product ? getStockForVariant(product, resolvedSelection?.color, resolvedSelection?.size) : 0;
@@ -89,26 +97,26 @@ export function ProductModal({
     return () => window.clearTimeout(timerId);
   }, [cartFeedback]);
   const clampPreviewPan = (pan, scale, element) => {
-    const maxX = Math.max(0, (element.offsetWidth * (scale - 1)) / 2);
-    const maxY = Math.max(0, (element.offsetHeight * (scale - 1)) / 2);
-    return {
-      x: Math.max(-maxX, Math.min(maxX, pan.x)),
-      y: Math.max(-maxY, Math.min(maxY, pan.y)),
-    };
+    return clampImagePan(pan, scale, element.offsetWidth, element.offsetHeight);
   };
   const setPreviewTransform = (scale, pan) => {
     previewScaleRef.current = scale;
     previewPanRef.current = pan;
-    setPreviewScale(scale);
-    setPreviewPan(pan);
+    if (!previewFrameRef.current) {
+      previewFrameRef.current = createFrameQueue((transform) => {
+        setPreviewScale(transform.scale);
+        setPreviewPan(transform.pan);
+      });
+    }
+    previewFrameRef.current.push({ scale, pan });
   };
   const resetImagePreview = useCallback(() => {
     imagePreviewOpenRef.current = false;
     setImagePreviewOpen(false);
+    cancelPreviewFrame();
     previewScaleRef.current = 1;
     previewPanRef.current = { x: 0, y: 0 };
     setPreviewScale(1);
-    setPreviewZoomOrigin("50% 50%");
     setPreviewPan({ x: 0, y: 0 });
     setPreviewPanning(false);
     previewSwipeStartRef.current = null;
@@ -116,9 +124,10 @@ export function ProductModal({
     previewDidSwipeRef.current = false;
     previewHandledByPointerRef.current = false;
     previewPanStartRef.current = null;
+    previewDraggedRef.current = false;
     previewPointersRef.current.clear();
     previewPinchRef.current = null;
-  }, [setImagePreviewOpen, setPreviewPan, setPreviewPanning, setPreviewScale, setPreviewZoomOrigin]);
+  }, [cancelPreviewFrame, setImagePreviewOpen, setPreviewPan, setPreviewPanning, setPreviewScale]);
 
   const openImagePreview = () => {
     if (typeof window !== "undefined") {
@@ -132,16 +141,18 @@ export function ProductModal({
     }
     imagePreviewOpenRef.current = true;
     setImagePreviewOpen(true);
+    cancelPreviewFrame();
     previewScaleRef.current = 1;
     previewPanRef.current = { x: 0, y: 0 };
     setPreviewScale(1);
-    setPreviewZoomOrigin("50% 50%");
     setPreviewPan({ x: 0, y: 0 });
     setPreviewPanning(false);
     previewSwipeStartRef.current = null;
     previewSwipeIntentRef.current = null;
     previewDidSwipeRef.current = false;
     previewHandledByPointerRef.current = false;
+    previewPanStartRef.current = null;
+    previewDraggedRef.current = false;
     previewPointersRef.current.clear();
     previewPinchRef.current = null;
   };
@@ -162,20 +173,23 @@ export function ProductModal({
     onCloseRef.current?.();
   }, []);
 
-  const updatePreviewZoomOrigin = (event) => {
-    const bounds = event.currentTarget.getBoundingClientRect();
-    if (!bounds.width || !bounds.height) return;
-    const x = ((event.clientX - bounds.left) / bounds.width) * 100;
-    const y = ((event.clientY - bounds.top) / bounds.height) * 100;
-    setPreviewZoomOrigin(`${x}% ${y}%`);
-  };
-
   const togglePreviewZoom = (event) => {
     const nextScale = previewScaleRef.current > 1.01 ? 1 : 2.2;
+    let pan = { x: 0, y: 0 };
     if (event && nextScale > 1) {
-      updatePreviewZoomOrigin(event);
+      const bounds = event.currentTarget.getBoundingClientRect();
+      pan = clampPreviewPan(zoomImageAtPoint({
+        scale: previewScaleRef.current,
+        nextScale,
+        pan: previewPanRef.current,
+        point: { x: event.clientX, y: event.clientY },
+        center: {
+          x: bounds.left + bounds.width / 2 - previewPanRef.current.x,
+          y: bounds.top + bounds.height / 2 - previewPanRef.current.y,
+        },
+      }), nextScale, event.currentTarget);
     }
-    setPreviewTransform(nextScale, { x: 0, y: 0 });
+    setPreviewTransform(nextScale, pan);
     setPreviewPanning(false);
   };
 
@@ -184,18 +198,23 @@ export function ProductModal({
   };
 
   const handlePreviewPointerDown = (event) => {
-    if (!isTouchLikePointer(event.pointerType)) return;
+    if (!isTouchLikePointer(event.pointerType) && (event.pointerType !== "mouse" || event.button !== 0 || !previewZoomed)) return;
+    previewHandledByPointerRef.current = false;
+    previewDidSwipeRef.current = false;
+    previewDraggedRef.current = false;
     const pointer = { x: event.clientX, y: event.clientY };
     previewPointersRef.current.set(event.pointerId, pointer);
     event.currentTarget.setPointerCapture?.(event.pointerId);
 
     if (previewPointersRef.current.size >= 2) {
       const [first, second] = [...previewPointersRef.current.values()];
+      const bounds = event.currentTarget.getBoundingClientRect();
       previewPinchRef.current = {
         distance: Math.hypot(second.x - first.x, second.y - first.y),
         scale: previewScaleRef.current,
         pan: previewPanRef.current,
         center: { x: (first.x + second.x) / 2, y: (first.y + second.y) / 2 },
+        imageCenter: { x: bounds.left + bounds.width / 2 - previewPanRef.current.x, y: bounds.top + bounds.height / 2 - previewPanRef.current.y },
       };
       previewSwipeStartRef.current = null;
       previewSwipeIntentRef.current = null;
@@ -219,26 +238,18 @@ export function ProductModal({
   };
 
   const handlePreviewPointerMove = (event) => {
-    if (!isTouchLikePointer(event.pointerType)) return;
     if (!previewPointersRef.current.has(event.pointerId)) return;
     previewPointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
 
     if (previewPointersRef.current.size >= 2) {
       const [first, second] = [...previewPointersRef.current.values()];
-      const pinch = previewPinchRef.current || {
-        distance: Math.hypot(second.x - first.x, second.y - first.y),
-        scale: previewScaleRef.current,
-        pan: previewPanRef.current,
-        center: { x: (first.x + second.x) / 2, y: (first.y + second.y) / 2 },
-      };
-      previewPinchRef.current = pinch;
+      const pinch = previewPinchRef.current;
+      if (!pinch) return;
       const distance = Math.hypot(second.x - first.x, second.y - first.y);
       const scale = Math.max(1, Math.min(3.5, pinch.scale * (distance / Math.max(1, pinch.distance))));
       const center = { x: (first.x + second.x) / 2, y: (first.y + second.y) / 2 };
-      const pan = clampPreviewPan({
-        x: pinch.pan.x + center.x - pinch.center.x,
-        y: pinch.pan.y + center.y - pinch.center.y,
-      }, scale, event.currentTarget);
+      const anchoredPan = zoomImageAtPoint({ scale: pinch.scale, nextScale: scale, pan: pinch.pan, point: pinch.center, center: pinch.imageCenter });
+      const pan = clampPreviewPan({ x: anchoredPan.x + center.x - pinch.center.x, y: anchoredPan.y + center.y - pinch.center.y }, scale, event.currentTarget);
       setPreviewTransform(scale, pan);
       setPreviewPanning(true);
       previewHandledByPointerRef.current = true;
@@ -248,6 +259,7 @@ export function ProductModal({
 
     if (previewScaleRef.current > 1.01 && previewPanStartRef.current) {
       const { x, y, panX, panY } = previewPanStartRef.current;
+      if (Math.hypot(event.clientX - x, event.clientY - y) >= 6) previewDraggedRef.current = true;
       const pan = clampPreviewPan({ x: panX + event.clientX - x, y: panY + event.clientY - y }, previewScaleRef.current, event.currentTarget);
       setPreviewTransform(previewScaleRef.current, pan);
       if (event.cancelable) event.preventDefault();
@@ -269,7 +281,7 @@ export function ProductModal({
   };
 
   const handlePreviewPointerUp = (event) => {
-    if (!isTouchLikePointer(event.pointerType)) return;
+    if (!previewPointersRef.current.has(event.pointerId)) return;
     const hadPinch = Boolean(previewPinchRef.current) || previewPointersRef.current.size >= 2;
     previewPointersRef.current.delete(event.pointerId);
     if (hadPinch) {
@@ -290,7 +302,7 @@ export function ProductModal({
     }
     if (previewScaleRef.current > 1.01 && previewPanStartRef.current) {
       const { x, y } = previewPanStartRef.current;
-      const wasTap = Math.abs(event.clientX - x) < 10 && Math.abs(event.clientY - y) < 10;
+      const wasTap = !previewDraggedRef.current && Math.hypot(event.clientX - x, event.clientY - y) < 6;
       previewPanStartRef.current = null;
       setPreviewPanning(false);
       previewHandledByPointerRef.current = true;
@@ -332,6 +344,41 @@ export function ProductModal({
     }
     togglePreviewZoom(event);
   };
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      const track = galleryPaginationRef.current;
+      const selected = track?.children[safeImageIndex];
+      if (!track || !selected) return;
+      track.scrollLeft = selected.offsetLeft - track.clientWidth / 2 + selected.offsetWidth / 2;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [safeImageIndex, currentImages.length]);
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      cancelPreviewFrame();
+      previewScaleRef.current = 1;
+      previewPanRef.current = { x: 0, y: 0 };
+      setPreviewScale(1);
+      setPreviewPan({ x: 0, y: 0 });
+      setPreviewPanning(false);
+      previewPanStartRef.current = null;
+      previewPointersRef.current.clear();
+      previewPinchRef.current = null;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [activeImage, safeImageIndex, cancelPreviewFrame]);
+
+  useEffect(() => {
+    if (!imagePreviewOpen) return undefined;
+    const returnFocusTo = document.activeElement;
+    const frame = window.requestAnimationFrame(() => previewCloseRef.current?.focus());
+    return () => {
+      window.cancelAnimationFrame(frame);
+      if (returnFocusTo instanceof HTMLElement && returnFocusTo.isConnected) returnFocusTo.focus();
+    };
+  }, [imagePreviewOpen]);
 
   const scrollRecommendations = (direction) => {
     recommendationTrackRef.current?.scrollBy({
@@ -419,7 +466,8 @@ export function ProductModal({
         setImageIndex((previous) => (previous + 1) % currentImages.length);
       } else if (event.key === "Tab") {
         const FOCUSABLE_SELECTOR = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
-        const focusableElements = [...(modalRef.current?.querySelectorAll(FOCUSABLE_SELECTOR) || [])];
+        const focusRoot = imagePreviewOpen ? previewShellRef.current : modalRef.current;
+        const focusableElements = [...(focusRoot?.querySelectorAll(FOCUSABLE_SELECTOR) || [])];
         if (focusableElements.length > 0) {
           const first = focusableElements[0];
           const last = focusableElements[focusableElements.length - 1];
@@ -442,6 +490,7 @@ export function ProductModal({
   return (
     <AnimatePresence>
       <Motion.div
+        key="product-detail-backdrop"
         initial={{ opacity: 0 }}
         animate={{ opacity: 1, transition: { duration: 0.2, ease: "easeOut" } }}
         exit={{ opacity: 0, transition: { duration: 0.14, ease: "easeOut" } }}
@@ -478,6 +527,8 @@ export function ProductModal({
                 <Motion.img
                   key={`${product.id}-${resolvedSelection?.color}-${safeImageIndex}-${activeImage}`}
                   src={activeImage}
+                  srcSet={getResponsiveImageSources(activeImage, [320, 640, 960, 1280])}
+                  sizes="(max-width: 760px) 100vw, 50vw"
                   alt={product.name}
                   loading="eager"
                   decoding="async"
@@ -491,11 +542,7 @@ export function ProductModal({
                     cursor: "zoom-in",
                     touchAction: "pan-y pinch-zoom",
                   }}
-                  onError={(event) => {
-                    if (event.currentTarget.src !== FALLBACK_IMAGE) {
-                      event.currentTarget.src = FALLBACK_IMAGE;
-                    }
-                  }}
+                  onError={(event) => applyImageFallback(event.currentTarget, FALLBACK_IMAGE)}
                 />
               </button>
             </AnimatePresence>
@@ -531,18 +578,21 @@ export function ProductModal({
                 >
                   <ChevronRight size={18} />
                 </button>
-                <div className="thumb-counter">
+                <div className="thumb-counter" role="status" aria-label={`Imagen ${safeImageIndex + 1} de ${currentImages.length}`}>
                   {safeImageIndex + 1} / {currentImages.length}
                 </div>
-                <div className="thumb-row">
+                <div ref={galleryPaginationRef} className="product-gallery-pagination" role="group" aria-label="Seleccionar imagen del producto">
                   {currentImages.map((_, index) => (
                     <button
                       key={index}
                       type="button"
-                      className={`dot ${safeImageIndex === index ? "active" : ""}`}
+                      className={`product-gallery-page${safeImageIndex === index ? " active" : ""}`}
                       onClick={() => setImageIndex(index)}
                       aria-label={`Ver imagen ${index + 1}`}
-                    />
+                      aria-pressed={safeImageIndex === index}
+                    >
+                      <span className="product-gallery-page-line" aria-hidden="true" />
+                    </button>
                   ))}
                 </div>
               </>
@@ -586,13 +636,6 @@ export function ProductModal({
                 </button>
               )}
             </div>
-
-            {(activeImageView || hasMultipleImages) && (
-              <div className="product-modal-view-note" role="status">
-                <strong>{activeImageView ? `Vista ${activeImageView}` : "Galería del producto"}</strong>
-                <span>{hasMultipleImages ? "Desliza las fotos para apreciar el corte y el color." : "Revisa la foto para apreciar el corte y el color."}</span>
-              </div>
-            )}
 
             <div className="product-modal-variant-panel">
               <fieldset className="product-modal-option-group">
@@ -771,12 +814,12 @@ export function ProductModal({
                           <span className="product-modal-recommend-image-wrap">
                             <img
                               src={recommendedImage}
+                              srcSet={getResponsiveImageSources(recommendedImage)}
+                              sizes="(max-width: 760px) 220px, 260px"
                               alt=""
                               loading="lazy"
                               decoding="async"
-                              onError={(event) => {
-                                if (event.currentTarget.src !== FALLBACK_IMAGE) event.currentTarget.src = FALLBACK_IMAGE;
-                              }}
+                              onError={(event) => applyImageFallback(event.currentTarget, FALLBACK_IMAGE)}
                             />
                             <span className="product-modal-recommend-price">{currency(recommendedProduct.price)}</span>
                             {recommendedDiscount > 0 && <span className="product-modal-recommend-discount">-{recommendedDiscount}%</span>}
@@ -800,6 +843,7 @@ export function ProductModal({
       </Motion.div>
       {imagePreviewOpen && (
         <Motion.div
+          key="product-image-preview-backdrop"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
@@ -812,10 +856,17 @@ export function ProductModal({
             exit={{ opacity: 0, scale: 0.98, y: 8 }}
             transition={{ duration: 0.2 }}
             className="image-preview-shell"
+            ref={previewShellRef}
+            role="dialog"
+            aria-modal="true"
+            aria-label={`Imagen ampliada de ${product.name}`}
             onClick={(event) => event.stopPropagation()}
           >
-            <button onClick={closeImagePreview} className="icon-btn image-preview-close" aria-label="Cerrar vista de imagen">
+            <button ref={previewCloseRef} type="button" onClick={closeImagePreview} className="icon-btn image-preview-close" aria-label="Cerrar vista de imagen">
               <X size={18} />
+            </button>
+            <button type="button" className="btn image-preview-zoom-control" onClick={() => togglePreviewZoom()} aria-pressed={previewZoomed}>
+              {previewZoomed ? "Restablecer zoom" : "Ampliar imagen"}
             </button>
             {hasMultipleImages && (
               <>
@@ -842,7 +893,7 @@ export function ProductModal({
                 transform: previewZoomed
                   ? `translate3d(${previewPan.x}px, ${previewPan.y}px, 0) scale(${previewScale})`
                   : "translate3d(0, 0, 0) scale(1)",
-                transformOrigin: previewZoomed ? "center center" : previewZoomOrigin,
+                transformOrigin: "center center",
                 transition: previewPanning ? "none" : "transform 160ms var(--ease-standard)",
                 cursor: previewZoomed ? (previewPanning ? "grabbing" : "grab") : "zoom-in",
                 touchAction: "none",
@@ -858,11 +909,8 @@ export function ProductModal({
                 previewPanStartRef.current = null;
                 previewPointersRef.current.clear();
                 previewPinchRef.current = null;
+                previewHandledByPointerRef.current = true;
                 setPreviewPanning(false);
-              }}
-              onMouseMove={(event) => {
-                if (!previewZoomed || previewPanning) return;
-                updatePreviewZoomOrigin(event);
               }}
               onError={(event) => {
                 if (event.currentTarget.src !== FALLBACK_IMAGE) {

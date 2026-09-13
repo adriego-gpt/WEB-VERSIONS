@@ -62,6 +62,12 @@ Para Gmail SMTP usa:
 
 ## Build
 
+Preparación de dominio, importación local y verificaciones de publicación: [guía de publicación](docs/PUBLICACION.md). Prioridades para buscadores e IA: [posicionamiento](docs/POSICIONAMIENTO.md).
+
+```bash
+npm run check:release
+```
+
 ```bash
 npm run build
 ```

@@ -1,7 +1,17 @@
 import assert from "node:assert/strict";
-import test from "node:test";
-import seoHandler from "../../api/seo.js";
-import { updateStore } from "../../api/_lib/store.js";
+import test, { after } from "node:test";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+const originalCwd = process.cwd();
+const sandbox = await fs.mkdtemp(path.join(os.tmpdir(), "adriego-seo-"));
+process.chdir(sandbox);
+process.env.NODE_ENV = "test";
+process.env.KV_REST_API_URL = "";
+process.env.KV_REST_API_TOKEN = "";
+const { default: seoHandler } = await import("../../api/seo.js");
+const { updateStore } = await import("../../api/_lib/store.js");
+after(async () => { process.chdir(originalCwd); await fs.rm(sandbox, { recursive: true, force: true }); });
 
 function createMockResponse() {
   const headers = new Map();
@@ -86,8 +96,11 @@ test("SEO endpoint tests", async (t) => {
     assert.equal(res.statusCode, 200);
     assert.match(res.data, /https:\/\/ik\.imagekit\.io\/adriego\/catalog\/vestido-beige\.webp/);
     assert.match(res.data, /InStock/);
-    assert.match(res.data, /"price": "45"/);
-    assert.match(res.data, /"sku": "VES-001"/);
+    const schema = JSON.parse(res.data.match(/<script[^>]*type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/)[1]);
+    assert.equal(schema.offers.price, "45");
+    assert.equal(schema.sku, "VES-001");
+    assert.match(res.data, /<p>Vestido de lino fresco para toda ocasión\.<\/p>/);
+    assert.match(res.data, /Colores: Beige, Negro\. Tallas: M, S\./);
     assert.match(res.data, /Vestido Lino Natural \| Adriego Store/);
     assert.match(res.data, /<link rel="canonical" href="https:\/\/adriego\.vercel\.app\/producto\/vestido-lino-natural">/);
   });
@@ -98,6 +111,26 @@ test("SEO endpoint tests", async (t) => {
 
     assert.equal(res.statusCode, 404);
     assert.match(res.data, /Página no encontrada/);
+  });
+
+  await t.test("private drafts are not exposed by known SEO slugs", async () => {
+    const res = createMockResponse();
+    await seoHandler({ query: { path: "/producto/chaqueta-oculta" } }, res);
+    assert.equal(res.statusCode, 404);
+    assert.doesNotMatch(res.data, /Chaqueta Oculta/);
+  });
+
+  await t.test("robots and sitemap follow the configured domain", async () => {
+    const previous = process.env.PUBLIC_SITE_URL;
+    process.env.PUBLIC_SITE_URL = "https://adriego.shop";
+    try {
+      for (const action of ["robots", "sitemap"]) {
+        const res = createMockResponse();
+        await seoHandler({ query: { action } }, res);
+        assert.match(res.data, /https:\/\/adriego\.shop/);
+        assert.doesNotMatch(res.data, /adriego\.vercel\.app/);
+      }
+    } finally { if (previous === undefined) delete process.env.PUBLIC_SITE_URL; else process.env.PUBLIC_SITE_URL = previous; }
   });
 
   await t.test("rejects write methods and sends restrictive security headers", async () => {

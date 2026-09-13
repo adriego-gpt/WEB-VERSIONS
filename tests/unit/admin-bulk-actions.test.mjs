@@ -22,6 +22,9 @@ test("inventario y pedidos permiten seleccionar visibles y operar por lote", asy
   assert.match(source, /selectedOrderIds/);
   assert.match(source, /Seleccionamos los primeros 25 pedidos visibles/);
   assert.match(source, /applyBulkOrderStatus/);
+  assert.match(source, /deleteSelectedOrders/);
+  assert.match(source, /Eliminar seleccionados/);
+  assert.match(source, /orderBulkActionRef/);
 });
 
 test("las operaciones masivas persisten en bloques pequeños", async () => {
@@ -31,4 +34,9 @@ test("las operaciones masivas persisten en bloques pequeños", async () => {
   assert.match(source, /bulkSetCatalogVisibility/);
   assert.match(source, /if \(idSet\.size > 25\)/);
   assert.match(source, /for \(const order of selectedOrders\)/);
+  const batchDeletion = source.slice(source.indexOf("const bulkDeleteOrders ="), source.indexOf("const deleteOrder ="));
+  assert.match(batchDeletion, /await deleteServerOrders\(\{ orderIds: ids \}\)/);
+  assert.match(batchDeletion, /await Promise\.all\(pendingSaves\)/);
+  assert.match(batchDeletion, /cancelled: true/);
+  assert.equal((batchDeletion.match(/requestDestructiveConfirmation\(/g) || []).length, 1);
 });

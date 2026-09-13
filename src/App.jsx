@@ -1,5 +1,7 @@
 import React, { Suspense, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { alignImageViews } from "./domain/products/imageViews.js";
+import { getPublicSiteOrigin } from "./constants/site.js";
+import { getProductSeo, SITE_DESCRIPTION, SITE_TITLE } from "./domain/products/seo.js";
 import {
   ShoppingBag,
   Plus,
@@ -37,8 +39,10 @@ import {
   MapPin,
   Send,
   ArrowUpRight,
+  Pause,
+  Play,
 } from "lucide-react";
-import { motion as Motion, AnimatePresence, MotionConfig } from "framer-motion";
+import { motion as Motion, AnimatePresence, MotionConfig, useReducedMotion } from "framer-motion";
 import {
   couponToDraft,
   createEmptyCouponDraft,
@@ -73,6 +77,7 @@ import {
   adoptCatalogVersion,
   createServerCheckoutOrder,
   deleteServerOrder,
+  deleteServerOrders,
   getCatalogState,
   getSecurityMetricsSnapshot,
   listServerOrders,
@@ -120,12 +125,20 @@ import {
   normalizeCardFeePercent,
   normalizePaymentMethod,
 } from "./domain/orders/payment";
+import {
+  createEmptyPendingWhatsAppConfirmation,
+  createOrderSuccessModalState,
+  createPendingWhatsAppConfirmation,
+  markPendingWhatsAppAsOpened,
+  normalizePendingWhatsAppConfirmation,
+} from "./domain/orders/pendingWhatsAppConfirmation";
 import { OrderStatusProgress } from "./components/orders/OrderStatusProgress";
 import { ProductDraftPreview } from "./components/products/ProductDraftPreview";
 import { MemoFeaturedProductMarquee as ExternalFeaturedProductMarquee } from "./components/catalog/FeaturedProductMarquee";
 import { MemoCatalogProductCard as ExternalMemoCatalogProductCard } from "./components/catalog/CatalogProductCard";
 import { CatalogSkeletonCard as ExternalCatalogSkeletonCard } from "./components/catalog/CatalogSkeletonCard";
 import { CatalogPagination as ExternalCatalogPagination } from "./components/catalog/CatalogPagination";
+import { DESKTOP_CATALOG_PAGE_SIZE, MOBILE_CATALOG_PAGE_SIZE, getCatalogPagination } from "./domain/products/catalogPagination";
 import whatsappIconUrl from "./assets/social/whatsapp.svg";
 import instagramIconUrl from "./assets/social/instagram.svg";
 import facebookIconUrl from "./assets/social/facebook.svg";
@@ -627,7 +640,7 @@ const defaultStoreSettings = {
   offerPercentage: 30,
   offerText: "Prendas seleccionadas con precio especial por tiempo limitado.",
   saleTitle: "Tu pedido, claro y sencillo.",
-  saleDescription: "Elige tus prendas, confirma tus datos y escríbenos por WhatsApp para completar la compra.",
+  saleDescription: "Elige tus prendas, confirma tus datos y envía tu pedido. Adjunta tu transferencia en la web o solicita el enlace de tarjeta por WhatsApp.",
   footerTitle: "¿Necesitas ayuda para elegir?",
   footerText: "Escríbenos para consultar tallas, colores, disponibilidad o el estado de tu pedido.",
   automationSettings: {
@@ -658,7 +671,7 @@ const defaultStoreSettings = {
     {
       id: "slide-3",
       title: "Compra a tu ritmo",
-      subtitle: "Guarda tus favoritos, arma tu pedido y confírmalo por WhatsApp.",
+      subtitle: "Guarda tus favoritos, arma tu pedido y elige cómo pagar.",
       image: "https://images.unsplash.com/photo-1524504388940-b1c1722653e1?auto=format&fit=crop&w=1400&q=80",
       linkedProductId: "",
       targetUrl: "",
@@ -1096,6 +1109,7 @@ function mergeStoreSettings(rawSettings = {}) {
         "Arma tu pedido en minutos y recibe acompañamiento por WhatsApp para confirmar talla, disponibilidad y entrega.",
         "Arma tu pedido a tu ritmo y recibe un resumen listo para enviar. La confirmación final se hace contigo, de forma personalizada.",
         "Elige tus prendas, revisa tus datos y envíanos el pedido por WhatsApp.",
+        "Elige tus prendas, confirma tus datos y escríbenos por WhatsApp para completar la compra.",
       ],
       defaultStoreSettings.saleDescription,
     ),
@@ -1137,7 +1151,7 @@ function mergeStoreSettings(rawSettings = {}) {
       return {
         id: slide.id || defaultSlide.id || createUid(),
         title: replaceLegacyStoreCopy(sanitizeLine(slide.title), legacyTitles[index] || "", defaultSlide.title),
-        subtitle: replaceLegacyStoreCopy(sanitizeParagraph(slide.subtitle), legacySubtitles[index] || "", defaultSlide.subtitle),
+        subtitle: replaceLegacyStoreCopy(sanitizeParagraph(slide.subtitle), [legacySubtitles[index] || "", ...(index === 2 ? ["Guarda tus favoritos, arma tu pedido y confírmalo por WhatsApp."] : [])], defaultSlide.subtitle),
         image: normalizeSafeUrl(slide.image || defaultSlide.image || FALLBACK_IMAGE) || FALLBACK_IMAGE,
         linkedProductId: (slide.linkedProductId != null ? String(slide.linkedProductId) : ""),
         targetUrl: normalizeSafeUrl(slide.targetUrl != null ? slide.targetUrl : ""),
@@ -1147,7 +1161,7 @@ function mergeStoreSettings(rawSettings = {}) {
 }
 
 function getStoredProducts() {
-  return initialProducts.map(normalizeProduct);
+  return [];
 }
 
 function getImagesForColor(product, color) {
@@ -1694,6 +1708,9 @@ export default function App() {
   const [selectedProduct, setSelectedProduct] = useState(null);
   const [editingCartItemKey, setEditingCartItemKey] = useState(null);
   const [heroIndex, setHeroIndex] = useState(0);
+  const [presentationPaused, setPresentationPaused] = useState(false);
+  const [heroHasFocus, setHeroHasFocus] = useState(false);
+  const reduceMotion = useReducedMotion();
   const [showAdminPanel, setShowAdminPanel] = useState(false);
   const [destructiveConfirmation, setDestructiveConfirmation] = useState(null);
   const [catalogConflict, setCatalogConflict] = useState(null);
@@ -1718,7 +1735,11 @@ export default function App() {
   const [authPasswordVisible, setAuthPasswordVisible] = useState(false);
   const [authResetEmailLocked, setAuthResetEmailLocked] = useState(false);
   const [legalModalState, setLegalModalState] = useState({ open: false, tab: "exchanges" });
-  const [orderSuccessModal, setOrderSuccessModal] = useState({ open: false, order: null, whatsappUrl: "" });
+  const [orderSuccessModal, setOrderSuccessModal] = useState(() => (
+    normalizePendingWhatsAppConfirmation(
+      readStorage(STORAGE_KEYS.pendingWhatsAppConfirmation, null),
+    ) || createEmptyPendingWhatsAppConfirmation()
+  ));
   const [postAuthDestination, setPostAuthDestination] = useState(null);
   const [authForm, setAuthForm] = useState(() => ({ ...AUTH_FORM_DEFAULTS }));
   const [profileDraft, setProfileDraft] = useState({ name: "", lastName: "", idNumber: "", phone: "", email: "", shippingAddress: "", addressBook: [] });
@@ -1747,6 +1768,7 @@ export default function App() {
   const [orderDateFilter, setOrderDateFilter] = useState("all");
   const [orderCustomerFilter, setOrderCustomerFilter] = useState("");
   const [orderPatchStateById, setOrderPatchStateById] = useState({});
+  const [deletingOrderIds, setDeletingOrderIds] = useState([]);
   const [liveOrdersEnabled, setLiveOrdersEnabled] = useState(true);
   const [liveOrdersRefreshing, setLiveOrdersRefreshing] = useState(false);
   const [liveOrdersUpdatedAt, setLiveOrdersUpdatedAt] = useState("");
@@ -1785,6 +1807,8 @@ export default function App() {
   const [guestOrderId, setGuestOrderId] = useState("");
   const [orderLiveAlert, setOrderLiveAlert] = useState(null);
   const [catalogReady, setCatalogReady] = useState(false);
+  const [catalogError, setCatalogError] = useState("");
+  const [catalogRetryBusy, setCatalogRetryBusy] = useState(false);
   const [storageBackend, setStorageBackend] = useState("");
   const [couponState, setCouponState] = useState(null);
   const [couponBusy, setCouponBusy] = useState(false);
@@ -1813,6 +1837,8 @@ export default function App() {
   const catalogSyncQueueRef = useRef(Promise.resolve());
   const catalogSyncErrorShownRef = useRef(false);
   const orderPatchTimersRef = useRef(new Map());
+  const orderDeletionLocksRef = useRef(new Set());
+  const orderDeleteConfirmationRef = useRef(false);
   const confettiTimersRef = useRef(new Map());
   const pendingCouponCelebrationRef = useRef("");
   const flyToCartTimerRef = useRef(null);
@@ -1829,8 +1855,7 @@ export default function App() {
   const storageBackendWarningShownRef = useRef(false);
   const adminTouchWarningShownRef = useRef(false);
   const resetLinkHandledRef = useRef(false);
-  const catalogFiltersInitializedRef = useRef(false);
-  const restoringCatalogRouteRef = useRef(false);
+  const previousCatalogFiltersRef = useRef(JSON.stringify([initialCatalogRouteState.search, initialCatalogRouteState.category, initialCatalogRouteState.productType, initialCatalogRouteState.sortBy]));
   const lastCatalogSearchSignatureRef = useRef("");
   const destructiveConfirmationResolverRef = useRef(null);
 
@@ -2076,7 +2101,7 @@ export default function App() {
       setPathname(nextPathname);
       if (nextPathname !== "/") return;
       const nextCatalogState = readCatalogRouteState();
-      restoringCatalogRouteRef.current = true;
+      previousCatalogFiltersRef.current = JSON.stringify([nextCatalogState.search, nextCatalogState.category, nextCatalogState.productType, nextCatalogState.sortBy]);
       setSearch(nextCatalogState.search);
       setCategory(nextCatalogState.category);
       setProductTypeFilter(nextCatalogState.productType);
@@ -2137,13 +2162,14 @@ export default function App() {
       document.head.appendChild(robotsMeta);
     }
     robotsMeta.setAttribute("content", robots);
-    const origin = window.location.origin;
+    const origin = getPublicSiteOrigin(import.meta.env.VITE_PUBLIC_SITE_URL);
+    const productSeo = routedProduct ? getProductSeo(routedProduct, origin) : null;
     const productName = sanitizeLine(routedProduct?.name || "Producto");
     const productDescription = sanitizeParagraph(
-      routedProduct?.description || `Compra ${productName} en Adriego Store. Pedidos directos por WhatsApp.`,
+      productSeo?.description || `Consulta los colores, tallas y disponibilidad de ${productName} en Adriego Store. Compra desde la web.`,
     ).slice(0, 160);
     const productImage = normalizeSafeUrl(
-      routedProduct?.images?.[0] || routedProduct?.image || FALLBACK_IMAGE,
+      productSeo?.images[0] || FALLBACK_IMAGE,
     ) || FALLBACK_IMAGE;
     const utilityRouteTitle = normalizedPathname === "/carrito"
       ? "Tu carrito | Adriego Store"
@@ -2158,10 +2184,10 @@ export default function App() {
       ? "Restablecer contraseña | Adriego Store"
       : (isMissingRoute
         ? "Página no encontrada | Adriego Store"
-        : (routedProduct ? `${productName} | Adriego Store` : (utilityRouteTitle || "Adriego Store | Moda seleccionada")));
+        : (routedProduct ? `${productName} | Adriego Store` : (utilityRouteTitle || SITE_TITLE)));
     const description = adminRouteActive
       ? "Espacio privado de administración de Adriego Store."
-      : routedProduct ? productDescription : "Descubre Adriego Store. Moda seleccionada con atención personalizada por WhatsApp.";
+      : routedProduct ? productDescription : SITE_DESCRIPTION;
     document.title = title;
     upsertRouteMeta('meta[name="description"]', ["name", "description"], description);
     upsertRouteMeta('meta[property="og:title"]', ["property", "og:title"], title);
@@ -2190,32 +2216,7 @@ export default function App() {
     const schema = existingSchema || document.createElement("script");
     schema.id = "route-product-jsonld";
     schema.type = "application/ld+json";
-    schema.textContent = JSON.stringify({
-      "@context": "https://schema.org",
-      "@type": "Product",
-      name: productName,
-      image: [productImage],
-      description: productDescription,
-      sku: String(routedProduct.id || productRouteSlug),
-      brand: {
-        "@type": "Brand",
-        name: "Adriego",
-      },
-      offers: {
-        "@type": "Offer",
-        priceCurrency: "USD",
-        price: Number(routedProduct.price || 0).toFixed(2),
-        itemCondition: "https://schema.org/NewCondition",
-        availability: hasProductAvailableStock(routedProduct)
-          ? "https://schema.org/InStock"
-          : "https://schema.org/OutOfStock",
-        url: `${origin}${normalizedPathname}`,
-        seller: {
-          "@type": "Organization",
-          name: "Adriego Store",
-        },
-      },
-    });
+    schema.textContent = JSON.stringify(productSeo.schema).replace(/</g, "\\u003c");
     if (!existingSchema) document.head.appendChild(schema);
   }, [adminRouteActive, catalogReady, isResetRoute, normalizedPathname, productRouteSlug, routedProduct]);
   const knownAdminOrderIdsRef = useRef(new Set());
@@ -2234,7 +2235,7 @@ export default function App() {
   const heroSlides = storeSettings.heroSlides.length ? storeSettings.heroSlides : defaultStoreSettings.heroSlides;
   const activeHeroSlide = heroSlides[heroIndex] || defaultStoreSettings.heroSlides[0];
   const heroSlideHasAction = Boolean(activeHeroSlide?.linkedProductId || activeHeroSlide?.targetUrl?.trim());
-  const shouldPauseHeroAutoplay = showAdminPanel
+  const shouldPauseHeroAutoplay = presentationPaused || heroHasFocus || reduceMotion || showAdminPanel
     || showMobileNav
     || showCartSummary
     || showFavoritesPanel
@@ -2243,7 +2244,7 @@ export default function App() {
     || showUserAuth
     || showProfileModal
     || legalModalState.open
-    || orderSuccessModal.open
+    || (!adminRouteActive && orderSuccessModal.open)
     || Boolean(selectedProduct);
   const heroAutoplayDelayMs = isMobileViewport ? 5600 : 4200;
   const showPreviousHeroSlide = useCallback(() => {
@@ -2401,23 +2402,26 @@ export default function App() {
     normalizedProductTypeFilter,
     sortBy,
   ]);
-  const catalogPageSize = isMobileViewport ? 8 : 12;
-  const totalCatalogPages = Math.max(1, Math.ceil(filteredProducts.length / catalogPageSize));
-  const safeCatalogPage = Math.min(catalogPage, totalCatalogPages);
+  const catalogPageSize = isMobileViewport ? MOBILE_CATALOG_PAGE_SIZE : DESKTOP_CATALOG_PAGE_SIZE;
+  const catalogPagination = getCatalogPagination(filteredProducts.length, catalogPage, catalogPageSize);
+  const totalCatalogPages = catalogPagination.totalPages;
+  const safeCatalogPage = catalogPagination.currentPage;
   const paginatedProducts = useMemo(() => {
     const startIndex = (safeCatalogPage - 1) * catalogPageSize;
     return filteredProducts.slice(startIndex, startIndex + catalogPageSize);
   }, [filteredProducts, safeCatalogPage, catalogPageSize]);
-  const catalogPageWindow = useMemo(() => {
-    const visiblePages = 5;
-    if (totalCatalogPages <= visiblePages) {
-      return Array.from({ length: totalCatalogPages }, (_, index) => index + 1);
-    }
-    const startPage = Math.max(1, Math.min(safeCatalogPage - 2, totalCatalogPages - visiblePages + 1));
-    return Array.from({ length: visiblePages }, (_, index) => startPage + index);
-  }, [safeCatalogPage, totalCatalogPages]);
-  const catalogRangeStart = filteredProducts.length === 0 ? 0 : ((safeCatalogPage - 1) * catalogPageSize) + 1;
-  const catalogRangeEnd = Math.min(filteredProducts.length, safeCatalogPage * catalogPageSize);
+  const catalogPageWindow = catalogPagination.pageWindow;
+  const catalogRangeStart = catalogPagination.rangeStart;
+  const catalogRangeEnd = catalogPagination.endIndex;
+  const changeCatalogPage = (page) => {
+    if (page === safeCatalogPage) return;
+    setCatalogPage(page);
+    window.requestAnimationFrame(() => {
+      const results = document.getElementById("catalog-results");
+      results?.focus({ preventScroll: true });
+      results?.scrollIntoView({ behavior: "instant", block: "start" });
+    });
+  };
 
   const orderSearchIndex = useMemo(() => orderHistory.map((order) => ({
     order,
@@ -3051,6 +3055,7 @@ export default function App() {
 
   const applyCatalogStateFromServer = useCallback((data = {}) => {
     const incomingCatalogVersion = Number(data.catalogVersion);
+    if (Number.isInteger(incomingCatalogVersion) && incomingCatalogVersion < Number(realtimeSyncVersionsRef.current.catalog || 0)) return;
     if (Number.isInteger(incomingCatalogVersion) && incomingCatalogVersion >= 0) {
       realtimeSyncVersionsRef.current.catalog = Math.max(
         Number(realtimeSyncVersionsRef.current.catalog || 0),
@@ -3085,7 +3090,7 @@ export default function App() {
           return normalizeProduct(rawProduct);
         })
       : [];
-    const fallbackProducts = initialProducts.map(normalizeProduct);
+    const fallbackProducts = [];
     // An explicit empty array is authoritative: it means the administrator
     // intentionally left the catalog empty. Only use bundled products when
     // the server response does not contain a products array at all.
@@ -3378,14 +3383,9 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!catalogFiltersInitializedRef.current) {
-      catalogFiltersInitializedRef.current = true;
-      return;
-    }
-    if (restoringCatalogRouteRef.current) {
-      restoringCatalogRouteRef.current = false;
-      return;
-    }
+    const filters = JSON.stringify([search, category, productTypeFilter, sortBy]);
+    if (previousCatalogFiltersRef.current === filters) return;
+    previousCatalogFiltersRef.current = filters;
     setCatalogPage(1);
   }, [search, category, productTypeFilter, sortBy]);
 
@@ -3424,9 +3424,10 @@ export default function App() {
   }, [category, filteredProducts.length, productTypeFilter, search, sortBy]);
 
   useEffect(() => {
+    if (!catalogReady) return;
     if (catalogPage <= totalCatalogPages) return;
     setCatalogPage(totalCatalogPages);
-  }, [catalogPage, totalCatalogPages]);
+  }, [catalogReady, catalogPage, totalCatalogPages]);
 
   useEffect(() => {
     if (currentUser) return;
@@ -3690,6 +3691,7 @@ export default function App() {
   useCatalogBootstrap({
     applyCatalogState: applyCatalogStateFromServer,
     setCatalogReady,
+    setCatalogError,
     admin: adminRouteActive,
   });
 
@@ -4135,7 +4137,7 @@ export default function App() {
     || showCartSummary
     || showFavoritesPanel
     || showOrdersModal
-    || orderSuccessModal.open
+    || (!adminRouteActive && orderSuccessModal.open)
     || showUserAuth
     || showProfileModal
     || legalModalState.open
@@ -5908,16 +5910,24 @@ export default function App() {
       clearActiveCoupon();
       clearCartState();
 
-      setOrderSuccessModal({
-        open: true,
+      const pendingWhatsAppConfirmation = createPendingWhatsAppConfirmation({
         order: response.order,
         whatsappUrl: whatsappTarget.url,
       });
+      if (pendingWhatsAppConfirmation) {
+        saveStorage(STORAGE_KEYS.pendingWhatsAppConfirmation, pendingWhatsAppConfirmation);
+      }
+      setOrderSuccessModal(pendingWhatsAppConfirmation || createOrderSuccessModalState({
+        order: response.order,
+        whatsappUrl: whatsappTarget.url,
+      }) || createEmptyPendingWhatsAppConfirmation());
 
       triggerConfetti("checkout");
       showToastMessage({
         title: `Pedido ${response.order.code} recibido`,
-        message: `Gracias ${firstName}. Conectando con WhatsApp para confirmarlo.`,
+        message: normalizePaymentMethod(response.order.paymentMethod) === PAYMENT_METHODS.cardLink
+          ? `Gracias ${firstName}. Solicita tu enlace de pago por WhatsApp.`
+          : `Gracias ${firstName}. Revisaremos tu comprobante de transferencia.`,
       }, "success");
     } catch {
       showToastMessage("No pudimos recibir tu pedido. Revisa tu conexión e inténtalo nuevamente.", "error");
@@ -5940,6 +5950,25 @@ export default function App() {
         is_reopen: false,
       });
     }
+  };
+
+  const handleMarkOrderSuccessWhatsAppOpened = () => {
+    const pendingWhatsAppConfirmation = markPendingWhatsAppAsOpened(orderSuccessModal);
+    if (!pendingWhatsAppConfirmation) return;
+    saveStorage(STORAGE_KEYS.pendingWhatsAppConfirmation, pendingWhatsAppConfirmation);
+    setOrderSuccessModal(pendingWhatsAppConfirmation);
+  };
+
+  const handleConfirmOrderSuccessWhatsAppSent = () => {
+    removeStorage(STORAGE_KEYS.pendingWhatsAppConfirmation);
+    setOrderSuccessModal(createEmptyPendingWhatsAppConfirmation());
+    openOrdersPage();
+  };
+
+  const handleDismissTransferOrderSuccess = () => {
+    if (orderSuccessModal.order?.paymentMethod === PAYMENT_METHODS.cardLink) return;
+    setOrderSuccessModal(createEmptyPendingWhatsAppConfirmation());
+    openOrdersPage();
   };
 
   const openProductFromCartItem = (item) => {
@@ -7755,6 +7784,7 @@ export default function App() {
   };
 
   const scheduleOrderPatchSync = (orderId, patch) => {
+    if (orderDeletionLocksRef.current.has(orderId)) return;
     const currentTimer = orderPatchTimersRef.current.get(orderId);
     if (currentTimer?.id) {
       window.clearTimeout(currentTimer.id);
@@ -7765,10 +7795,15 @@ export default function App() {
     };
     setOrderPatchStateById((previous) => ({ ...previous, [orderId]: { status: "pending", patch: mergedPatch } }));
     const timerId = window.setTimeout(async () => {
-      const response = await updateServerOrder({
+      const entry = orderPatchTimersRef.current.get(orderId);
+      if (!entry || entry.id !== timerId) return;
+      entry.promise = updateServerOrder({
         orderId,
         ...mergedPatch,
       });
+      const response = await entry.promise;
+      if (orderDeletionLocksRef.current.has(orderId)
+        || orderPatchTimersRef.current.get(orderId) !== entry) return;
       if (!response.ok) {
         setOrderPatchStateById((previous) => ({ ...previous, [orderId]: { status: "error", patch: mergedPatch, message: response.message || "No pudimos sincronizar los cambios." } }));
         showToastMessage(response.message || "No pudimos sincronizar los cambios del pedido.", "error");
@@ -7838,15 +7873,46 @@ export default function App() {
     scheduleOrderPatchSync(orderId, failedPatch);
   };
 
-  const updateOrderPaymentProof = async (orderId, paymentProof) => {
-    setOrderHistory((previous) => previous.map((order) => (
-      order.id === orderId ? { ...order, paymentProof } : order
-    )));
-    scheduleOrderPatchSync(orderId, { paymentProof });
+  const updateOrderPaymentProof = async (orderId, paymentProof, { immediate = false } = {}) => {
+    if (orderDeletionLocksRef.current.has(orderId)) return { ok: false };
+    if (!immediate) {
+      setOrderHistory((previous) => previous.map((order) => order.id === orderId ? { ...order, paymentProof } : order));
+      scheduleOrderPatchSync(orderId, { paymentProof });
+      return { ok: true, pending: true };
+    }
+    const previousPatch = orderPatchTimersRef.current.get(orderId);
+    if (previousPatch?.id) window.clearTimeout(previousPatch.id);
+    const patch = { ...(previousPatch?.patch || {}), paymentProof };
+    const entry = { patch };
+    orderPatchTimersRef.current.set(orderId, entry);
+    setOrderPatchStateById((previous) => ({ ...previous, [orderId]: { status: "pending", patch } }));
+    // Image removals must be acknowledged by the server, not just a local preview.
+    entry.promise = (async () => {
+      if (previousPatch?.promise) await previousPatch.promise;
+      if (orderDeletionLocksRef.current.has(orderId)) return { ok: false };
+      return updateServerOrder({ orderId, ...patch });
+    })();
+    const response = await entry.promise;
+    if (orderDeletionLocksRef.current.has(orderId)
+      || orderPatchTimersRef.current.get(orderId) !== entry) return response;
+    orderPatchTimersRef.current.delete(orderId);
+    if (!response.ok) {
+      const message = response.message || "No pudimos guardar el comprobante.";
+      setOrderPatchStateById((previous) => ({ ...previous, [orderId]: { status: "error", patch, message } }));
+      showToastMessage(message, "error");
+      return response;
+    }
+    if (Array.isArray(response.orderHistory)) {
+      setOrderHistory(response.orderHistory.map(normalizeOrderRecord));
+      setLiveOrdersUpdatedAt(new Date().toISOString());
+    }
+    setOrderPatchStateById((previous) => ({ ...previous, [orderId]: { status: "saved", patch: {} } }));
+    return response;
   };
 
   const clearOrderPaymentProof = async (orderId) => {
-    await updateOrderPaymentProof(orderId, "");
+    const response = await updateOrderPaymentProof(orderId, "", { immediate: true });
+    if (!response.ok) return;
     setEditorMessage("La foto del comprobante fue eliminada.");
     setEditorError("");
     showToastMessage("Comprobante eliminado.", "success");
@@ -7857,8 +7923,8 @@ export default function App() {
     if (!file) return;
     try {
       const image = await fileToDataUrl(file);
-      await updateOrderPaymentProof(orderId, image);
-      showToastMessage("Comprobante cargado correctamente.", "success");
+      const response = await updateOrderPaymentProof(orderId, image, { immediate: true });
+      if (response.ok) showToastMessage("Comprobante cargado correctamente.", "success");
     } catch (error) {
       const message = error instanceof Error ? error.message : "No pudimos cargar el comprobante.";
       setEditorError(message);
@@ -7867,25 +7933,105 @@ export default function App() {
     event.target.value = "";
   };
 
+  const bulkDeleteOrders = async (orderIds = []) => {
+    const ids = [...new Set(orderIds.map(String))];
+    if (!ids.length || ids.length > 25) return { ok: false, message: "Selecciona entre 1 y 25 pedidos." };
+    if (orderDeleteConfirmationRef.current || ids.some((id) => orderDeletionLocksRef.current.has(id))) {
+      return { ok: false, message: "Espera a que termine la eliminación en curso." };
+    }
+    orderDeleteConfirmationRef.current = true;
+    try {
+      const confirmed = await requestDestructiveConfirmation({
+        title: `¿Eliminar ${ids.length} pedido${ids.length === 1 ? "" : "s"}?`,
+        description: "Se borrarán solo los pedidos seleccionados, sus comprobantes y sus copias en los respaldos internos. Desaparecerán del historial del cliente y se reintegrará el stock reservado cuando corresponda. Las fotos del catálogo se conservarán. Esta acción no se puede deshacer.",
+        confirmLabel: `Eliminar ${ids.length} pedido${ids.length === 1 ? "" : "s"} y adjuntos`,
+        cancelLabel: "Conservar pedidos",
+      });
+      if (!confirmed) return { ok: false, cancelled: true };
+      for (const id of ids) orderDeletionLocksRef.current.add(id);
+      setDeletingOrderIds((previous) => [...new Set([...previous, ...ids])]);
+      // Block edits first, then finish already-started saves before the single batch request.
+      const pendingSaves = [];
+      for (const id of ids) {
+        const pending = orderPatchTimersRef.current.get(id);
+        if (pending?.id) window.clearTimeout(pending.id);
+        if (pending?.promise) pendingSaves.push(pending.promise);
+      }
+      await Promise.all(pendingSaves);
+      for (const id of ids) orderPatchTimersRef.current.delete(id);
+      const response = await deleteServerOrders({ orderIds: ids });
+      if (!response.ok) return response;
+      if (Array.isArray(response.orderHistory)) {
+        setOrderHistory(response.orderHistory.map(normalizeOrderRecord));
+        setLiveOrdersUpdatedAt(new Date().toISOString());
+      }
+      setOrderPatchStateById((previous) => {
+        const next = { ...previous };
+        for (const id of ids) delete next[id];
+        return next;
+      });
+      const message = response.deleted
+        ? `${response.deleted} pedido${response.deleted === 1 ? "" : "s"} y sus adjuntos eliminados.${response.missingIds?.length ? " Los demás ya no existían." : ""}`
+        : "Los pedidos seleccionados ya habían sido eliminados.";
+      setEditorMessage(message);
+      setEditorError("");
+      return { ...response, message };
+    } catch {
+      return { ok: false, message: "La conexión falló. Los pedidos siguen seleccionados para que puedas reintentar." };
+    } finally {
+      orderDeleteConfirmationRef.current = false;
+      for (const id of ids) orderDeletionLocksRef.current.delete(id);
+      setDeletingOrderIds((previous) => previous.filter((id) => !ids.includes(String(id))));
+    }
+  };
+
   const deleteOrder = async (orderId) => {
     const target = orderHistory.find((order) => order.id === orderId);
-    if (!target) return;
-    const confirmed = await requestDestructiveConfirmation({
-      title: `¿Eliminar el pedido ${target.code}?`,
-      description: "Se perderá el registro de esta venta y el historial visible para el cliente. Esta acción no se puede deshacer.",
-    });
+    if (!target || orderDeleteConfirmationRef.current || orderDeletionLocksRef.current.has(orderId)) return;
+    orderDeleteConfirmationRef.current = true;
+    let confirmed;
+    try {
+      confirmed = await requestDestructiveConfirmation({
+        title: `¿Eliminar el pedido ${target.code}?`,
+        description: "Se borrarán el pedido, sus comprobantes y sus copias en los respaldos internos. También desaparecerá del historial del cliente. Las fotos del catálogo no se eliminarán. Esta acción no se puede deshacer.",
+        confirmLabel: "Eliminar pedido y adjuntos",
+        cancelLabel: "Conservar pedido",
+      });
+    } finally {
+      orderDeleteConfirmationRef.current = false;
+    }
     if (!confirmed) return;
-    const response = await deleteServerOrder({ orderId });
-    if (!response.ok) {
-      showToastMessage(response.message || "No pudimos eliminar el pedido.", "error");
-      return;
+    orderDeletionLocksRef.current.add(orderId);
+    setDeletingOrderIds((previous) => [...previous, orderId]);
+    try {
+      const pendingPatch = orderPatchTimersRef.current.get(orderId);
+      if (pendingPatch?.id) window.clearTimeout(pendingPatch.id);
+      // Finish any already-started save before deleting; it must not restore stale UI data.
+      if (pendingPatch?.promise) await pendingPatch.promise;
+      orderPatchTimersRef.current.delete(orderId);
+      const response = await deleteServerOrder({ orderId });
+      if (!response.ok) {
+        showToastMessage(response.message || "No pudimos eliminar el pedido y sus adjuntos.", "error");
+        return;
+      }
+      if (Array.isArray(response.orderHistory)) {
+        setOrderHistory(response.orderHistory.map(normalizeOrderRecord));
+        setLiveOrdersUpdatedAt(new Date().toISOString());
+      }
+      setOrderPatchStateById((previous) => {
+        const next = { ...previous };
+        delete next[orderId];
+        return next;
+      });
+      setEditorMessage(`Pedido ${target.code} y sus adjuntos eliminados.`);
+      setEditorError("");
+      showToastMessage(`Pedido ${target.code} y sus adjuntos eliminados.`, "success");
+    } catch {
+      showToastMessage("No pudimos eliminar el pedido. Inténtalo nuevamente.", "error");
+    } finally {
+      orderDeletionLocksRef.current.delete(orderId);
+      setDeletingOrderIds((previous) => previous.filter((id) => id !== orderId));
     }
-    if (Array.isArray(response.orderHistory)) {
-      setOrderHistory(response.orderHistory.map(normalizeOrderRecord));
-      setLiveOrdersUpdatedAt(new Date().toISOString());
-    }
-    setEditorMessage(`Pedido ${target.code} eliminado.`);
-    setEditorError("");
   };
 
   const handleHeroSlideClick = (slide) => {
@@ -8136,22 +8282,24 @@ export default function App() {
         </Suspense>
       </ErrorBoundary>
 
-      {orderSuccessModal.open && orderSuccessModal.order && (
-        <ErrorBoundary onReset={() => setOrderSuccessModal({ open: false, order: null, whatsappUrl: "" })}>
+      {!adminRouteActive && orderSuccessModal.open && orderSuccessModal.order && (
+        <ErrorBoundary
+          onReset={() => setOrderSuccessModal(
+            normalizePendingWhatsAppConfirmation(
+              readStorage(STORAGE_KEYS.pendingWhatsAppConfirmation, null),
+            ) || createEmptyPendingWhatsAppConfirmation()
+          )}
+        >
           <Suspense fallback={null}>
             <OrderSuccessRedirectModal
               open={orderSuccessModal.open}
               order={orderSuccessModal.order}
               whatsappUrl={orderSuccessModal.whatsappUrl}
+              whatsappOpened={orderSuccessModal.whatsappOpened}
               isMobile={isMobileViewport}
-              onClose={() => {
-                setOrderSuccessModal({ open: false, order: null, whatsappUrl: "" });
-                openOrdersPage();
-              }}
-              onOpenOrders={() => {
-                setOrderSuccessModal({ open: false, order: null, whatsappUrl: "" });
-                openOrdersPage();
-              }}
+              onConfirmSent={handleConfirmOrderSuccessWhatsAppSent}
+              onDismiss={handleDismissTransferOrderSuccess}
+              onWhatsAppOpened={handleMarkOrderSuccessWhatsAppOpened}
               onLaunchWhatsApp={handleLaunchOrderSuccessWhatsApp}
             />
           </Suspense>
@@ -8281,6 +8429,7 @@ export default function App() {
               adminOrderCustomerOptions={adminOrderCustomerOptions}
               updateOrderStatus={updateOrderStatus}
               bulkUpdateOrderStatus={bulkUpdateOrderStatus}
+              bulkDeleteOrders={bulkDeleteOrders}
               updateOrderGuide={updateOrderGuide}
               updateOrderCourier={updateOrderCourier}
               updateOrderInternalNote={updateOrderInternalNote}
@@ -8290,6 +8439,7 @@ export default function App() {
               clearOrderPaymentProof={clearOrderPaymentProof}
               handleOrderProofUpload={handleOrderProofUpload}
               deleteOrder={deleteOrder}
+              deletingOrderIds={deletingOrderIds}
               liveOrdersEnabled={liveOrdersEnabled}
               setLiveOrdersEnabled={setLiveOrdersEnabled}
               liveOrdersRefreshing={liveOrdersRefreshing}
@@ -8451,7 +8601,7 @@ export default function App() {
 
       <a className="skip-link" href="#main-content">Saltar al catálogo</a>
 
-      <AnnouncementBar />
+      <AnnouncementBar paused={presentationPaused} />
 
       <header className="topbar">
         <div className="container nav">
@@ -8766,7 +8916,7 @@ export default function App() {
         </button>
       </nav>
 
-      <section id="inicio" className="hero">
+      <section id="inicio" className="hero" onFocusCapture={() => setHeroHasFocus(true)} onBlurCapture={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setHeroHasFocus(false); }}>
         <div className="container hero-grid hero-shell">
           <Motion.div initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: ANIMATION.medium }} className="hero-copy-panel">
             <span className="badge badge-dark hero-badge">{storeSettings.heroBadgeText}</span>
@@ -8849,9 +8999,13 @@ export default function App() {
                     className={`hero-slide-dot ${index === heroIndex ? "active" : ""}`}
                     aria-label={`Ir a la imagen ${index + 1}`}
                     aria-current={index === heroIndex ? "true" : undefined}
-                    onClick={() => setHeroIndex(index)}
+                    onClick={() => { setHeroIndex(index); setPresentationPaused(true); }}
                   />
                 ))}
+                {!reduceMotion && <button className="btn btn-outline hero-motion-control" type="button" aria-label={presentationPaused ? "Reanudar portada y anuncios" : "Pausar portada y anuncios"} aria-pressed={presentationPaused} onClick={() => setPresentationPaused((paused) => !paused)}>
+                  {presentationPaused ? <Play size={14} aria-hidden="true" /> : <Pause size={14} aria-hidden="true" />}
+                  {presentationPaused ? "Reanudar" : "Pausar"}
+                </button>}
               </div>
             )}
           </Motion.div>
@@ -8870,7 +9024,7 @@ export default function App() {
             <div className="catalog-shell">
               <div className="catalog-head">
                 <p className="muted catalog-kicker">Catálogo</p>
-                <h3 className="catalog-title">Colección completa</h3>
+                <h2 className="catalog-title">Colección completa</h2>
               </div>
 
               <div className="catalog-primary-row">
@@ -8956,8 +9110,8 @@ export default function App() {
                     {filteredProducts.length} {filteredProducts.length === 1 ? "prenda encontrada" : "prendas encontradas"}.
                   </p>
                   {catalogReady && filteredProducts.length > 0 && (
-                    <p className="helper-text catalog-feedback-text">
-                      Página {safeCatalogPage} de {totalCatalogPages} · prendas {catalogRangeStart}-{catalogRangeEnd}
+                    <p id="catalog-page-status" className="helper-text catalog-feedback-text" role="status" aria-live="polite" aria-atomic="true">
+                      Página {safeCatalogPage} de {totalCatalogPages} · prendas {catalogRangeStart}-{catalogRangeEnd} · {catalogPageSize} por página
                     </p>
                   )}
                 </div>
@@ -8988,11 +9142,26 @@ export default function App() {
                 </div>
               )}
 
-              <div className="products-grid catalog-products-grid">
+              {catalogError && <div className="catalog-connection-notice" role="alert">
+                <p>{catalogError}</p>
+                <button className="btn btn-outline" type="button" disabled={catalogRetryBusy} onClick={async () => {
+                  setCatalogRetryBusy(true);
+                  try {
+                    const result = await getCatalogState({ admin: adminRouteActive, force: true, preferCache: false });
+                    if (result?.ok && Array.isArray(result.data?.products)) {
+                      applyCatalogStateFromServer(result.data);
+                      setCatalogError("");
+                    } else setCatalogError("No pudimos actualizar el catálogo. Revisa tu conexión y vuelve a intentarlo.");
+                  } catch {
+                    setCatalogError("No pudimos actualizar el catálogo. Revisa tu conexión y vuelve a intentarlo.");
+                  } finally { setCatalogRetryBusy(false); }
+                }}>{catalogRetryBusy ? "Actualizando…" : "Volver a intentar"}</button>
+              </div>}
+              <div id="catalog-results" className="products-grid catalog-products-grid" tabIndex={-1} aria-label="Prendas del catálogo" aria-describedby={catalogReady && filteredProducts.length > 0 ? "catalog-page-status" : undefined}>
                 {!catalogReady ? (
                   Array.from({ length: 8 }, (_, index) => <ExternalCatalogSkeletonCard key={`catalog-skeleton-${index}`} />)
                 ) : filteredProducts.length === 0 ? (
-                  <div className="empty-admin-note" style={{ gridColumn: "1 / -1" }}>No encontramos productos con los filtros actuales. Prueba quitando un filtro o buscando otra palabra.</div>
+                  <div className="empty-admin-note" style={{ gridColumn: "1 / -1" }}>{catalogError ? "El catálogo no está disponible por ahora." : products.length === 0 ? "Aún no hay prendas publicadas. Vuelve pronto para descubrir la colección." : "No encontramos productos con los filtros actuales. Prueba quitando un filtro o buscando otra palabra."}</div>
                 ) : paginatedProducts.map((product) => (
                   <ExternalMemoCatalogProductCard
                     key={product.id}
@@ -9015,7 +9184,7 @@ export default function App() {
                   currentPage={safeCatalogPage}
                   totalPages={totalCatalogPages}
                   pageWindow={catalogPageWindow}
-                  onPageChange={setCatalogPage}
+                  onPageChange={changeCatalogPage}
                 />
               )}
             </div>
@@ -9031,7 +9200,7 @@ export default function App() {
           >
             <div className="purchase-process-header">
               <span className="purchase-process-eyebrow">EXPERIENCIA ADRIEGO · EN 3 PASOS</span>
-              <h3 id="purchase-process-heading" className="purchase-process-title">{storeSettings.saleTitle}</h3>
+              <h2 id="purchase-process-heading" className="purchase-process-title">{storeSettings.saleTitle}</h2>
               <p className="purchase-process-subtitle">{storeSettings.saleDescription}</p>
             </div>
 
@@ -9044,7 +9213,7 @@ export default function App() {
                   </div>
                 </div>
                 <div className="purchase-process-card-body">
-                  <h4>Elige tu prenda</h4>
+                  <h3>Elige tu prenda</h3>
                   <p>Explora nuestras colecciones exclusivas, escoge tu talla, color y agrega a tu selección.</p>
                 </div>
                 <div className="purchase-process-card-footer">
@@ -9060,7 +9229,7 @@ export default function App() {
                   </div>
                 </div>
                 <div className="purchase-process-card-body">
-                  <h4>Revisa tus datos</h4>
+                  <h3>Revisa tus datos</h3>
                   <p>Confirma tu dirección de entrega y método de pago preferido para procesar tu orden.</p>
                 </div>
                 <div className="purchase-process-card-footer">
@@ -9072,15 +9241,15 @@ export default function App() {
                 <div className="purchase-process-card-top">
                   <span className="purchase-process-card-num" aria-hidden="true">03</span>
                   <div className="purchase-process-card-icon-wrap" aria-hidden="true">
-                    <MessageCircle size={22} />
+                    <Send size={22} />
                   </div>
                 </div>
                 <div className="purchase-process-card-body">
-                  <h4>Ordena por WhatsApp</h4>
-                  <p>Conecta directamente por WhatsApp para confirmación personalizada y despacho inmediato.</p>
+                  <h3>Envía tu pedido</h3>
+                  <p>Transferencia: adjunta el comprobante en la web. Tarjeta: solicita tu enlace por WhatsApp. Revisaremos el pago antes de confirmar.</p>
                 </div>
                 <div className="purchase-process-card-footer">
-                  <span className="purchase-process-card-tag">Paso 03 · Despacho directo</span>
+                  <span className="purchase-process-card-tag">Paso 03 · Revisión del pago</span>
                 </div>
               </li>
             </ol>
@@ -9100,9 +9269,9 @@ export default function App() {
         >
           <div className="container">
             <div className="haute-viewed-header">
-              <h3 id="recently-viewed-title" className="haute-viewed-heading">
+              <h2 id="recently-viewed-title" className="haute-viewed-heading">
                 Visto recientemente
-              </h3>
+              </h2>
               <button
                 type="button"
                 className="haute-viewed-clear-btn"
@@ -9197,7 +9366,7 @@ export default function App() {
           <div className="footer-card">
             <div className={`footer-grid${publicContactSettings.address || publicContactSettings.mapsLink ? "" : " footer-grid-single"}`}>
               <div className="footer-copy">
-                <h3>{storeSettings.footerTitle}</h3>
+                <h2>{storeSettings.footerTitle}</h2>
                 <p>{storeSettings.footerText}</p>
                 <div className="social-row">
                   {publicContactSettings.whatsappLink && (
