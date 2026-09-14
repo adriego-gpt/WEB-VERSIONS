@@ -39,7 +39,7 @@ async function call(body, secret = "test-webhook-secret") {
 }
 const message = (id, text) => ({ message: { message_id: id, chat: { id: 123 }, text } });
 const callback = (id, data) => ({ callback_query: { id, from: { id: 123 }, message: { chat: { id: 123 } }, data } });
-const lastBotMessage = () => messages.slice().reverse().find((entry) => entry.chat_id && entry.text);
+const lastBotMessage = () => messages.slice().reverse().find((entry) => entry.chat_id && entry.text && entry.text !== "⌂ Menú de acciones");
 
 test("physical sale and undo are persisted, idempotent and reject forged requests", async () => {
   await updateStore((draft) => {
@@ -63,7 +63,7 @@ test("physical sale and undo are persisted, idempotent and reject forged request
   await call(message(2, "/venta Clasica | Azul | M | 20"));
   assert.equal((await readStore()).products[0].variants[0].stock, 4);
   await call(message(3, "/stock Clasica"));
-  assert.match(messages.at(-1).text, /Stock disponible/);
+  assert.match(lastBotMessage().text, /Stock disponible/);
   const eventId = store.physicalStockEvents[0].id;
   const undo = { callback_query: { id: "cb1", from: { id: 123 }, data: `undo-stock:${eventId}` } };
   await call(undo);

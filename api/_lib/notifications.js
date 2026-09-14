@@ -361,6 +361,11 @@ export const TELEGRAM_BOT_COMMANDS = [
   { command: "ayuda", description: "Guía de comandos oficiales y ayuda" },
 ];
 
+// Keep advanced commands available to the handler/help, not in the native menu.
+export const TELEGRAM_MENU_COMMANDS = [
+  { command: "start", description: "Abrir menú" },
+];
+
 const registeredCommandsSignatures = new Set();
 const pendingCommandsRegistrations = new Map();
 
@@ -377,7 +382,7 @@ export async function registerTelegramBotCommands(token = "", { chatId = "" } = 
     const response = await fetchWithTimeout(`https://api.telegram.org/bot${botToken}/setMyCommands`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ commands: TELEGRAM_BOT_COMMANDS, ...(chatId ? { scope: { type: "chat", chat_id: Number(chatId) } } : {}) }),
+      body: JSON.stringify({ commands: TELEGRAM_MENU_COMMANDS, ...(chatId ? { scope: { type: "chat", chat_id: Number(chatId) } } : {}) }),
     });
     const result = await response.json();
     if (response.ok === false || !result?.ok) return { ok: false, result };
@@ -403,7 +408,7 @@ export async function ensureTelegramBotCommandsRegistered(token = "", { chatId =
 
   const signature = crypto
     .createHash("sha256")
-    .update(`${botToken}:${chatId}:commands:${JSON.stringify(TELEGRAM_BOT_COMMANDS)}`)
+    .update(`${botToken}:${chatId}:commands:${JSON.stringify(TELEGRAM_MENU_COMMANDS)}`)
     .digest("hex");
   if (registeredCommandsSignatures.has(signature)) {
     return { ok: true, skipped: true, message: "Telegram bot commands already registered" };

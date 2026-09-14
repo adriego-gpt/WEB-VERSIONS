@@ -348,7 +348,7 @@ test('Order Notifications Engine (Telegram & n8n)', async (t) => {
       assert.equal(res.ok, true);
       assert.equal(calls.length, 2);
       assert.equal(calls[0].url, 'https://api.telegram.org/bottest-token-commands/setMyCommands');
-      assert.deepEqual(calls[0].body.commands, TELEGRAM_BOT_COMMANDS);
+      assert.deepEqual(calls[0].body.commands, [{ command: 'start', description: 'Abrir menú' }]);
       assert.equal(calls[1].url, 'https://api.telegram.org/bottest-token-commands/setChatMenuButton');
       assert.deepEqual(calls[1].body.menu_button, { type: 'commands' });
     } finally {
@@ -613,28 +613,28 @@ test('Order Notifications Engine (Telegram & n8n)', async (t) => {
     try {
       // /ventas
       await sendCmd('/ventas');
-      assert.equal(calls.length, 1);
+      assert.equal(calls.length, 2);
       assert.match(calls[0].text, /Resumen de ventas/);
       assert.equal(calls[0].reply_markup.inline_keyboard[0][0].callback_data, 'summary');
 
       // /resumen
       await sendCmd('/resumen');
-      assert.equal(calls.length, 1);
+      assert.equal(calls.length, 2);
       assert.match(calls[0].text, /Resumen de ventas/);
 
       // /stock_bajo
       await sendCmd('/stock_bajo');
-      assert.equal(calls.length, 1);
+      assert.equal(calls.length, 2);
       assert.match(calls[0].text, /Stock por revisar|Inventario saludable/);
 
       // /pedidos
       await sendCmd('/pedidos');
-      assert.equal(calls.length, 1);
+      assert.equal(calls.length, 2);
       assert.match(calls[0].text, /Pedidos/);
 
       // /ayuda
       await sendCmd('/ayuda');
-      assert.equal(calls.length, 1);
+      assert.equal(calls.length, 2);
       assert.match(calls[0].text, /Comandos oficiales/);
       assert.match(calls[0].text, /\/pedidos/);
       assert.match(calls[0].text, /\/ventas/);
@@ -644,16 +644,18 @@ test('Order Notifications Engine (Telegram & n8n)', async (t) => {
       assert.equal(calls.length, 1);
       assert.match(calls[0].text, /Buscar pedido/);
       assert.equal(calls[0].reply_markup.force_reply, true);
+      assert.ok(Array.isArray(calls[0].reply_markup.keyboard));
+      assert.equal(calls[0].reply_markup.one_time_keyboard, false);
 
       // Bare sale and restock commands start with types, not a mandatory search
       await sendCmd('/venta');
-      assert.equal(calls.length, 1);
+      assert.equal(calls.length, 2);
       assert.match(calls[0].text, /Registrar venta/);
       assert.match(calls[0].text, /Elige el tipo de prenda|No hay modelos con variantes/);
       assert.ok(calls[0].reply_markup.inline_keyboard.flat().some((item) => item.callback_data === 'inv:search'));
 
       await sendCmd('/reponer');
-      assert.equal(calls.length, 1);
+      assert.equal(calls.length, 2);
       assert.match(calls[0].text, /Reponer stock/);
       assert.match(calls[0].text, /Elige el tipo de prenda|No hay modelos con variantes/);
       assert.ok(calls[0].reply_markup.inline_keyboard.flat().some((item) => item.callback_data === 'inv:add:search'));
@@ -661,7 +663,7 @@ test('Order Notifications Engine (Telegram & n8n)', async (t) => {
       // /menu registers official commands once per warm instance and then renders home
       await sendCmd('/menu');
       assert.equal(calls.length, 3);
-      assert.ok(calls.some((body) => Array.isArray(body.commands) && body.commands.some((item) => item.command === 'reponer')));
+      assert.deepEqual(calls.find((body) => Array.isArray(body.commands)).commands, [{ command: 'start', description: 'Abrir menú' }]);
       assert.ok(calls.some((body) => body.menu_button?.type === 'commands'));
       assert.ok(calls.some((body) => /Adriego Store/.test(body.text || '')));
     } finally {

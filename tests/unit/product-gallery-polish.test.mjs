@@ -29,3 +29,29 @@ test("recommended photos use a portrait frame and never crop or enlarge on hover
   assert.doesNotMatch(css, /\.product-modal-recommend-card:hover img/);
   assert.match(css, /\.product-modal-recommend-grid\s*\{[^}]*margin: 0;[^}]*scroll-padding-inline: 2px;/);
 });
+
+test("expanded mobile gallery groups its controls and preserves accessible zoom and image count", async () => {
+  const source = await fs.readFile(componentPath, "utf8");
+  assert.match(source, /className="image-preview-toolbar"/);
+  assert.match(source, /className="image-preview-navigation"/);
+  assert.match(source, /<ZoomIn size=\{18\} aria-hidden="true"/);
+  assert.match(source, /<ZoomOut size=\{18\} aria-hidden="true"/);
+  assert.match(source, /aria-pressed=\{previewZoomed\} aria-label=\{previewZoomed \? "Restablecer zoom" : "Ampliar imagen"\}/);
+  assert.match(source, /thumb-counter image-preview-counter" role="status" aria-label=/);
+  assert.match(source, /onPointerDown=\{handlePreviewPointerDown\}/);
+  assert.match(source, /onPointerMove=\{handlePreviewPointerMove\}/);
+});
+
+test("mobile image controls use equal touch targets and leave the photograph unobstructed", async () => {
+  const css = await fs.readFile(cssPath, "utf8");
+  assert.match(css, /\.image-preview-navigation \.carousel-arrow \{[^}]*position: static;[^}]*width: 44px;[^}]*height: 44px;[^}]*box-shadow: none;/);
+  assert.match(css, /\.image-preview-navigation \{[^}]*position: absolute;[^}]*bottom: calc\(16px \+ env\(safe-area-inset-bottom, 0px\)\);/);
+  assert.match(css, /\.image-preview-toolbar \{[^}]*grid-template-columns: 44px minmax\(0, 1fr\) 44px;/);
+  assert.match(css, /\.image-preview-shell button:focus-visible \{[^}]*outline: 2px/);
+  assert.match(css, /max-height: calc\(100dvh - 148px - env\(safe-area-inset-top, 0px\) - env\(safe-area-inset-bottom, 0px\)\)/);
+});
+
+test("mobile detail counter aligns beside the close control without heavy decoration", async () => {
+  const css = await fs.readFile(cssPath, "utf8");
+  assert.match(css, /\.modal-left > \.thumb-counter \{[^}]*top: calc\(20px \+ env\(safe-area-inset-top, 0px\)\);[^}]*right: calc\(68px \+ env\(safe-area-inset-right, 0px\)\);[^}]*box-shadow: none;/);
+});

@@ -14,15 +14,19 @@ process.chdir(sandbox);
 Object.assign(process.env, values);
 const calls = [];
 let failMenu = false;
+let nextMessageId = 700;
+let failAnchor = false;
 globalThis.fetch = async (url, options) => {
   assert.ok(String(url).startsWith("https://api.telegram.org/botlocal-menu-test/"), "No real service is contacted");
   const endpoint = String(url).split("/").at(-1);
   calls.push({ endpoint, body: JSON.parse(options.body) });
-  return { ok: !failMenu || endpoint !== "setChatMenuButton", json: async () => ({ ok: !failMenu || endpoint !== "setChatMenuButton", result: { message_id: 700 } }) };
+  const messageId = endpoint === "sendMessage" ? ++nextMessageId : 700;
+  const ok = (!failMenu || endpoint !== "setChatMenuButton") && (!failAnchor || JSON.parse(options.body).text !== "⌂ Menú de acciones");
+  return { ok, json: async () => ({ ok, result: { message_id: messageId } }) };
 };
 const load = (file) => import(pathToFileURL(path.join(root, file)).href);
 const { default: handler, ADMIN_KEYBOARD_MARKUP } = await load("api/telegram-webhook.js");
-const { TELEGRAM_BOT_COMMANDS, ensureTelegramBotCommandsRegistered } = await load("api/_lib/notifications.js");
+const { TELEGRAM_MENU_COMMANDS, ensureTelegramBotCommandsRegistered } = await load("api/_lib/notifications.js");
 const { readStore, updateStore } = await load("api/_lib/store.js");
 after(async () => {
   globalThis.fetch = originalFetch;
@@ -49,18 +53,18 @@ async function message(text, { admin = 123, secret = "local-test-secret", reply,
   return { ...response, calls: calls.slice(before) };
 }
 
-test("start installs both the native command menu and persistent keyboard with one chat message", async () => {
+test("start installs only one native command and a retained toggleable keyboard with one chat message", async () => {
   await seed();
   const response = await message("/start");
   assert.equal(response.code, 200);
   assert.deepEqual(response.calls.map(({ endpoint }) => endpoint), ["setMyCommands", "setChatMenuButton", "sendMessage"]);
   assert.deepEqual(response.calls[0].body.scope, { type: "chat", chat_id: 123 });
-  assert.deepEqual(response.calls[0].body.commands, TELEGRAM_BOT_COMMANDS);
-  assert.equal(TELEGRAM_BOT_COMMANDS[0].command, "start");
+  assert.deepEqual(response.calls[0].body.commands, TELEGRAM_MENU_COMMANDS);
+  assert.deepEqual(response.calls[0].body.commands, [{ command: "start", description: "Abrir menú" }]);
   assert.deepEqual(response.calls[1].body, { chat_id: 123, menu_button: { type: "commands" } });
   const home = response.calls[2].body;
   assert.deepEqual(home.reply_markup, ADMIN_KEYBOARD_MARKUP);
-  assert.equal(home.reply_markup.is_persistent, true);
+  assert.equal(home.reply_markup.is_persistent, false, "Telegram should allow toggling the keyboard using its native icon");
   assert.equal(home.reply_markup.one_time_keyboard, false);
   assert.ok(!home.reply_markup.inline_keyboard);
 });
@@ -74,6 +78,17 @@ test("opening the menu again reuses registration and restores keyboard in one re
   }
 });
 
+test("home on an older inline card restores the bottom keyboard instead of editing plain text", async () => {
+  await seed();
+  const response = { setHeader() {}, status(code) { this.code = code; return this; }, json(body) { this.body = body; } };
+  await handler({ method: "POST", headers: { "content-type": "application/json", "x-telegram-bot-api-secret-token": "local-test-secret" }, body: { callback_query: { id: "local-home", from: { id: 123, first_name: "Prueba" }, data: "home", message: { message_id: 600, chat: { id: 123, type: "private" } } } } }, response);
+  assert.equal(response.code, 200);
+  assert.equal(calls.filter(({ endpoint }) => endpoint === "sendMessage").length, 1);
+  assert.equal(calls.filter(({ endpoint }) => endpoint === "editMessageText").length, 0);
+  assert.deepEqual(calls.find(({ endpoint }) => endpoint === "sendMessage").body.reply_markup, ADMIN_KEYBOARD_MARKUP);
+  assert.equal((await readStore()).products[0].variants[0].stock, 3);
+});
+
 test("all keyboard actions resolve to their actual feature without changing inventory", async () => {
   await seed();
   const expected = new Map([
@@ -84,7 +99,10 @@ test("all keyboard actions resolve to their actual feature without changing inve
   ]);
   for (const [label, pattern] of expected) {
     const response = await message(label);
-    assert.equal(response.calls.filter(({ endpoint }) => endpoint === "sendMessage").length, 1, label);
+    const sent = response.calls.filter(({ endpoint }) => endpoint === "sendMessage");
+    assert.equal(sent.length, label === "🔍 Buscar pedido" ? 1 : 2, label);
+    assert.deepEqual(sent.at(-1).body.reply_markup.keyboard, ADMIN_KEYBOARD_MARKUP.keyboard, "Every section leaves the lower menu available");
+    assert.equal(sent.at(-1).body.reply_markup.one_time_keyboard, false);
     const view = response.calls.find(({ endpoint }) => endpoint === "sendMessage").body;
     assert.match(view.text, pattern, label);
     assert.equal((await readStore()).products[0].variants[0].stock, 3);
@@ -92,6 +110,53 @@ test("all keyboard actions resolve to their actual feature without changing inve
       const prefix = label === "➕ Reponer stock" ? "inv:add:type:" : "inv:type:";
       assert.ok(view.reply_markup.inline_keyboard.flat().some(({ callback_data }) => callback_data?.startsWith(prefix)));
     }
+  }
+});
+
+test("menu anchors replace only the previous anchor across sections and a cold import", async () => {
+  await seed();
+  await message("📦 Pedidos");
+  const before = await readStore();
+  const oldAnchor = before.meta.telegramMenuAnchors["123"];
+  const { default: coldHandler } = await import(pathToFileURL(path.join(root, "api/telegram-webhook.js")).href + "?cold-menu");
+  calls.length = 0;
+  const response = { setHeader() {}, status(code) { this.code = code; return this; }, json(body) { this.body = body; } };
+  await coldHandler({ method: "POST", headers: { "content-type": "application/json", "x-telegram-bot-api-secret-token": "local-test-secret" }, body: { message: { message_id: 800, chat: { id: 123, type: "private" }, from: { id: 123 }, text: "📊 Resumen" } } }, response);
+  assert.equal(response.code, 200);
+  const after = await readStore();
+  assert.notEqual(after.meta.telegramMenuAnchors["123"], oldAnchor);
+  assert.deepEqual(calls.filter(({ endpoint }) => endpoint === "deleteMessage").map(({ body }) => body.message_id), [oldAnchor]);
+  assert.deepEqual(after.orders, before.orders);
+  assert.deepEqual(after.products, before.products);
+  const anchor = calls.filter(({ endpoint }) => endpoint === "sendMessage").at(-1).body;
+  assert.deepEqual(anchor.reply_markup, ADMIN_KEYBOARD_MARKUP);
+  assert.equal(anchor.disable_notification, true);
+});
+
+test("a failed menu restoration never erases the existing usable anchor", async () => {
+  await seed();
+  await message("📦 Pedidos");
+  const oldAnchor = (await readStore()).meta.telegramMenuAnchors["123"];
+  failAnchor = true;
+  try {
+    const response = await message("📊 Resumen");
+    assert.equal(response.code, 200);
+    assert.equal(response.calls.filter(({ endpoint }) => endpoint === "deleteMessage").length, 0);
+    assert.equal((await readStore()).meta.telegramMenuAnchors["123"], oldAnchor);
+  } finally { failAnchor = false; }
+});
+
+test("guided searches and tracking prompts retain keyboard controls while requesting a reply", async () => {
+  await seed();
+  for (const data of ["search-order", "inv:search", "inv:add:search", "quick_guia:ORDER-TEST:Servientrega"]) {
+    calls.length = 0;
+    const response = { setHeader() {}, status(code) { this.code = code; return this; }, json(body) { this.body = body; } };
+    await handler({ method: "POST", headers: { "content-type": "application/json", "x-telegram-bot-api-secret-token": "local-test-secret" }, body: { callback_query: { id: `prompt-${data}`, from: { id: 123 }, data, message: { message_id: 600, chat: { id: 123, type: "private" } } } } }, response);
+    assert.equal(response.code, 200);
+    const prompt = calls.find(({ endpoint }) => endpoint === "sendMessage").body;
+    assert.equal(prompt.reply_markup.force_reply, true);
+    assert.deepEqual(prompt.reply_markup.keyboard, ADMIN_KEYBOARD_MARKUP.keyboard);
+    assert.equal(prompt.reply_markup.one_time_keyboard, false);
   }
 });
 

@@ -36,7 +36,8 @@ export const ADMIN_KEYBOARD_MARKUP = {
     [{ text: "⌂ Menú principal" }],
   ],
   resize_keyboard: true,
-  is_persistent: true,
+  // Allow hiding/showing the retained keyboard using Telegram's input icon.
+  is_persistent: false,
   one_time_keyboard: false,
   input_field_placeholder: "Elige una acción",
 };
@@ -67,6 +68,11 @@ async function answerCallbackQuery(token, callbackQueryId, text = "", options = 
 
 async function sendTelegramMessage(token, chatId, text, options = {}) {
   try {
+    // Bot API supports force_reply on ReplyKeyboardMarkup: keep navigation
+    // available while asking for a search term or tracking number.
+    const markup = options.reply_markup?.force_reply
+      ? { ...ADMIN_KEYBOARD_MARKUP, ...options.reply_markup }
+      : options.reply_markup;
     const payload = {
       chat_id: chatId,
       text,
@@ -74,21 +80,54 @@ async function sendTelegramMessage(token, chatId, text, options = {}) {
       disable_web_page_preview: true,
       reply_markup: ADMIN_KEYBOARD_MARKUP,
       ...options,
+      ...(markup ? { reply_markup: markup } : {}),
     };
     const response = await fetchWithTimeout("https://api.telegram.org/bot" + token + "/sendMessage", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-    return await response.json();
+    const result = await response.json();
+    if (result?.ok && markup?.inline_keyboard && isAuthorizedAdminChatId(String(chatId))) {
+      await restoreTelegramMenuKeyboard(token, chatId);
+    }
+    return result;
   } catch (err) {
     console.error("[sendTelegramMessage-error]", err?.message || err);
     return { ok: false, error: err?.message || "Send message error" };
   }
 }
 
+async function restoreTelegramMenuKeyboard(token, chatId) {
+  // Inline and reply keyboards cannot share one message. Keep one small menu
+  // anchor after new inline cards; callbacks continue editing their original card.
+  const menu = await sendTelegramMessage(token, chatId, "⌂ Menú de acciones", {
+    reply_markup: ADMIN_KEYBOARD_MARKUP,
+    disable_notification: true,
+  });
+  const messageId = Number(menu?.result?.message_id);
+  if (!menu?.ok || !Number.isSafeInteger(messageId) || messageId <= 0) return;
+  let previousId;
+  try {
+    await updateStore((draft) => {
+      if (!draft.meta) draft.meta = {};
+      const anchors = { ...(draft.meta.telegramMenuAnchors || {}) };
+      previousId = Number(anchors[String(chatId)]);
+      anchors[String(chatId)] = messageId;
+      draft.meta.telegramMenuAnchors = anchors;
+      return draft;
+    });
+  } catch {
+    // Do not erase an existing working menu if remembering the new one fails.
+    return;
+  }
+  if (Number.isSafeInteger(previousId) && previousId > 0 && previousId !== messageId) {
+    await deleteTelegramMessage(token, chatId, previousId);
+  }
+}
+
 async function editTelegramMessage(token, chatId, messageId, text, options = {}) {
-  if (!Number.isSafeInteger(messageId) || messageId <= 0) {
+  if (!Number.isSafeInteger(messageId) || messageId <= 0 || options.reply_markup?.force_reply) {
     return sendTelegramMessage(token, chatId, text, options);
   }
 
@@ -1157,9 +1196,14 @@ export default async function handler(req, res) {
 
     if (data === "home") {
       await answerCallbackQuery(token, cb.id);
+      if (cb.message?.chat?.type === "private" || (!cb.message?.chat?.type && Number(senderChatId) > 0)) {
+        await ensureTelegramBotCommandsRegistered(token, { chatId: senderChatId });
+      }
       const store = await readStore();
       const home = buildAdminHome(store, cb.from?.first_name || "");
-      await editTelegramMessage(token, senderChatId, sourceMessageId, home.text, { reply_markup: home.reply_markup });
+      // Telegram cannot install a reply keyboard through editMessageText.
+      // A fresh message restores the bottom menu even from older inline cards.
+      await sendTelegramMessage(token, senderChatId, `${home.text}\n\nUsa los botones de abajo. Si están ocultos, toca el icono de teclado junto a «Mensaje».\n[Ver panel admin](${getAdminPanelUrl()})`, { reply_markup: ADMIN_KEYBOARD_MARKUP });
     } else if (data === "summary") {
       await answerCallbackQuery(token, cb.id, "Actualizando resumen...");
       const store = await readStore();
@@ -2019,7 +2063,7 @@ export default async function handler(req, res) {
     }
     const store = await readStore();
     const home = buildAdminHome(store, senderName);
-    await sendTelegramMessage(token, senderChatId, `${home.text}\n\nElige una acción en el teclado de abajo.\n[Ver panel admin](${getAdminPanelUrl()})`, { reply_markup: ADMIN_KEYBOARD_MARKUP });
+    await sendTelegramMessage(token, senderChatId, `${home.text}\n\nUsa los botones de abajo. Si están ocultos, toca el icono de teclado junto a «Mensaje».\n[Ver panel admin](${getAdminPanelUrl()})`, { reply_markup: ADMIN_KEYBOARD_MARKUP });
   } else if (lowerText === "📊 resumen" || lowerText === "📊 ventas de hoy" || lowerText === "/ventas" || lowerText === "ventas" || lowerText === "/resumen" || lowerText === "resumen") {
     const store = await readStore();
     const view = buildSummaryView(store.orders);

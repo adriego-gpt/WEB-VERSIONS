@@ -1,6 +1,7 @@
 import React, { Suspense, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { alignImageViews } from "./domain/products/imageViews.js";
 import { getPublicSiteOrigin } from "./constants/site.js";
+import { StoreNotification } from "./components/common/StoreNotification.jsx";
 import { getProductSeo, SITE_DESCRIPTION, SITE_TITLE } from "./domain/products/seo.js";
 import {
   ShoppingBag,
@@ -23,11 +24,9 @@ import {
   Tags,
   PencilLine,
   Clock3,
-  BadgeCheck,
   Package,
   KeyRound,
   CheckCircle2,
-  CircleX,
   Eye,
   Menu,
   UserRound,
@@ -1785,6 +1784,7 @@ export default function App() {
   const [adminUsersSearch, setAdminUsersSearch] = useState("");
   const [adminUsersUpdatedAt, setAdminUsersUpdatedAt] = useState("");
   const [toast, setToast] = useState(null);
+  const dismissToast = useCallback(() => setToast(null), []);
   const [guestOrderId, setGuestOrderId] = useState("");
   const [orderLiveAlert, setOrderLiveAlert] = useState(null);
   const [catalogReady, setCatalogReady] = useState(false);
@@ -2702,6 +2702,7 @@ export default function App() {
         title: resolvedTitle,
         message: resolvedMessage,
         kind: resolvedKind,
+        action: payload.action === "cart" ? "cart" : "",
       });
       return;
     }
@@ -3906,12 +3907,6 @@ export default function App() {
   }, [adminTab, isAdmin, showAdminPanel, storeSettings]);
 
   useEffect(() => {
-    if (!toast) return undefined;
-    const timeoutId = window.setTimeout(() => setToast(null), TOAST_DURATION_MS);
-    return () => window.clearTimeout(timeoutId);
-  }, [toast]);
-
-  useEffect(() => {
     const availableColors = productForm.colorsData.map((color) => color.name.trim()).filter(Boolean);
     if (!availableColors.includes(previewColor)) {
       setPreviewColor(availableColors[0] || "");
@@ -4581,9 +4576,7 @@ export default function App() {
           showToastMessage("Ya alcanzaste el stock disponible para esa talla.", "warning");
           return previous;
         }
-        if (!animationMeta?.inlineFeedback) {
-          showToastMessage("Cantidad actualizada en tu carrito.", "success");
-        }
+        showToastMessage({ title: "Carrito actualizado", message: product.name, kind: "cart", action: "cart" });
         cartWasUpdated = true;
         return previous.map((item) => item.key === key ? { ...item, quantity: item.quantity + 1 } : item);
       }
@@ -4591,9 +4584,7 @@ export default function App() {
         showToastMessage("Esa talla está agotada por ahora.", "error");
         return previous;
       }
-      if (!animationMeta?.inlineFeedback) {
-        showToastMessage(`"${product.name}" se agrego al carrito.`, "success");
-      }
+      showToastMessage({ title: "Añadido al carrito", message: product.name, kind: "cart", action: "cart" });
       cartWasUpdated = true;
       return [
         ...previous,
@@ -8212,10 +8203,6 @@ export default function App() {
   };
 
   const checkoutDisabled = Boolean(checkoutBusy || couponBusy || (activeCouponCode && !appliedCouponState?.ok));
-  const toastTone = toast?.tone || "success";
-  const ToastIcon = toastTone === "error"
-    ? CircleX
-    : (toastTone === "warning" ? Clock3 : (toastTone === "info" ? MessageCircle : BadgeCheck));
   const routeNotFound = catalogReady
     && !KNOWN_DIRECT_ROUTES.has(normalizedPathname)
     && !adminRouteActive
@@ -8267,10 +8254,6 @@ export default function App() {
                   closeProductModal();
                   openCartPage();
                 }
-              }}
-              onOpenCart={() => {
-                closeProductModal();
-                openCartPage();
               }}
               isAdmin={isAdmin}
               onEditProduct={(product) => {
@@ -8737,28 +8720,17 @@ export default function App() {
         </aside>
       )}
 
-      <AnimatePresence>
-        {toast && (
-          <Motion.div
-            className={`toast-stack ${toast.tone || "success"} ${toast.kind ? `toast-kind-${toast.kind}` : ""}`}
-            initial={{ opacity: 0, y: 16, scale: 0.96 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: 8, scale: 0.97 }}
-            transition={ANIMATION.springSnappy}
-            role="status"
-            aria-live="polite"
-          >
-            <span className="toast-icon" aria-hidden="true"><ToastIcon size={15} /></span>
-            <span className="toast-copy">
-              {toast.title && <strong className="toast-title">{toast.title}</strong>}
-              {toast.message && <span className="toast-message">{toast.message}</span>}
-            </span>
-            <button type="button" className="icon-btn toast-close" aria-label="Cerrar notificación" onClick={() => setToast(null)}>
-              <X size={14} />
-            </button>
-          </Motion.div>
-        )}
-      </AnimatePresence>
+      <StoreNotification
+        notification={toast}
+        onDismiss={dismissToast}
+        onOpenCart={() => {
+          if (selectedProduct) closeProductModal();
+          openCartPage();
+        }}
+        cartOpen={showCartSummary}
+        durationMs={TOAST_DURATION_MS}
+        reducedMotion={reduceMotion}
+      />
 
       <a className="skip-link" href="#main-content">Saltar al catálogo</a>
 

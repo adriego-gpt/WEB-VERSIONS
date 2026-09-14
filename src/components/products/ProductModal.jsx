@@ -9,7 +9,8 @@ import {
   RotateCcw,
   ShieldCheck,
   ShoppingBag,
-  Check,
+  ZoomIn,
+  ZoomOut,
 } from "lucide-react";
 import { motion as Motion, AnimatePresence } from "framer-motion";
 import { ANIMATION } from "../../constants/animation";
@@ -35,7 +36,6 @@ export function ProductModal({
   onClose,
   onChange,
   onAddToCart,
-  onOpenCart,
   cartEditMode = false,
   isAdmin,
   onEditProduct,
@@ -47,7 +47,6 @@ export function ProductModal({
   const [imagePreviewOpen, setImagePreviewOpen] = useState(false);
   const [showImageHint, setShowImageHint] = useState(true);
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
-  const [cartFeedback, setCartFeedback] = useState(null);
   const [previewScale, setPreviewScale] = useState(1);
   const [previewPan, setPreviewPan] = useState({ x: 0, y: 0 });
   const [previewPanning, setPreviewPanning] = useState(false);
@@ -91,11 +90,6 @@ export function ProductModal({
     return () => window.clearTimeout(timerId);
   }, []);
 
-  useEffect(() => {
-    if (!cartFeedback) return undefined;
-    const timerId = window.setTimeout(() => setCartFeedback(null), 4500);
-    return () => window.clearTimeout(timerId);
-  }, [cartFeedback]);
   const clampPreviewPan = (pan, scale, element) => {
     return clampImagePan(pan, scale, element.offsetWidth, element.offsetHeight);
   };
@@ -467,7 +461,13 @@ export function ProductModal({
       } else if (event.key === "Tab") {
         const FOCUSABLE_SELECTOR = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
         const focusRoot = imagePreviewOpen ? previewShellRef.current : modalRef.current;
-        const focusableElements = [...(focusRoot?.querySelectorAll(FOCUSABLE_SELECTOR) || [])];
+        // The shared top confirmation belongs to this purchase flow, so its
+        // actions remain reachable without letting focus escape to the page.
+        const notificationActions = imagePreviewOpen ? [] : document.querySelectorAll(".notification-region button");
+        const focusableElements = [
+          ...(focusRoot?.querySelectorAll(FOCUSABLE_SELECTOR) || []),
+          ...notificationActions,
+        ].filter((element) => element.getClientRects().length > 0 && getComputedStyle(element).visibility !== "hidden");
         if (focusableElements.length > 0) {
           const first = focusableElements[0];
           const last = focusableElements[focusableElements.length - 1];
@@ -706,10 +706,7 @@ export function ProductModal({
                 onClick={(event) => {
                   if (selectedStock > 0) {
                     triggerHaptic("medium");
-                    const added = onAddToCart(product, { sourceElement: event.currentTarget, image: activeImage, inlineFeedback: !cartEditMode });
-                    if (!cartEditMode && added !== false) {
-                      setCartFeedback({ name: product.name });
-                    }
+                    onAddToCart(product, { sourceElement: event.currentTarget, image: activeImage });
                   }
                 }}
                 disabled={selectedStock <= 0}
@@ -734,32 +731,6 @@ export function ProductModal({
                 </button>
               )}
             </div>
-
-            <AnimatePresence initial={false}>
-              {cartFeedback && (
-                <Motion.div
-                  className="product-modal-cart-feedback"
-                  initial={{ opacity: 0, y: -7 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -5 }}
-                  transition={{ duration: 0.18, ease: ANIMATION.easeOut }}
-                  role="status"
-                  aria-live="polite"
-                >
-                  <span className="product-modal-cart-feedback-icon" aria-hidden="true"><Check size={15} /></span>
-                  <span className="product-modal-cart-feedback-copy">
-                    <strong>Añadido al carrito</strong>
-                    <span>{cartFeedback.name}</span>
-                  </span>
-                  <button type="button" className="product-modal-cart-feedback-action" onClick={onOpenCart}>
-                    Ver carrito
-                  </button>
-                  <button type="button" className="product-modal-cart-feedback-dismiss" onClick={() => setCartFeedback(null)} aria-label="Cerrar confirmación">
-                    <X size={14} />
-                  </button>
-                </Motion.div>
-              )}
-            </AnimatePresence>
 
             <div className="product-modal-trust-strip">
               <div className="product-modal-trust-item">
@@ -862,25 +833,18 @@ export function ProductModal({
             aria-label={`Imagen ampliada de ${product.name}`}
             onClick={(event) => event.stopPropagation()}
           >
-            <button ref={previewCloseRef} type="button" onClick={closeImagePreview} className="icon-btn image-preview-close" aria-label="Cerrar vista de imagen">
-              <X size={18} />
-            </button>
-            <button type="button" className="btn image-preview-zoom-control" onClick={() => togglePreviewZoom()} aria-pressed={previewZoomed}>
-              {previewZoomed ? "Restablecer zoom" : "Ampliar imagen"}
-            </button>
-            {hasMultipleImages && (
-              <>
-                <button className="icon-btn carousel-arrow left" type="button" onClick={goToPreviousImage} aria-label="Imagen anterior">
-                  <ChevronLeft size={18} />
-                </button>
-                <button className="icon-btn carousel-arrow right" type="button" onClick={goToNextImage} aria-label="Imagen siguiente">
-                  <ChevronRight size={18} />
-                </button>
-                <div className="thumb-counter">
-                  {safeImageIndex + 1} / {currentImages.length}
-                </div>
-              </>
-            )}
+            <div className="image-preview-toolbar">
+              <button type="button" className="btn image-preview-zoom-control" onClick={() => togglePreviewZoom()} aria-pressed={previewZoomed} aria-label={previewZoomed ? "Restablecer zoom" : "Ampliar imagen"}>
+                {previewZoomed ? <ZoomOut size={18} aria-hidden="true" /> : <ZoomIn size={18} aria-hidden="true" />}
+                <span>{previewZoomed ? "Restablecer zoom" : "Ampliar imagen"}</span>
+              </button>
+              <div className="thumb-counter image-preview-counter" role="status" aria-label={`Imagen ${safeImageIndex + 1} de ${currentImages.length}`}>
+                {safeImageIndex + 1} / {currentImages.length}
+              </div>
+              <button ref={previewCloseRef} type="button" onClick={closeImagePreview} className="icon-btn image-preview-close" aria-label="Cerrar vista de imagen">
+                <X size={18} />
+              </button>
+            </div>
             <Motion.img
               key={`preview-${product.id}-${selection?.color}-${safeImageIndex}-${activeImage}`}
               src={activeImage}
@@ -918,14 +882,18 @@ export function ProductModal({
                 }
               }}
             />
-            <p className="image-preview-hint" aria-live="polite">
+            <div className="image-preview-navigation">
+              {hasMultipleImages && <button className="icon-btn carousel-arrow left" type="button" onClick={goToPreviousImage} aria-label="Imagen anterior"><ChevronLeft size={18} /></button>}
+              <p className="image-preview-hint" aria-live="polite">
               <span className="pointer-instruction">
                 {previewZoomed ? "Arrastra para recorrer la imagen" : "Haz clic en la imagen para acercar"}
               </span>
               <span className="touch-instruction">
                 {previewZoomed ? "Arrastra con un dedo o ajusta con dos dedos" : "Separa dos dedos para acercar"}
               </span>
-            </p>
+              </p>
+              {hasMultipleImages && <button className="icon-btn carousel-arrow right" type="button" onClick={goToNextImage} aria-label="Imagen siguiente"><ChevronRight size={18} /></button>}
+            </div>
           </Motion.div>
         </Motion.div>
       )}
