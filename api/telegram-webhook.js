@@ -27,15 +27,27 @@ function currency(value) {
   return new Intl.NumberFormat("es-EC", { style: "currency", currency: "USD" }).format(Number(value) || 0);
 }
 
-const ADMIN_KEYBOARD_MARKUP = {
+export const ADMIN_KEYBOARD_MARKUP = {
   keyboard: [
-    [{ text: "📦 Pedidos" }, { text: "🔍 Buscar" }],
-    [{ text: "🛍️ Inventario" }, { text: "📊 Resumen" }],
+    [{ text: "📦 Pedidos" }, { text: "📊 Resumen" }],
+    [{ text: "🛍️ Registrar venta" }, { text: "➕ Reponer stock" }],
+    [{ text: "🗂️ Inventario" }, { text: "⚠️ Stock bajo" }],
+    [{ text: "🔍 Buscar pedido" }, { text: "❓ Ayuda" }],
+    [{ text: "⌂ Menú principal" }],
   ],
   resize_keyboard: true,
   is_persistent: true,
+  one_time_keyboard: false,
   input_field_placeholder: "Elige una acción",
 };
+
+const ADMIN_KEYBOARD_COMMANDS = new Map([
+  ["📦 pedidos", "/pedidos"], ["📊 resumen", "/ventas"],
+  ["🛍️ registrar venta", "/venta"], ["➕ reponer stock", "/reponer"],
+  ["🗂️ inventario", "/stock"], ["⚠️ stock bajo", "/stock_bajo"],
+  ["🔍 buscar pedido", "/buscar"], ["❓ ayuda", "/ayuda"],
+  ["⌂ menú principal", "/menu"],
+]);
 
 async function answerCallbackQuery(token, callbackQueryId, text = "", options = {}) {
   try {
@@ -1911,13 +1923,18 @@ export default async function handler(req, res) {
       token,
       senderChatId,
       "🔒 *Acceso Restringido*\n\nEste bot es de uso privado y exclusivo de administración para *Adriego Store*.",
+      { reply_markup: { remove_keyboard: true } },
     );
 
     res.status(200).json({ ok: true, authorized: false });
     return;
   }
 
-  const text = String(message.text || "").trim();
+  const rawText = String(message.text || "").trim();
+  // Keyboard shortcuts are commands, even while Telegram still replies to an
+  // old search/guide prompt. Never interpret a navigation label as order data.
+  const text = ADMIN_KEYBOARD_COMMANDS.get(rawText.toLowerCase())
+    || rawText.replace(/^\/(start|menu)@[a-zA-Z0-9_]+(?=\s|$)/i, "/$1");
   const lowerText = text.toLowerCase();
   if (!update.message && (/^\/(venta|deshacer)(\s|$)/i.test(text) || lowerText === "deshacer venta")) {
     res.status(200).json({ ok: true, skipped: true });
@@ -1996,11 +2013,13 @@ export default async function handler(req, res) {
   }
 
   // Command Handlers for Admin
-  if (lowerText === "/start" || lowerText === "hola" || lowerText === "/menu" || lowerText === "menu") {
-    await ensureTelegramBotCommandsRegistered(token);
+  if (/^\/start(?:\s.*)?$/.test(lowerText) || lowerText === "hola" || lowerText === "/menu" || lowerText === "menu") {
+    if (message.chat.type === "private" || (!message.chat.type && Number(senderChatId) > 0)) {
+      await ensureTelegramBotCommandsRegistered(token, { chatId: senderChatId });
+    }
     const store = await readStore();
     const home = buildAdminHome(store, senderName);
-    await sendTelegramMessage(token, senderChatId, home.text, { reply_markup: home.reply_markup });
+    await sendTelegramMessage(token, senderChatId, `${home.text}\n\nElige una acción en el teclado de abajo.\n[Ver panel admin](${getAdminPanelUrl()})`, { reply_markup: ADMIN_KEYBOARD_MARKUP });
   } else if (lowerText === "📊 resumen" || lowerText === "📊 ventas de hoy" || lowerText === "/ventas" || lowerText === "ventas" || lowerText === "/resumen" || lowerText === "resumen") {
     const store = await readStore();
     const view = buildSummaryView(store.orders);

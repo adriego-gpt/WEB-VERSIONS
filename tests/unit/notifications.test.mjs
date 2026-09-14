@@ -334,7 +334,8 @@ test('Order Notifications Engine (Telegram & n8n)', async (t) => {
   });
 
   await t.test('13. Official bot commands catalog and registration endpoint', async () => {
-    assert.equal(TELEGRAM_BOT_COMMANDS.length, 11);
+    assert.equal(TELEGRAM_BOT_COMMANDS.length, 12);
+    assert.ok(TELEGRAM_BOT_COMMANDS.some((item) => item.command === 'start'));
     assert.ok(TELEGRAM_BOT_COMMANDS.some((item) => item.command === 'reponer'));
     const prevFetch = globalThis.fetch;
     const calls = [];
@@ -345,9 +346,11 @@ test('Order Notifications Engine (Telegram & n8n)', async (t) => {
     try {
       const res = await registerTelegramBotCommands('test-token-commands');
       assert.equal(res.ok, true);
-      assert.equal(calls.length, 1);
+      assert.equal(calls.length, 2);
       assert.equal(calls[0].url, 'https://api.telegram.org/bottest-token-commands/setMyCommands');
       assert.deepEqual(calls[0].body.commands, TELEGRAM_BOT_COMMANDS);
+      assert.equal(calls[1].url, 'https://api.telegram.org/bottest-token-commands/setChatMenuButton');
+      assert.deepEqual(calls[1].body.menu_button, { type: 'commands' });
     } finally {
       globalThis.fetch = prevFetch;
     }
@@ -657,8 +660,9 @@ test('Order Notifications Engine (Telegram & n8n)', async (t) => {
 
       // /menu registers official commands once per warm instance and then renders home
       await sendCmd('/menu');
-      assert.equal(calls.length, 2);
+      assert.equal(calls.length, 3);
       assert.ok(calls.some((body) => Array.isArray(body.commands) && body.commands.some((item) => item.command === 'reponer')));
+      assert.ok(calls.some((body) => body.menu_button?.type === 'commands'));
       assert.ok(calls.some((body) => /Adriego Store/.test(body.text || '')));
     } finally {
       globalThis.fetch = prevFetch;

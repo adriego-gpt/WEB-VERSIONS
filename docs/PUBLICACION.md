@@ -2,11 +2,11 @@
 
 ## Estado
 
-Correcciones verificadas localmente. El 13 de septiembre de 2026 se creó un despliegue con configuración de producción, sin mover el dominio público. Vercel confirmó compilación correcta y estado Ready: `dpl_Ak5mUPFtYMgcRFtdGPDLznXw5VKf`, [versión de prueba protegida](https://adriego-e2vuup5j0-cuentageminiprueba01-2249s-projects.vercel.app). La activación en `adriego.vercel.app` está autorizada, pero pendiente de verificar la ejecución remota: la prueba requiere una sesión de Vercel y el acceso temporal mediante la integración no pudo generarse. No se modificaron pedidos ni stock de producción. No se compró ningún dominio ni se cambiaron permisos de Drive.
+Correcciones verificadas localmente. El 13 de septiembre de 2026 se creó una nueva versión con configuración de producción y `--skip-domain`. Vercel confirmó compilación correcta y estado Ready: `dpl_HEYwJxWDgvGjeDtzJXZVHqf8D41Y`, [versión de prueba protegida actual](https://adriego-pb3qjxwx8-cuentageminiprueba01-2249s-projects.vercel.app). Incluye las mejoras de la galería, rendimiento, pedidos web y Telegram y los nuevos menús. Sustituye como candidata a la prueba anterior `dpl_Ak5mUPFtYMgcRFtdGPDLznXw5VKf`. La activación en `adriego.vercel.app` está autorizada, pero pendiente de verificar la ejecución remota: el navegador redirige al inicio de sesión de Vercel y el acceso temporal mediante la integración no pudo generarse. No se modificaron pedidos ni stock de producción. No se compró ningún dominio ni se cambiaron permisos de Drive.
 
 ## Comprobaciones de esta revisión
 
-- 57 archivos de pruebas: 48 unitarios y 9 de integración; 334 pruebas correctas tras los ajustes de galería, recomendaciones, paginación, rendimiento y acciones de pedidos en Telegram. Compilación correcta.
+- 60 archivos de pruebas: 49 unitarios y 11 de integración; 354 pruebas correctas tras los ajustes de galería, recomendaciones, paginación, rendimiento, eliminación múltiple de pedidos y menús de Telegram. Compilación correcta.
 - Compilación de producción correcta.
 - Análisis estático general de la pasada responsive: 0 errores y 272 advertencias que requieren interpretación, principalmente accesos dinámicos a objetos y rutas de archivos en pruebas. La revisión posterior de los tres archivos de servidor y la nueva prueba de pedidos Telegram pasa con 0 errores y 39 advertencias. No se ocultaron advertencias mediante desactivación global de reglas; no se certifica que todas sean falsos positivos.
 - `npm audit fix --ignore-scripts`: actualizó Nodemailer a 9.1.1 y js-yaml a 4.3.2. El resultado posterior informa cero vulnerabilidades conocidas. Esto no garantiza ausencia de vulnerabilidades desconocidas. Referencias: [Nodemailer](https://github.com/advisories/GHSA-8m3c-c648-2xjj), [js-yaml](https://github.com/advisories/GHSA-2883-xcg3-v3hh).
@@ -38,9 +38,14 @@ Las imágenes públicas originales de ImageKit ahora ofrecen tamaños responsive
 
 ## Cambios principales
 
-Los ajustes posteriores de galería, paginación y rendimiento todavía no están incluidos en el despliegue protegido mencionado arriba: requieren un nuevo despliegue y comprobación remota antes de activar la versión definitiva. Esta pasada no publicó ni promovió la web.
+Los ajustes de galería, paginación, rendimiento y pedidos están incluidos en el despliegue protegido actual mencionado arriba. Falta completar el acceso y comprobar la ejecución remota antes de activar la versión definitiva en el dominio público. Esta pasada creó la candidata, pero no ejecutó su promoción al dominio público.
 
-También están pendientes de publicación las nuevas acciones de pedidos Telegram:
+La candidata también incluye las siguientes acciones de pedidos y menús Telegram, pendientes de activación en el bot de producción:
+
+- `/start` y `/menu` instalan el teclado inferior persistente con pedidos, resumen, venta, reposición, inventario, stock bajo, búsqueda, ayuda y regreso al menú. Los demás mensajes conservan los botones internos para elegir variantes y confirmar operaciones. Cada acción de navegación responde una sola vez.
+- La lista nativa de comandos incluye `/start` y se configura con `setMyCommands` y `setChatMenuButton`, únicamente en el chat privado autorizado que abre el menú. El teclado inferior se puede ocultar y volver a desplegar desde Telegram; la apariencia de los iconos depende del dispositivo. [Documentación oficial del teclado](https://core.telegram.org/bots/api#replykeyboardmarkup).
+- Siete pruebas aisladas cubren registro de ambos menús, reapertura, todas las rutas de los botones, respuestas a avisos antiguos, usuarios no autorizados, registro concurrente y reintento si Telegram rechaza la configuración. Los mensajes de usuarios ajenos no muestran el teclado administrativo.
+- Administración → Pedidos permite eliminar hasta 25 seleccionados mediante una sola confirmación y petición. El servidor valida todo el lote, borra únicamente sus registros y adjuntos de las copias internas y reintegra las reservas una sola vez. Cancelar o fallar conserva la selección; la barra móvil separa la acción de borrado. Se verificaron navegación y cancelación en navegador local; el borrado se probó con datos ficticios aislados.
 
 - Confirmar un pedido pendiente cambia su estado a `Confirmado`, sin cobrar, enviar mensajes al cliente ni volver a descontar stock. Sigue apareciendo en el trabajo pendiente. Los botones antiguos no confirman pedidos cancelados, con reserva liberada ni avanzados; repetir la confirmación no cambia nuevamente la versión.
 - Eliminar exige un segundo botón explícito, con confirmación guardada en el servidor, válida por cinco minutos y vinculada al administrador, al mensaje privado y a la versión del pedido. Cancelar conserva el pedido; cambios posteriores invalidan el consentimiento. Se edita la misma tarjeta, sin mensajes adicionales salvo que Telegram rechace la edición.

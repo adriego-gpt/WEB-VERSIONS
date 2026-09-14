@@ -347,6 +347,7 @@ export async function dispatchOrderNotifications(order = {}, options = {}) {
 }
 
 export const TELEGRAM_BOT_COMMANDS = [
+  { command: "start", description: "Iniciar bot y mostrar el teclado de acciones" },
   { command: "menu", description: "Menú principal y accesos directos" },
   { command: "pedidos", description: "Ver y gestionar pedidos pendientes" },
   { command: "ventas", description: "Resumen de ventas de hoy e histórico" },
@@ -360,52 +361,65 @@ export const TELEGRAM_BOT_COMMANDS = [
   { command: "ayuda", description: "Guía de comandos oficiales y ayuda" },
 ];
 
-let registeredCommandsSignature = "";
-let pendingCommandsRegistration = null;
+const registeredCommandsSignatures = new Set();
+const pendingCommandsRegistrations = new Map();
 
-export async function registerTelegramBotCommands(token = "") {
+function isValidMenuChat(chatId) {
+  return !chatId || (Number.isSafeInteger(Number(chatId)) && Number(chatId) > 0 && isAuthorizedAdminChatId(chatId));
+}
+
+export async function registerTelegramBotCommands(token = "", { chatId = "" } = {}) {
   const botToken = String(token || process.env.TELEGRAM_BOT_TOKEN || "").trim();
   if (!botToken) return { ok: false, message: "Missing Telegram bot token" };
+  if (!isValidMenuChat(chatId)) return { ok: false, message: "Unauthorized private menu chat" };
 
   try {
     const response = await fetchWithTimeout(`https://api.telegram.org/bot${botToken}/setMyCommands`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ commands: TELEGRAM_BOT_COMMANDS }),
+      body: JSON.stringify({ commands: TELEGRAM_BOT_COMMANDS, ...(chatId ? { scope: { type: "chat", chat_id: Number(chatId) } } : {}) }),
     });
     const result = await response.json();
-    return { ok: Boolean(result?.ok), result };
+    if (response.ok === false || !result?.ok) return { ok: false, result };
+    // Telegram owns the command-menu UI; explicitly select it so a previous
+    // Web App button does not hide /start and the registered command list.
+    const menuResponse = await fetchWithTimeout(`https://api.telegram.org/bot${botToken}/setChatMenuButton`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ menu_button: { type: "commands" }, ...(chatId ? { chat_id: Number(chatId) } : {}) }),
+    });
+    const menuResult = await menuResponse.json();
+    return { ok: Boolean(menuResult?.ok) && menuResponse.ok !== false, result, menuResult };
   } catch (err) {
     console.error("[registerTelegramBotCommands-error]", err?.message || err);
     return { ok: false, error: err?.message || "Telegram network error" };
   }
 }
 
-export async function ensureTelegramBotCommandsRegistered(token = "") {
+export async function ensureTelegramBotCommandsRegistered(token = "", { chatId = "" } = {}) {
   const botToken = String(token || process.env.TELEGRAM_BOT_TOKEN || "").trim();
   if (!botToken) return { ok: false, message: "Missing Telegram bot token" };
+  if (!isValidMenuChat(chatId)) return { ok: false, message: "Unauthorized private menu chat" };
 
   const signature = crypto
     .createHash("sha256")
-    .update(`${botToken}:${JSON.stringify(TELEGRAM_BOT_COMMANDS)}`)
+    .update(`${botToken}:${chatId}:commands:${JSON.stringify(TELEGRAM_BOT_COMMANDS)}`)
     .digest("hex");
-  if (registeredCommandsSignature === signature) {
+  if (registeredCommandsSignatures.has(signature)) {
     return { ok: true, skipped: true, message: "Telegram bot commands already registered" };
   }
-  if (pendingCommandsRegistration?.signature === signature) {
-    return pendingCommandsRegistration.promise;
+  if (pendingCommandsRegistrations.has(signature)) {
+    return pendingCommandsRegistrations.get(signature);
   }
 
-  const promise = registerTelegramBotCommands(botToken)
+  const promise = registerTelegramBotCommands(botToken, { chatId })
     .then((result) => {
-      if (result?.ok) registeredCommandsSignature = signature;
+      if (result?.ok) registeredCommandsSignatures.add(signature);
       return result;
     })
     .finally(() => {
-      if (pendingCommandsRegistration?.promise === promise) {
-        pendingCommandsRegistration = null;
-      }
+      pendingCommandsRegistrations.delete(signature);
     });
-  pendingCommandsRegistration = { signature, promise };
+  pendingCommandsRegistrations.set(signature, promise);
   return promise;
 }
