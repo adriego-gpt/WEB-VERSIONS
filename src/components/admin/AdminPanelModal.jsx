@@ -853,7 +853,7 @@ export function AdminPanelModal({
                 </div>
               ))}
             </nav>
-            <button type="button" className="btn btn-outline admin-panel-close-btn" onClick={onClose}><ExternalLink size={16} />Volver a la tienda</button>
+            <button type="button" className="btn btn-outline admin-panel-close-btn" onClick={(e) => { e.preventDefault(); onClose?.(); }}><ExternalLink size={16} />Volver a la tienda</button>
           </div>
 
           <div className="admin-modal-content" id="admin-main-content" tabIndex="-1">
@@ -884,7 +884,7 @@ export function AdminPanelModal({
                     <RefreshCw size={13} /> Reintentar
                   </button>
                 )}
-                <button type="button" className="btn btn-outline" onClick={onClose}><ExternalLink size={16} />Ver tienda</button>
+                <button type="button" className="btn btn-outline" onClick={(e) => { e.preventDefault(); onClose?.(); }}><ExternalLink size={16} />Ver tienda</button>
               </div>
             </header>
             {(editorMessage || editorError) && (

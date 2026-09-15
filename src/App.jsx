@@ -1809,12 +1809,10 @@ export default function App() {
 
   const closeAdminPanel = useCallback(() => {
     setShowAdminPanel(false);
-    if (typeof window !== "undefined" && isAdminRoute(window.location.pathname)) {
-      if (window.history.state?.[ADMIN_WORKSPACE_HISTORY_KEY]) {
-        window.history.back();
-        return;
+    if (typeof window !== "undefined") {
+      if (isAdminRoute(window.location.pathname)) {
+        window.history.pushState({ adriegoNavigation: true }, document.title, "/");
       }
-      window.history.replaceState({}, document.title, "/");
       setPathname("/");
     }
   }, []);
@@ -1873,7 +1871,7 @@ export default function App() {
     if (typeof window !== "undefined") {
       const nextRoute = ADMIN_TAB_TO_ROUTE[nextTab] || "/admin/hoy";
       if (window.location.pathname !== nextRoute) {
-        window.history.pushState({ [ADMIN_WORKSPACE_HISTORY_KEY]: true }, document.title, nextRoute);
+        window.history.replaceState({ [ADMIN_WORKSPACE_HISTORY_KEY]: true }, document.title, nextRoute);
         setPathname(nextRoute);
       }
     }

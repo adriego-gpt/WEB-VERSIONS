@@ -50,3 +50,21 @@ test("admin panel locks document body scroll preventing double scrollbars", () =
   );
 });
 
+test("closeAdminPanel navigates directly to storefront without back history traps", () => {
+  const appContent = fs.readFileSync("src/App.jsx", "utf8");
+  const startIndex = appContent.indexOf("const closeAdminPanel = useCallback");
+  const endIndex = appContent.indexOf("const requestDestructiveConfirmation", startIndex);
+  const closeAdminBody = appContent.slice(startIndex, endIndex);
+
+  assert.match(
+    closeAdminBody,
+    /setShowAdminPanel\(false\);[\s\S]*?setPathname\("\/"\);/,
+    "closeAdminPanel must synchronously reset pathname to '/' and close panel in 1 click",
+  );
+  assert.doesNotMatch(
+    closeAdminBody,
+    /window\.history\.back\(\)/,
+    "closeAdminPanel must not rely on history.back() which creates double-click loops",
+  );
+});
+
