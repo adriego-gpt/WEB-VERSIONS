@@ -9,6 +9,7 @@ import { FALLBACK_IMAGE } from "../../constants";
 import { OrderStatusProgress } from "./OrderStatusProgress";
 import { ImageLightbox } from "../ui/ImageLightbox";
 import { useModalA11y } from "../../hooks/useModalA11y";
+import { PickupLocation } from "./PickupLocation";
 
 function getPaymentMethodLabel(order) {
   return order.paymentMethodLabel
@@ -27,6 +28,7 @@ export function OrdersModal({
   searchValue,
   onCopyOrderCode,
   onOpenOrderWhatsApp,
+  contactSettings = {},
 }) {
   const [proofPreview, setProofPreview] = useState(null);
   const [productPreview, setProductPreview] = useState(null);
@@ -213,7 +215,9 @@ export function OrdersModal({
                             <div><strong>{selectedOrder.deliveryAddress || "Dirección no registrada"}</strong>{selectedOrder.deliveryReference && <p>Referencia: {selectedOrder.deliveryReference}</p>}<p>Recibe: {selectedOrder.deliveryFullName || selectedOrder.customerName || "Cliente"}</p></div>
                           </details>
                         </>
-                      ) : <p className="order-detail-muted">{selectedOrder.pickupAddress || "La dirección de retiro se confirmará contigo."}</p>}
+                      ) : <PickupLocation key={selectedOrder.id} address={selectedOrder.pickupAddress || contactSettings.address} locationNote={selectedOrder.pickupNote || contactSettings.locationNote}
+                        mapsLink={selectedOrder.pickupMapsLink || (!selectedOrder.pickupAddress || selectedOrder.pickupAddress === contactSettings.address ? contactSettings.mapsLink : "")}
+                        mapsEmbedUrl={selectedOrder.pickupMapsEmbedUrl || (!selectedOrder.pickupAddress || selectedOrder.pickupAddress === contactSettings.address ? contactSettings.mapsEmbedUrl : "")} />}
                     </section>
 
                     {canOpenWhatsApp && <button type="button" className="btn btn-soft order-help-action" onClick={() => onOpenOrderWhatsApp(selectedOrder)}><MessageCircle size={16} />Consultar por WhatsApp</button>}

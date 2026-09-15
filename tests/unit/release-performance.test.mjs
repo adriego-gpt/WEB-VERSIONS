@@ -25,6 +25,20 @@ test("ImageKit responsive candidates preserve paths and do not crop", () => {
   }
 });
 
+test("default responsive candidates include an intermediate card width", () => {
+  const result = getResponsiveImageSources("https://ik.imagekit.io/shop/ropa/azul.jpg");
+  assert.match(result, /tr=w-320[^,]* 320w/);
+  assert.match(result, /tr=w-480[^,]* 480w/);
+  assert.match(result, /tr=w-640[^,]* 640w/);
+});
+
+test("the public map waits until it is near the viewport without requiring a click", () => {
+  const source = readFileSync(new URL("../../src/components/common/GoogleMapPreview.jsx", import.meta.url), "utf8");
+  assert.match(source, /IntersectionObserver/);
+  assert.match(source, /rootMargin: "320px 0px"/);
+  assert.doesNotMatch(source, /onClick/);
+});
+
 test("signed, transformed, unknown and unsafe image URLs are never rewritten", () => {
   for (const src of [
     "https://ik.imagekit.io/shop/p.jpg?ik-s=signature", "https://ik.imagekit.io/shop/p.jpg?ik-t=123",

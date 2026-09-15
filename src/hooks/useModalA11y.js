@@ -60,6 +60,7 @@ export function useModalA11y(open, onClose, options = {}) {
       // Escape key to dismiss
       if (event.key === "Escape" && !disableEscapeRef.current) {
         event.preventDefault();
+        event.stopPropagation();
         onCloseRef.current?.();
         return;
       }
@@ -98,7 +99,7 @@ export function useModalA11y(open, onClose, options = {}) {
         previousFocusRef.current instanceof HTMLElement &&
         previousFocusRef.current.isConnected
       ) {
-        previousFocusRef.current.focus();
+        previousFocusRef.current.focus({ preventScroll: true });
       }
     };
   }, [open]);

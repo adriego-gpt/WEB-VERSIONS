@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from "react";
+import React, { useState, useRef, useEffect, useCallback, useId } from "react";
 import {
   X,
   Star,
@@ -9,6 +9,8 @@ import {
   RotateCcw,
   ShieldCheck,
   ShoppingBag,
+  Minus,
+  Plus,
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
@@ -22,6 +24,7 @@ import { triggerHaptic } from "../../utils/haptics";
 import { clampImagePan, zoomImageAtPoint } from "../../domain/products/imageZoom";
 import { getResponsiveImageSources, applyImageFallback } from "../../domain/products/imageSources.js";
 import { createFrameQueue } from "../../utils/frameQueue.js";
+import { preserveCartSelection } from "../../domain/orders/cartEditing.js";
 import {
   getSelectionForColor,
   getImagesForColor,
@@ -37,16 +40,19 @@ export function ProductModal({
   onChange,
   onAddToCart,
   cartEditMode = false,
+  cartEditQuantity = 1,
   isAdmin,
   onEditProduct,
   recommendations = [],
   onOpenRecommendation,
 }) {
-  const resolvedSelection = product ? getSelectionForColor(product, selection) : null;
+  const productTitleId = useId();
+  const resolvedSelection = product ? preserveCartSelection(product, selection, getSelectionForColor) : null;
   const [imageIndex, setImageIndex] = useState(0);
   const [imagePreviewOpen, setImagePreviewOpen] = useState(false);
   const [showImageHint, setShowImageHint] = useState(true);
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
+  const [quantitySelection, setQuantitySelection] = useState({ productId: "", quantity: 1 });
   const [previewScale, setPreviewScale] = useState(1);
   const [previewPan, setPreviewPan] = useState({ x: 0, y: 0 });
   const [previewPanning, setPreviewPanning] = useState(false);
@@ -78,12 +84,27 @@ export function ProductModal({
   const discount = product ? discountPercent(product.price, product.oldPrice) : 0;
   const sizesForSelectedColor = product ? getSizesForColor(product, resolvedSelection?.color) : [];
   const selectedStock = product ? getStockForVariant(product, resolvedSelection?.color, resolvedSelection?.size) : 0;
+  const quantityContext = `${product?.id}:${cartEditMode ? "edit" : "add"}`;
+  const quantityLimit = Math.min(10, Math.max(1, selectedStock));
+  const requestedQuantity = Math.max(1, Math.min(quantityLimit,
+    quantitySelection.productId === quantityContext ? quantitySelection.quantity : (cartEditMode ? cartEditQuantity : 1)));
   const stockStatus = getStockStatus(selectedStock);
   const isLowStock = selectedStock > 0 && selectedStock <= 2;
   const hasMultipleImages = currentImages.length > 1;
   const hasLongDescription = String(product?.description || "").trim().length > 145;
   const previewZoomed = previewScale > 1.01;
   const isTouchLikePointer = (pointerType) => pointerType === "touch" || pointerType === "pen";
+
+  const updateRequestedQuantity = (update) => {
+    if (!product?.id) return;
+    setQuantitySelection((previous) => {
+      const current = previous.productId === quantityContext ? Math.max(1, Math.min(previous.quantity, quantityLimit)) : requestedQuantity;
+      return {
+        productId: quantityContext,
+        quantity: Math.max(1, Math.min(quantityLimit, update(current))),
+      };
+    });
+  };
 
   useEffect(() => {
     const timerId = window.setTimeout(() => setShowImageHint(false), 2600);
@@ -435,16 +456,29 @@ export function ProductModal({
   const previousFocusRef = useRef(null);
 
   useEffect(() => {
-    if (product) {
-      previousFocusRef.current = document.activeElement;
-    } else if (previousFocusRef.current instanceof HTMLElement && previousFocusRef.current.isConnected) {
-      previousFocusRef.current.focus();
-    }
-  }, [product]);
+    if (!product?.id) return undefined;
+    previousFocusRef.current = document.activeElement;
+    const frame = window.requestAnimationFrame(() => {
+      const first = [...(modalRef.current?.querySelectorAll('button:not([disabled]), [href]') || [])]
+        .find(element => element.getClientRects().length > 0);
+      (first || modalRef.current)?.focus({ preventScroll: true });
+    });
+    return () => {
+      window.cancelAnimationFrame(frame);
+      if (previousFocusRef.current instanceof HTMLElement && previousFocusRef.current.isConnected) {
+        previousFocusRef.current.focus({ preventScroll: true });
+      }
+    };
+  }, [product?.id]);
 
   useEffect(() => {
     if (!product || typeof window === "undefined") return undefined;
     const handleKeyDown = (event) => {
+      const activeDialog = document.activeElement?.closest('[role="dialog"]');
+      const editingText = event.target instanceof HTMLElement
+        && (event.target.isContentEditable || event.target.matches('input, textarea, select, [role="radio"], [role="tab"]'));
+      if (activeDialog && !modalRef.current?.contains(activeDialog)
+        && activeDialog !== previewShellRef.current) return;
       if (event.key === "Escape") {
         event.preventDefault();
         if (imagePreviewOpen) {
@@ -452,10 +486,10 @@ export function ProductModal({
         } else {
           closeProductDetail();
         }
-      } else if (event.key === "ArrowLeft" && hasMultipleImages) {
+      } else if (event.key === "ArrowLeft" && hasMultipleImages && !editingText) {
         event.preventDefault();
         setImageIndex((previous) => (previous - 1 + currentImages.length) % currentImages.length);
-      } else if (event.key === "ArrowRight" && hasMultipleImages) {
+      } else if (event.key === "ArrowRight" && hasMultipleImages && !editingText) {
         event.preventDefault();
         setImageIndex((previous) => (previous + 1) % currentImages.length);
       } else if (event.key === "Tab") {
@@ -471,10 +505,11 @@ export function ProductModal({
         if (focusableElements.length > 0) {
           const first = focusableElements[0];
           const last = focusableElements[focusableElements.length - 1];
-          if (event.shiftKey && document.activeElement === first) {
+          const focusIsOutside = !focusableElements.includes(document.activeElement);
+          if (event.shiftKey && (document.activeElement === first || focusIsOutside)) {
             event.preventDefault();
             last.focus();
-          } else if (!event.shiftKey && document.activeElement === last) {
+          } else if (!event.shiftKey && (document.activeElement === last || focusIsOutside)) {
             event.preventDefault();
             first.focus();
           }
@@ -505,7 +540,8 @@ export function ProductModal({
           ref={modalRef}
           role="dialog"
           aria-modal="true"
-          aria-label={`Detalle de ${product.name}`}
+          aria-labelledby={productTitleId}
+          tabIndex={-1}
           onClick={(event) => event.stopPropagation()}
         >
           <button onClick={closeProductDetail} className="icon-btn product-modal-close" aria-label="Cerrar detalle del producto">
@@ -605,7 +641,7 @@ export function ProductModal({
                 <p className="product-modal-category-eyebrow">
                   {product.category} · {product.productType || "Colección"}
                 </p>
-                <h3 className="product-modal-title">{product.name}</h3>
+                <h3 id={productTitleId} className="product-modal-title">{product.name}</h3>
               </div>
 
               <div className="product-modal-price-row">
@@ -701,26 +737,34 @@ export function ProductModal({
             </div>
 
             <div className={`product-modal-actions ${isAdmin ? "product-modal-actions-admin" : ""}`}>
-              <button
-                className="btn btn-primary product-modal-buy-btn"
-                onClick={(event) => {
-                  if (selectedStock > 0) {
-                    triggerHaptic("medium");
-                    onAddToCart(product, { sourceElement: event.currentTarget, image: activeImage });
-                  }
-                }}
-                disabled={selectedStock <= 0}
-                style={{ opacity: selectedStock <= 0 ? 0.6 : 1, cursor: selectedStock <= 0 ? "not-allowed" : "pointer" }}
-              >
-                <ShoppingBag size={18} />
-                <span>
-                  {selectedStock <= 0
-                    ? "Agotado"
-                    : (cartEditMode
-                      ? "Guardar cambios"
-                      : `Agregar al carrito · ${currency(product.price)}`)}
-                </span>
-              </button>
+              <div className={`product-modal-buy-composer${selectedStock <= 0 ? " is-disabled" : ""}`} role="group" aria-label="Cantidad y compra">
+                {selectedStock > 0 && (
+                  <button type="button" className="product-modal-buy-control is-decrease" aria-label="Quitar una unidad" onClick={() => updateRequestedQuantity((quantity) => quantity - 1)} disabled={requestedQuantity <= 1}>
+                    <Minus size={15} aria-hidden="true" />
+                  </button>
+                )}
+                <button
+                  className="btn btn-primary product-modal-buy-btn"
+                  onClick={(event) => {
+                    if (selectedStock > 0) {
+                      triggerHaptic("medium");
+                      onAddToCart(product, { sourceElement: event.currentTarget, image: activeImage }, { ...resolvedSelection, quantity: requestedQuantity });
+                    }
+                  }}
+                  disabled={selectedStock <= 0}
+                >
+                  <ShoppingBag size={18} />
+                  <span className="product-modal-buy-copy">
+                    <span>{selectedStock <= 0 ? "Agotado" : cartEditMode ? "Guardar cambios" : "Agregar al carrito"}</span>
+                    {selectedStock > 0 && <output className="product-modal-buy-quantity" aria-live="polite">{requestedQuantity} {requestedQuantity === 1 ? "unidad" : "unidades"} · {currency(product.price * requestedQuantity)}</output>}
+                  </span>
+                </button>
+                {selectedStock > 0 && (
+                  <button type="button" className="product-modal-buy-control is-increase" aria-label="Agregar una unidad" onClick={() => updateRequestedQuantity((quantity) => quantity + 1)} disabled={requestedQuantity >= quantityLimit}>
+                    <Plus size={15} aria-hidden="true" />
+                  </button>
+                )}
+              </div>
               <button className="btn btn-outline product-modal-dismiss-btn" onClick={closeProductDetail}>
                 Seguir viendo
               </button>
@@ -882,18 +926,20 @@ export function ProductModal({
                 }
               }}
             />
-            <div className="image-preview-navigation">
-              {hasMultipleImages && <button className="icon-btn carousel-arrow left" type="button" onClick={goToPreviousImage} aria-label="Imagen anterior"><ChevronLeft size={18} /></button>}
-              <p className="image-preview-hint" aria-live="polite">
+            {hasMultipleImages && (
+              <div className="image-preview-side-navigation" role="group" aria-label="Navegación de imágenes">
+                <button className="icon-btn carousel-arrow left" type="button" onClick={goToPreviousImage} aria-label="Imagen anterior"><ChevronLeft size={18} /></button>
+                <button className="icon-btn carousel-arrow right" type="button" onClick={goToNextImage} aria-label="Imagen siguiente"><ChevronRight size={18} /></button>
+              </div>
+            )}
+            <p className="image-preview-hint" aria-live="polite">
               <span className="pointer-instruction">
                 {previewZoomed ? "Arrastra para recorrer la imagen" : "Haz clic en la imagen para acercar"}
               </span>
               <span className="touch-instruction">
                 {previewZoomed ? "Arrastra con un dedo o ajusta con dos dedos" : "Separa dos dedos para acercar"}
               </span>
-              </p>
-              {hasMultipleImages && <button className="icon-btn carousel-arrow right" type="button" onClick={goToNextImage} aria-label="Imagen siguiente"><ChevronRight size={18} /></button>}
-            </div>
+            </p>
           </Motion.div>
         </Motion.div>
       )}

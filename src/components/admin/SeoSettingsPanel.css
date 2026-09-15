@@ -1,0 +1,58 @@
+.admin-seo { color: var(--ink, #12161c); min-width: 0; }
+.admin-seo fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
+.admin-seo legend, .seo-preview h3 { font-size: 1.1rem; font-weight: 650; padding: 0; margin: 0 0 12px; }
+.seo-editor-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 40px; align-items: start; }
+.seo-fields { display: grid; gap: 18px; }
+.seo-intro, .seo-preview > p, .seo-asset-content > p { color: #535963; font-size: .9rem; line-height: 1.6; margin: 0 0 14px; max-width: 70ch; }
+.admin-seo .entity-field { display: grid; gap: 8px; min-width: 0; }
+.admin-seo .entity-field > span { font-size: .9rem; font-weight: 600; }
+.admin-seo .entity-field small, .seo-asset small { font-size: .8rem; color: #535963; line-height: 1.5; }
+.seo-preview { padding-top: 2px; min-width: 0; }
+.seo-search-result { background: #fff; border: 1px solid #d8dde2; border-radius: 14px; padding: 22px; margin-bottom: 18px; overflow-wrap: anywhere; }
+.seo-result-site { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
+.seo-result-site > div:last-child { min-width: 0; }
+.seo-result-site span { display: block; font-size: .9rem; }
+.seo-result-site small { display: block; color: #535963; font-size: .75rem; margin-top: 3px; }
+.seo-result-icon { position: relative; display: grid; place-items: center; flex: 0 0 32px; width: 32px; height: 32px; color: #535963; }
+.seo-result-icon img { position: absolute; inset: 4px; width: 24px; height: 24px; object-fit: contain; background: #fff; }
+.seo-result-copy { display: flex; align-items: start; gap: 16px; }
+.seo-result-copy > div { flex: 1; min-width: 0; }
+.seo-result-title { color: #1a0dab; font-size: 1.15rem; line-height: 1.35; margin: 0 0 8px; }
+.seo-result-description { color: #4c5157; font-size: .85rem; line-height: 1.6; margin: 0; }
+.seo-result-thumbnail { flex: 0 0 72px; width: 72px; height: 72px; object-fit: cover; border-radius: 10px; }
+.admin-seo .seo-assets { margin-top: 40px; }
+.seo-asset { display: flex; gap: 24px; padding: 24px 0; border-bottom: 1px solid #d8dde2; }
+.seo-asset-preview { position: relative; flex: 0 0 100px; width: 100px; height: 100px; display: grid; place-items: center; color: #535963; background: #f3f4f5; border-radius: 12px; overflow: hidden; }
+.seo-asset-preview img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #f3f4f5; }
+.seo-asset-preview.is-icon img { inset: 24px; width: 52px; height: 52px; }
+.seo-asset-content { flex: 1; min-width: 0; }
+.seo-asset h3 { margin: 0 0 8px; font-size: 1rem; }
+.seo-upload-control { display: inline-flex; gap: 8px; align-items: center; position: relative; min-height: 44px; padding: 0 14px; border: 1px solid #b9c0c8; border-radius: 10px; cursor: pointer; font-size: .85rem; font-weight: 600; }
+.seo-upload-control input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+.seo-upload-control:focus-within { outline: 2px solid #12161c; outline-offset: 3px; }
+.seo-upload-control:hover { background: #f3f4f5; }
+.seo-assets:disabled .seo-upload-control { opacity: .55; cursor: wait; }
+.seo-reset-image { margin-left: 10px; font-size: .85rem; }
+.seo-asset details { margin-top: 16px; }
+.seo-asset summary { cursor: pointer; color: #535963; font-size: .85rem; padding: 10px 0; text-underline-offset: 3px; }
+.seo-asset details .entity-field { margin: 10px 0; }
+.seo-save-area { margin-top: 28px; }
+.seo-actions { display: flex; gap: 12px; flex-wrap: wrap; }
+.seo-feedback { padding: 14px 16px; border-radius: 10px; line-height: 1.5; }
+.seo-feedback.is-success { color: #235640; background: #edf6f0; }
+.seo-feedback.is-error { color: #8a2828; background: #fff1f1; }
+.admin-seo input, .admin-seo textarea { caret-color: #12161c; }
+.admin-seo .input, .admin-seo .textarea { width: 100%; }
+.admin-seo ::selection { background: #d9e9de; color: #12161c; }
+.admin-seo [hidden] { display: none; }
+@media (max-width: 1000px) { .seo-editor-layout { grid-template-columns: minmax(0, 1fr); gap: 28px; } }
+@media (max-width: 600px) {
+  .seo-search-result { padding: 16px; }
+  .seo-result-thumbnail { flex-basis: 56px; width: 56px; height: 56px; }
+  .seo-asset { gap: 14px; }
+  .seo-asset-preview { flex-basis: 60px; width: 60px; height: 60px; }
+  .seo-asset-preview.is-icon img { inset: 12px; width: 36px; height: 36px; }
+  .seo-reset-image { margin: 10px 0 0; }
+  .seo-actions { flex-direction: column; }
+  .seo-actions .btn { width: 100%; min-height: 44px; }
+}

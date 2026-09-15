@@ -4,6 +4,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { fetchWithTimeout } from "./network.js";
 import { getOrderErasureChanges, sanitizeOrderBackup } from "./orderErasure.js";
+import { expireReservations } from "./checkoutReservations.js";
 
 const DATA_DIR = path.join(process.cwd(), ".data");
 const DATA_FILE = path.join(DATA_DIR, "store.json");
@@ -21,6 +22,7 @@ const DEFAULT_STORE = {
   products: [],
   coupons: [],
   orders: [],
+  checkoutReservations: [],
   physicalStockEvents: [],
   contactSettings: null,
   storeSettings: null,
@@ -302,6 +304,7 @@ function normalizeStore(raw = {}) {
     products: Array.isArray(safe.products) ? safe.products : [],
     coupons: Array.isArray(safe.coupons) ? safe.coupons : [],
     orders: Array.isArray(safe.orders) ? safe.orders : [],
+    checkoutReservations: Array.isArray(safe.checkoutReservations) ? safe.checkoutReservations : [],
     physicalStockEvents: Array.isArray(safe.physicalStockEvents)
       ? safe.physicalStockEvents.filter((event) => event && typeof event === "object").slice(-80)
       : [],
@@ -373,7 +376,7 @@ async function writeFileStore(store) {
   await fs.writeFile(DATA_FILE, JSON.stringify(store, null, 2), "utf8");
 }
 
-async function readStore() {
+async function readRawStore() {
   assertStoreConfigured();
   if (isKvConfigured()) {
     return readKvStore();
@@ -386,6 +389,12 @@ async function readStore() {
   }
 }
 
+async function readStore() {
+  const current = await readRawStore();
+  if ((current.checkoutReservations || []).some(r => r.expiresAt <= Date.now())) return updateStore(draft => draft);
+  return current;
+}
+
 async function readRealtimeMeta() {
   assertStoreConfigured();
   if (isKvConfigured()) {
@@ -394,13 +403,14 @@ async function readRealtimeMeta() {
       try {
         const parsed = typeof serialized === "string" ? JSON.parse(serialized) : serialized;
         const normalized = normalizeStore({ meta: { realtime: parsed } });
+        if (normalized.meta.realtime.reservationExpiresAt > 0 && normalized.meta.realtime.reservationExpiresAt <= Date.now()) return (await readStore()).meta.realtime;
         return normalized.meta.realtime;
       } catch {
         // Fall through to the main store for one-time backwards compatibility.
       }
     }
 
-    const store = await readKvStore();
+    const store = await readStore();
     const realtime = store.meta.realtime;
     await runKvCommand("SET", STORE_REALTIME_KEY, JSON.stringify(realtime)).catch(() => null);
     return realtime;
@@ -433,6 +443,7 @@ async function updateStore(mutator) {
     try {
       const current = await readKvStore();
       const draft = clone(current);
+      if (expireReservations(draft)) bumpRealtimeMeta(draft, ["catalog"]);
       const mutated = await mutator(draft);
       const next = normalizeStore(mutated ?? draft);
       const cleanup = await prepareOrderBackupCleanup(next, current);
@@ -449,8 +460,9 @@ async function updateStore(mutator) {
   writeQueue = writeQueue
     .catch(() => undefined)
     .then(async () => {
-      const current = await readStore();
+      const current = await readRawStore();
       const draft = clone(current);
+      if (expireReservations(draft)) bumpRealtimeMeta(draft, ["catalog"]);
       const mutated = await mutator(draft);
       const next = normalizeStore(mutated ?? draft);
       return persistStore(next);

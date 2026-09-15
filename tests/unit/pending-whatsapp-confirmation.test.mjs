@@ -109,7 +109,8 @@ test("el aviso de WhatsApp solo se descarta desde la confirmación explícita", 
 
   assert.match(app, /readStorage\(STORAGE_KEYS\.pendingWhatsAppConfirmation, null\)/);
   assert.match(app, /saveStorage\(STORAGE_KEYS\.pendingWhatsAppConfirmation, pendingWhatsAppConfirmation\)/);
-  assert.match(app, /!adminRouteActive && orderSuccessModal\.open && orderSuccessModal\.order/);
+  // Maintenance hides the reminder without deleting the saved confirmation.
+  assert.match(app, /!adminRouteActive && !maintenanceActive && orderSuccessModal\.open && orderSuccessModal\.order/);
   assert.equal((app.match(/removeStorage\(STORAGE_KEYS\.pendingWhatsAppConfirmation\)/g) || []).length, 1);
   assert.match(modal, /onConfirmSent\?\.\(\)/);
   assert.match(modal, /disableEscape:\s*requiresWhatsApp/);

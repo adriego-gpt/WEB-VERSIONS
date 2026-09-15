@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useRef, useEffect } from "react";
+import React, { useCallback, useMemo, useState, useRef, useEffect } from "react";
 import {
   X,
   ShoppingBag,
@@ -26,10 +26,10 @@ import {
 import { motion as Motion, AnimatePresence } from "framer-motion";
 import { ANIMATION } from "../../constants/animation";
 import { currency } from "../../utils/currency";
+import { PickupLocation } from "../orders/PickupLocation";
 import { normalizeAddressBook } from "../../domain/user/addressBook";
 import { sanitizeLine, sanitizeParagraph, normalizeEntityId, stripDangerousContent } from "../../utils/sanitizers";
 import { normalizeUserPhoneNumber } from "../../utils/phone";
-import { AUTH_FIELD_LIMITS } from "../../constants/auth";
 import { FALLBACK_IMAGE, FILE_SECURITY } from "../../constants/product";
 import { getStockForVariant, getStockStatus } from "../../domain/products/variants";
 import { EmotionalEmptyState } from "../ui/EmotionalEmptyState";
@@ -37,6 +37,8 @@ import { AnimatedCurrencyValue } from "../ui/AnimatedCurrencyValue";
 import { fileToDataUrl, normalizeImageSource } from "../../utils/fileUpload";
 import { copyTextToClipboard } from "../../utils/clipboard";
 import { triggerHaptic } from "../../utils/haptics";
+import { buildWhatsAppLink } from "../../utils/url.js";
+import { projectCartStock } from "../../domain/orders/cartEditing.js";
 import {
   PAYMENT_METHODS,
   calculatePayableTotal,
@@ -55,6 +57,19 @@ import {
   normalizeShippingSettings,
 } from "../../domain/orders/shippingSettings";
 import { ImageLightbox } from "../ui/ImageLightbox";
+import { useCheckoutAvailability } from "../../hooks/useCheckoutAvailability";
+import { useModalA11y } from "../../hooks/useModalA11y";
+import { validateCheckoutDelivery } from "../../domain/orders/deliveryValidation.js";
+import { CHECKOUT_HISTORY_KEY, readCheckoutHistoryStep, readCheckoutHistoryDepth, checkoutStepUrl } from "../../domain/orders/checkoutHistory.js";
+
+function CheckoutField({ label, name, error, required = false, className = "", children }) {
+  const id = `checkout-${name}`;
+  return <div className={`checkout-field ${className}`}>
+    <label htmlFor={id}>{label}{required && <span aria-hidden="true"> *</span>}</label>
+    {React.cloneElement(children, { id, name: id, required, "aria-label": undefined, "aria-invalid": Boolean(error), "aria-describedby": error ? `${id}-error` : undefined })}
+    {error && <small id={`${id}-error`} className="checkout-field-error" aria-live="polite">{error}</small>}
+  </div>;
+}
 
 export function CartSummaryModal({
   open,
@@ -81,12 +96,14 @@ export function CartSummaryModal({
   hasActiveCoupon = false,
   couponBusy = false,
   checkoutBusy = false,
+  onCheckAvailability,
   onBrowseCatalog,
   currentUser,
   savedAddresses = [],
   contactSettings,
   storeSettings,
 }) {
+  const dialogRef = useModalA11y(open, onClose, { disableEscape: checkoutBusy });
   const normalizedSavedAddresses = useMemo(() => normalizeAddressBook(savedAddresses), [savedAddresses]);
   const defaultSavedAddress = normalizedSavedAddresses.find((entry) => entry.isDefault) || normalizedSavedAddresses[0] || null;
   const hasSavedAddresses = normalizedSavedAddresses.length > 0;
@@ -109,6 +126,71 @@ export function CartSummaryModal({
     };
   };
   const [checkoutStep, setCheckoutStep] = useState(CHECKOUT_STEPS.summary);
+  const [availabilityBusy, setAvailabilityBusy] = useState(false);
+  const checkoutActionBusyRef = useRef(false);
+  const checkForStep = useCallback((lines, options) => onCheckAvailability(lines, { ...options, reservationOnly: checkoutStep === CHECKOUT_STEPS.payment }), [onCheckAvailability, checkoutStep]);
+  const stockNoticeRef = useRef(null);
+  const lastStockAttentionRef = useRef("");
+  const attentionAnimationRef = useRef(null);
+  const drawAttentionToStock = useCallback((focus = false) => {
+    const notice = stockNoticeRef.current;
+    if (!notice) return;
+    attentionAnimationRef.current?.cancel();
+    const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    if (!reducedMotion && typeof notice.animate === "function") {
+      attentionAnimationRef.current = notice.animate([
+        { transform: "translateX(0)" }, { transform: "translateX(-3px)" },
+        { transform: "translateX(3px)" }, { transform: "translateX(-2px)" }, { transform: "translateX(0)" },
+      ], { duration: 380, easing: "ease-out" });
+    }
+    const rect = notice.getBoundingClientRect();
+    if (rect.top < 100 || rect.bottom > window.innerHeight - 80) notice.scrollIntoView({ behavior: reducedMotion ? "instant" : "smooth", block: "center" });
+    if (focus) notice.focus({ preventScroll: true });
+  }, []);
+  useEffect(() => () => attentionAnimationRef.current?.cancel(), []);
+  const { availability, checkAvailability: runAvailabilityCheck, reportAvailabilityFailure } = useCheckoutAvailability({ open, cart, onCheckAvailability: checkForStep, refreshKey: products });
+  const checkAvailability = async (options) => {
+    const result = await runAvailabilityCheck(options);
+    if (!result.ok) window.requestAnimationFrame(() => drawAttentionToStock(true));
+    return result;
+  };
+  const [reservationRemaining, setReservationRemaining] = useState(0);
+  useEffect(() => {
+    if (!availability.expiresAt) { setReservationRemaining(0); return undefined; }
+    const deadline = Date.now() + Math.max(0, availability.expiresAt - availability.serverNow);
+    const tick = () => setReservationRemaining(Math.max(0, Math.ceil((deadline - Date.now()) / 1000)));
+    tick();
+    const timer = window.setInterval(tick, 1000);
+    return () => window.clearInterval(timer);
+  }, [availability.expiresAt, availability.serverNow]);
+  const reservationValid = availability.ok && Boolean(availability.reservationId) && reservationRemaining > 0;
+  const effectiveProducts = useMemo(() => products.map(product => projectCartStock(product, {
+    stock: availability.stock,
+    stockDeadline: Date.now() + Math.max(0, (availability.stockExpiresAt || availability.expiresAt || 0) - (availability.serverNow || Date.now())),
+  })), [products, availability.stock, availability.stockExpiresAt, availability.expiresAt, availability.serverNow, availability.ok]);
+  const changeCheckoutStep = (step) => {
+    if (typeof window !== "undefined" && window.location.pathname === "/carrito") {
+      window.history.pushState({ ...(window.history.state || {}), [CHECKOUT_HISTORY_KEY]: step, adriegoCheckoutDepth: readCheckoutHistoryDepth(window.history.state) + 1 }, document.title, checkoutStepUrl(window.location.href, step));
+    }
+    setCheckoutStep(step);
+  };
+  const goBackCheckoutStep = () => {
+    if (typeof window !== "undefined" && window.location.pathname === "/carrito" && window.history.state?.[CHECKOUT_HISTORY_KEY] === checkoutStep) window.history.back();
+    else setCheckoutStep(getPreviousCheckoutStep(checkoutStep));
+  };
+  useEffect(() => {
+    if (!open) return undefined;
+    // A reload must revalidate before exposing bank details again.
+    window.history.replaceState({ ...(window.history.state || {}), adriegoCheckoutDepth: readCheckoutHistoryDepth(window.history.state), [CHECKOUT_HISTORY_KEY]: CHECKOUT_STEPS.summary }, document.title, checkoutStepUrl(window.location.href, CHECKOUT_STEPS.summary));
+    const restoreStep = () => {
+      if (window.location.pathname === "/carrito") {
+        setCheckoutStep(readCheckoutHistoryStep(window.history.state));
+        setCheckoutFormError("");
+      }
+    };
+    window.addEventListener("popstate", restoreStep);
+    return () => window.removeEventListener("popstate", restoreStep);
+  }, [open]);
   const [guestCheckout, setGuestCheckout] = useState(false);
   const needsAccountChoice = requiresLogin && !guestCheckout;
   const [deliveryType, setDeliveryType] = useState("pickup");
@@ -122,7 +204,11 @@ export function CartSummaryModal({
   const [saveAddressToBook, setSaveAddressToBook] = useState(true);
   const effectiveSelectedSavedAddressId = useCustomAddress ? "" : normalizeEntityId(selectedSavedAddressId || defaultSavedAddress?.id || "");
   const [checkoutFormError, setCheckoutFormError] = useState("");
+  const [deliveryErrors, setDeliveryErrors] = useState({});
   const [paymentProof, setPaymentProof] = useState("");
+  const [paymentProofCartKey, setPaymentProofCartKey] = useState("");
+  const cartContentsKey = JSON.stringify(cart.map(({ id, color, size, quantity, price }) => [id, color, size, quantity, price]));
+  const previousCartContentsRef = useRef(cartContentsKey);
   const [paymentProofName, setPaymentProofName] = useState("");
   const [paymentProofBusy, setPaymentProofBusy] = useState(false);
   const [paymentProofError, setPaymentProofError] = useState("");
@@ -145,14 +231,8 @@ export function CartSummaryModal({
       setProofAttention(false);
       return undefined;
     }
-    const handleKeyDown = (event) => {
-      if (event.key === "Escape" && !checkoutBusy) {
-        onClose?.();
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [open, checkoutBusy, onClose]);
+    return undefined;
+  }, [open]);
 
   useEffect(() => () => {
     if (accountCopyTimerRef.current) {
@@ -189,6 +269,7 @@ export function CartSummaryModal({
   const pickupAddress = sanitizeLine(contactSettings?.address || "");
   const pickupNote = sanitizeParagraph(contactSettings?.locationNote || "");
   const pickupMapsLink = sanitizeLine(contactSettings?.mapsLink || "");
+  const assistanceUrl = buildWhatsAppLink(contactSettings?.whatsappNumber || contactSettings?.phone);
   const normalizedCouponCode = sanitizeLine(couponState?.code || couponDraftCode || "");
 
   const shippingSettings = useMemo(
@@ -224,10 +305,20 @@ export function CartSummaryModal({
   const displayedTotal = isPaymentStep
     ? payableTotal
     : (isCheckoutStep ? baseTotalWithShipping : Math.max(0, Number((subtotal - discountAmount).toFixed(2))));
+  const cartProofKey = JSON.stringify([cartContentsKey, baseTotalWithShipping, selectedBankAccountId]);
+  const proofMatchesCart = paymentProofCartKey === cartProofKey;
+  useEffect(() => {
+    const changed = previousCartContentsRef.current !== cartContentsKey;
+    previousCartContentsRef.current = cartContentsKey;
+    if (!changed || !isPaymentStep) return;
+    setCheckoutStep(CHECKOUT_STEPS.summary);
+    setCheckoutFormError("");
+    if (window.location.pathname === "/carrito") window.history.replaceState({ ...(window.history.state || {}), [CHECKOUT_HISTORY_KEY]: CHECKOUT_STEPS.summary }, document.title, checkoutStepUrl(window.location.href, CHECKOUT_STEPS.summary));
+  }, [cartContentsKey, isPaymentStep]);
   const couponQuickLabel = hasActiveCoupon
     ? `Cupón ${normalizedCouponCode || "aplicado"} activo`
     : "¿Tienes cupón? Aplícalo en el resumen";
-  const checkoutButtonLabel = checkoutBusy
+  const checkoutButtonLabel = availabilityBusy ? "Verificando disponibilidad…" : checkoutBusy
     ? "Registrando pedido..."
     : needsAccountChoice
       ? "Inicia sesión para confirmar"
@@ -242,6 +333,7 @@ export function CartSummaryModal({
             : "Selecciona un banco";
 
   const handleDeliveryDraftChange = (field, value) => {
+    setDeliveryErrors(previous => previous[field] ? { ...previous, [field]: "" } : previous);
     setDeliveryDraft((previous) => ({
       ...previous,
       [field]: field === "phone"
@@ -269,75 +361,85 @@ export function CartSummaryModal({
       phone: normalizeUserPhoneNumber(addressEntry.phone || currentUser?.phone || previous.phone || ""),
     }));
     setCheckoutFormError("");
+    setDeliveryErrors({});
   };
 
   const unavailableCartItems = useMemo(() => {
     return (cart || []).filter((item) => {
-      const productRecord = (products || []).find((product) => String(product.id) === String(item.id));
+      const productRecord = effectiveProducts.find((product) => String(product.id) === String(item.id));
       if (!productRecord || productRecord.isPublic === false) return true;
       const availableStock = getStockForVariant(productRecord, item.color, item.size);
       return availableStock <= 0 || item.quantity > availableStock;
     });
-  }, [cart, products]);
+  }, [cart, effectiveProducts]);
 
   const hasUnavailableItems = unavailableCartItems.length > 0;
+  const checkingStock = availability.message === "Comprobando disponibilidad…";
+  const stockBlocked = cart.length > 0 && !checkingStock && (!availability.ok || hasUnavailableItems);
+  const stockAttentionKey = stockBlocked ? JSON.stringify([checkoutStep, availability.message, unavailableCartItems.map(item => item.key)]) : "";
+  useEffect(() => {
+    if (!open || !stockAttentionKey) { lastStockAttentionRef.current = ""; return; }
+    if (lastStockAttentionRef.current === stockAttentionKey) return;
+    lastStockAttentionRef.current = stockAttentionKey;
+    drawAttentionToStock();
+  }, [open, stockAttentionKey, drawAttentionToStock]);
 
   const validateDeliverySelection = () => {
-    if (deliveryType !== "delivery") return true;
-    const fullName = sanitizeLine(deliveryDraft.fullName || "");
-    const idNumber = sanitizeLine(deliveryDraft.idNumber || "");
-    const city = sanitizeLine(deliveryDraft.city || "");
-    const address = sanitizeParagraph(deliveryDraft.address || "");
-    const phone = normalizeUserPhoneNumber(deliveryDraft.phone || "");
-
-    if (!fullName) {
-      setCheckoutFormError("Por favor ingresa el nombre de quien recibe.");
-      return false;
+    const errors = validateCheckoutDelivery(deliveryDraft, { deliveryType, guestCheckout });
+    setDeliveryErrors(errors);
+    setCheckoutFormError("");
+    const firstInvalidField = Object.keys(errors)[0];
+    if (!firstInvalidField) return true;
+    if (errors.city || errors.address) {
+      setUseCustomAddress(true);
+      setSelectedSavedAddressId("");
     }
-    if (!idNumber || idNumber.length < 10) {
-      setCheckoutFormError("La cédula de identidad o RUC es obligatoria (mínimo 10 dígitos).");
-      return false;
-    }
-    if (!phone || phone.length !== AUTH_FIELD_LIMITS.phone) {
-      setCheckoutFormError("El número de teléfono móvil es obligatorio y debe tener 10 dígitos.");
-      return false;
-    }
-    if (!city || !address) {
-      setCheckoutFormError("Por favor completa la ciudad y la dirección exacta de entrega.");
-      return false;
-    }
-    return true;
+    window.requestAnimationFrame(() => {
+      const field = document.getElementById(`checkout-${firstInvalidField}`);
+      field?.closest(".checkout-field")?.scrollIntoView({ block: "center", behavior: "instant" });
+      field?.focus({ preventScroll: true });
+    });
+    return false;
   };
 
-  const handleCheckoutAction = () => {
+  const chooseDeliveryType = (type) => {
+    setDeliveryType(type);
+    setDeliveryErrors({});
+    setCheckoutFormError("");
+  };
+  const handleDeliveryTypeKeyDown = (event) => {
+    if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const next = event.key === "Home" ? "pickup" : event.key === "End" ? "delivery" : deliveryType === "pickup" ? "delivery" : "pickup";
+    chooseDeliveryType(next);
+    document.getElementById(`delivery-choice-${next}`)?.focus({ preventScroll: true });
+  };
+
+  const handleCheckoutAction = async () => {
+    if (availabilityBusy || checkoutBusy || checkoutActionBusyRef.current) return;
+    checkoutActionBusyRef.current = true;
+    try {
     if (needsAccountChoice) {
       onCheckout(null);
       return;
     }
 
-    if (hasUnavailableItems) {
-      const firstUnavailable = unavailableCartItems[0];
-      const productRecord = (products || []).find((product) => String(product.id) === String(firstUnavailable.id));
-      const availableStock = productRecord ? getStockForVariant(productRecord, firstUnavailable.color, firstUnavailable.size) : 0;
-      if (availableStock <= 0) {
-        setCheckoutFormError(`La prenda "${firstUnavailable.name}" (${firstUnavailable.color} / ${firstUnavailable.size}) se encuentra agotada. Quítala del carrito para continuar.`);
-      } else {
-        setCheckoutFormError(`Solo quedan ${availableStock} unidad(es) de "${firstUnavailable.name}" (${firstUnavailable.color} / ${firstUnavailable.size}). Ajusta la cantidad para continuar.`);
-      }
-      return;
-    }
+    setAvailabilityBusy(true);
+    let verified;
+    try { verified = await checkAvailability(); } finally { setAvailabilityBusy(false); }
+    if (!verified.ok) { setCheckoutFormError(""); return; }
 
     if (checkoutStep === CHECKOUT_STEPS.summary) {
-      setCheckoutStep(getNextCheckoutStep(checkoutStep));
+      changeCheckoutStep(getNextCheckoutStep(checkoutStep));
       setCheckoutFormError("");
       return;
     }
     if (checkoutStep === CHECKOUT_STEPS.delivery) {
-      if (guestCheckout && (!sanitizeLine(deliveryDraft.fullName) || normalizeUserPhoneNumber(deliveryDraft.phone).length !== 10)) {
-        setCheckoutFormError("Completa tu nombre y teléfono de 10 dígitos para continuar.");
-        return;
-      }
       if (!validateDeliverySelection()) return;
+      setAvailabilityBusy(true);
+      let held;
+      try { held = await checkAvailability({ reserve: true }); } finally { setAvailabilityBusy(false); }
+      if (!held.ok) { setCheckoutFormError(""); return; }
       if (
         deliveryType === "delivery" &&
         saveAddressToBook &&
@@ -356,7 +458,7 @@ export function CartSummaryModal({
           isDefault: !hasSavedAddresses || Boolean(defaultSavedAddress?.id === effectiveSelectedSavedAddressId),
         });
       }
-      setCheckoutStep(getNextCheckoutStep(checkoutStep));
+      changeCheckoutStep(getNextCheckoutStep(checkoutStep));
       setCheckoutFormError("");
       return;
     }
@@ -370,8 +472,10 @@ export function CartSummaryModal({
         setCheckoutFormError("Selecciona el banco al que realizarás la transferencia.");
         return;
       }
-      if (!paymentProof) {
-        setCheckoutFormError("Sube la foto o captura de tu comprobante bancario para enviar el pedido a revisión.");
+      if (!paymentProof || !proofMatchesCart) {
+        setCheckoutFormError(paymentProof
+          ? "El carrito cambió. Revisa el importe y vuelve a adjuntar el comprobante correcto. Si ya pagaste, no transfieras otra vez; contacta a la tienda si necesitas ayuda."
+          : "Sube la foto o captura de tu comprobante bancario para enviar el pedido a revisión.");
         setProofAttention(true);
         proofSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
         return;
@@ -379,7 +483,7 @@ export function CartSummaryModal({
     }
 
     setCheckoutFormError("");
-    onCheckout({
+    const submitted = await onCheckout({
       guestCheckout: requiresLogin && guestCheckout,
       deliveryType,
       paymentMethod: selectedPaymentMethod,
@@ -395,9 +499,23 @@ export function CartSummaryModal({
         phone: normalizeUserPhoneNumber(deliveryDraft.phone || ""),
       },
     });
+    if (submitted?.ok === false) {
+      reportAvailabilityFailure(submitted);
+      window.requestAnimationFrame(() => drawAttentionToStock(true));
+    }
+    } finally {
+      checkoutActionBusyRef.current = false;
+    }
   };
 
   const handleCopyAccount = async () => {
+    const verified = await checkAvailability();
+    if (!verified.ok) { setCheckoutFormError(""); return; }
+    const latestAccount = getReadyBankAccounts(verified.paymentSettings || {}).find(account => account.id === selectedBankAccount?.id);
+    if (!latestAccount || latestAccount.accountNumber !== selectedBankAccount?.accountNumber) {
+      setCheckoutFormError("Los datos bancarios cambiaron. Revisa la cuenta actualizada antes de transferir.");
+      return;
+    }
     const accountNumber = sanitizeLine(selectedBankAccount?.accountNumber || "");
     if (!accountNumber) return;
     const copied = await copyTextToClipboard(accountNumber);
@@ -415,11 +533,14 @@ export function CartSummaryModal({
     const file = event.target.files?.[0];
     event.target.value = "";
     if (!file) return;
+    const verified = await checkAvailability();
+    if (!verified.ok) { setPaymentProofError(""); return; }
     setPaymentProofBusy(true);
     setPaymentProofError("");
     try {
       const nextPaymentProof = await fileToDataUrl(file);
       setPaymentProof(nextPaymentProof);
+      setPaymentProofCartKey(cartProofKey);
       setPaymentProofName(sanitizeLine(file.name || "Comprobante").slice(0, 80));
       setProofAttention(false);
       setCheckoutFormError("");
@@ -432,6 +553,7 @@ export function CartSummaryModal({
 
   const handleRemovePaymentProof = () => {
     setPaymentProof("");
+    setPaymentProofCartKey("");
     setPaymentProofName("");
     setPaymentProofError("");
     setProofAttention(false);
@@ -454,13 +576,14 @@ export function CartSummaryModal({
         animate={{ opacity: 1, transition: { duration: 0.2, ease: "easeOut" } }}
         exit={{ opacity: 0, transition: { duration: 0.14, ease: "easeOut" } }}
         className="modal-backdrop"
-        onClick={onClose}
+        onClick={() => { if (!checkoutBusy) onClose?.(); }}
       >
         <Motion.div
           initial={{ opacity: 0, y: 18, scale: 0.96 }}
           animate={{ opacity: 1, y: 0, scale: 1, transition: { duration: 0.22, ease: ANIMATION.easeOut } }}
           exit={{ opacity: 0, y: 10, scale: 0.97, transition: { duration: 0.14, ease: "easeOut" } }}
           className="sheet cart-fullscreen-sheet"
+          ref={dialogRef}
           role="dialog"
           aria-modal="true"
           aria-label="Resumen de tu carrito"
@@ -470,7 +593,7 @@ export function CartSummaryModal({
             <div>
               <h3 style={{ margin: 0, fontSize: 25 }}>Tu carrito completo</h3>
             </div>
-            <button type="button" onClick={onClose} className="icon-btn" aria-label="Cerrar carrito">
+            <button type="button" onClick={onClose} disabled={checkoutBusy} className="icon-btn" aria-label="Cerrar carrito">
               <X size={18} />
             </button>
           </div>
@@ -510,17 +633,18 @@ export function CartSummaryModal({
                 />
               ) : (
                 <>
-                {hasUnavailableItems && (
-                  <div className="cart-stock-warning-banner" role="alert">
+                {stockBlocked && (!isCheckoutStep || needsAccountChoice) && (
+                  <div className="cart-stock-warning-banner" role="alert" ref={stockNoticeRef} tabIndex={-1}>
                     <AlertCircle size={18} aria-hidden="true" />
                     <div>
-                      <strong>Prendas con stock insuficiente o agotadas</strong>
-                      <p>Modifica o retira las prendas marcadas para poder continuar con tu pedido.</p>
+                      <strong>No continúes al pago todavía</strong>
+                      <p>{!availability.ok ? availability.message : "Una talla ya no está disponible o cambió su stock. Disminuye la cantidad, edita la talla o retira la prenda marcada para continuar."}</p>
+                      <button type="button" className="link-btn" onClick={() => { void checkAvailability(); }}>Revisar disponibilidad</button>
                     </div>
                   </div>
                 )}
                 {(cart || []).map((item) => {
-                  const productRecord = (products || []).find((product) => String(product.id) === String(item.id));
+                  const productRecord = effectiveProducts.find((product) => String(product.id) === String(item.id));
                   const availableStock = productRecord ? getStockForVariant(productRecord, item.color, item.size) : 0;
                   const isOutOfStock = availableStock <= 0 || !productRecord || productRecord.isPublic === false;
                   const isOverStock = !isOutOfStock && item.quantity > availableStock;
@@ -528,7 +652,7 @@ export function CartSummaryModal({
                   return (
                     <Motion.div key={item.key} layout className={`cart-item sheet-product-card cart-line-item ${isOutOfStock ? "is-out-of-stock" : ""}`}>
                       <div className="cart-line-layout">
-                        <button type="button" onClick={() => onOpenItem(item)} className="sheet-thumb-button cart-line-thumb-btn" aria-label={`Ver ${item.name}`}>
+                        <button type="button" disabled={checkoutBusy} onClick={() => onOpenItem(item)} className="sheet-thumb-button cart-line-thumb-btn" aria-label={`Ver ${item.name}`}>
                           <img
                             src={item.image}
                             alt={item.name}
@@ -543,13 +667,13 @@ export function CartSummaryModal({
                           />
                         </button>
 
-                        <button type="button" onClick={() => onOpenItem(item)} className="sheet-product-title-button cart-line-main" aria-label={`Ver detalle de ${item.name}`}>
+                        <button type="button" disabled={checkoutBusy} onClick={() => onOpenItem(item)} className="sheet-product-title-button cart-line-main" aria-label={`Ver detalle de ${item.name}`}>
                           <p className="sheet-product-title cart-line-title">{item.name}</p>
                           <p className="muted sheet-product-meta-text cart-line-meta">{item.color} - {item.size}</p>
                           {isOutOfStock ? (
                             <span className="stock-badge stock-badge-danger stock-badge-compact cart-line-stock-badge">
                               <span className="stock-dot" aria-hidden="true" />
-                              <span>Agotado · Quitar prenda</span>
+                              <span>Agotado</span>
                             </span>
                           ) : isOverStock ? (
                             <span className="stock-badge stock-badge-warning stock-badge-compact cart-line-stock-badge">
@@ -566,7 +690,7 @@ export function CartSummaryModal({
 
                         <div className="cart-line-side">
                           <div className="cart-line-actions">
-                            <button type="button" className="btn btn-soft cart-line-edit-btn" onClick={() => onEditItem(item)}>
+                            <button type="button" disabled={checkoutBusy} className="btn btn-soft cart-line-edit-btn" onClick={() => onEditItem(item)}>
                               <PencilLine size={13} />
                               Editar
                             </button>
@@ -577,6 +701,7 @@ export function CartSummaryModal({
                                 onRemoveItem(item.key);
                               }}
                               className="sheet-remove-btn cart-line-remove-btn"
+                              disabled={checkoutBusy}
                               aria-label="Quitar producto del carrito"
                             >
                               <Trash2 size={15} />
@@ -591,6 +716,7 @@ export function CartSummaryModal({
                                 onUpdateQuantity(item.key, -1);
                               }}
                               aria-label="Disminuir cantidad"
+                              disabled={checkoutBusy}
                             >
                               <Minus size={14} />
                             </button>
@@ -603,6 +729,7 @@ export function CartSummaryModal({
                                 onUpdateQuantity(item.key, 1);
                               }}
                               aria-label="Aumentar cantidad"
+                              disabled={checkoutBusy || isOutOfStock || item.quantity >= Math.min(10, availableStock)}
                             >
                               <Plus size={14} />
                             </button>
@@ -704,7 +831,7 @@ export function CartSummaryModal({
                       <button
                         type="button"
                         className="btn btn-soft checkout-back-btn-inline"
-                        onClick={() => setCheckoutStep(getPreviousCheckoutStep(checkoutStep))}
+                        onClick={goBackCheckoutStep}
                       >
                         <ChevronLeft size={14} />
                         {isPaymentStep ? "Editar entrega" : "Volver al resumen"}
@@ -719,21 +846,21 @@ export function CartSummaryModal({
                         <legend>Comprar sin cuenta</legend>
                         <p>Podrás consultar tus pedidos en este navegador durante 30 días. Para ayuda desde otro dispositivo, guarda el código de tu pedido y contacta a la tienda.</p>
                         {deliveryType === "pickup" && <>
-                          <label>Nombre completo<input className="input" name="guest-name" autoComplete="name" value={deliveryDraft.fullName} onChange={(event) => handleDeliveryDraftChange("fullName", event.target.value)} required /></label>
-                          <label>Teléfono de contacto<input className="input" name="guest-phone" type="tel" inputMode="tel" autoComplete="tel-national" maxLength={10} value={deliveryDraft.phone} onChange={(event) => handleDeliveryDraftChange("phone", event.target.value)} required /></label>
+                          <CheckoutField label="Nombre completo" name="fullName" required error={deliveryErrors.fullName}><input className="input" autoComplete="name" value={deliveryDraft.fullName} onChange={(event) => handleDeliveryDraftChange("fullName", event.target.value)} /></CheckoutField>
+                          <CheckoutField label="Teléfono de contacto" name="phone" required error={deliveryErrors.phone}><input className="input" type="tel" inputMode="tel" autoComplete="tel-national" maxLength={10} value={deliveryDraft.phone} onChange={(event) => handleDeliveryDraftChange("phone", event.target.value)} /></CheckoutField>
                         </>}
                       </fieldset>
                     )}
-                    <div className="checkout-delivery-switch" role="tablist" aria-label="Tipo de entrega">
+                    <div className="checkout-delivery-switch" role="radiogroup" aria-label="Tipo de entrega">
                     <button
                       type="button"
-                      role="tab"
-                      aria-selected={deliveryType === "pickup"}
+                      role="radio"
+                      id="delivery-choice-pickup"
+                      aria-checked={deliveryType === "pickup"}
+                      tabIndex={deliveryType === "pickup" ? 0 : -1}
                       className={`checkout-delivery-tab ${deliveryType === "pickup" ? "active" : ""}`}
-                      onClick={() => {
-                        setDeliveryType("pickup");
-                        setCheckoutFormError("");
-                      }}
+                      onClick={() => chooseDeliveryType("pickup")}
+                      onKeyDown={handleDeliveryTypeKeyDown}
                     >
                       <span className="checkout-delivery-tab-icon"><Store size={18} /></span>
                       <span className="checkout-delivery-tab-copy">
@@ -746,13 +873,13 @@ export function CartSummaryModal({
                     </button>
                     <button
                       type="button"
-                      role="tab"
-                      aria-selected={deliveryType === "delivery"}
+                      role="radio"
+                      id="delivery-choice-delivery"
+                      aria-checked={deliveryType === "delivery"}
+                      tabIndex={deliveryType === "delivery" ? 0 : -1}
                       className={`checkout-delivery-tab ${deliveryType === "delivery" ? "active" : ""}`}
-                      onClick={() => {
-                        setDeliveryType("delivery");
-                        setCheckoutFormError("");
-                      }}
+                      onClick={() => chooseDeliveryType("delivery")}
+                      onKeyDown={handleDeliveryTypeKeyDown}
                     >
                       <span className="checkout-delivery-tab-icon"><Truck size={18} /></span>
                       <span className="checkout-delivery-tab-copy">
@@ -774,44 +901,42 @@ export function CartSummaryModal({
                           <strong className="checkout-pickup-address">{pickupAddress || "El punto de retiro se coordina por WhatsApp al confirmar."}</strong>
                         </div>
                       </div>
-                      {pickupNote && <p className="helper-text" style={{ margin: 0 }}>{pickupNote}</p>}
-                      {pickupMapsLink && (
-                        <a className="link-btn checkout-pickup-link" href={pickupMapsLink} target="_blank" rel="noopener noreferrer">
-                          Abrir ruta en Google Maps
-                          <ChevronRight size={14} aria-hidden="true" />
-                        </a>
-                      )}
+                      <PickupLocation locationNote={pickupNote} mapsLink={pickupMapsLink} mapsEmbedUrl={contactSettings?.mapsEmbedUrl} address={pickupAddress} hideAddress />
                     </div>
                   ) : (
                     <div className="checkout-delivery-form">
                       <div className="checkout-recipient-card">
                         <p className="checkout-section-badge-title">Datos del destinatario (obligatorios)</p>
                         <div className="checkout-delivery-grid recipient-grid">
-                          <input
+                          <CheckoutField label="Nombre completo de quien recibe" name="fullName" required error={deliveryErrors.fullName}><input
                             className="input"
                             placeholder="Nombre completo de quien recibe *"
                             aria-label="Nombre completo"
                             value={deliveryDraft.fullName}
+                            autoComplete="name"
                             onChange={(event) => handleDeliveryDraftChange("fullName", event.target.value)}
-                          />
-                          <input
+                          /></CheckoutField>
+                          <CheckoutField label="Cédula o RUC" name="idNumber" required error={deliveryErrors.idNumber}><input
                             className="input"
                             placeholder="Cédula / RUC (10 a 13 dígitos) *"
                             aria-label="Cédula de identidad"
                             inputMode="numeric"
+                            autoComplete="off"
                             maxLength={13}
                             value={deliveryDraft.idNumber}
                             onChange={(event) => handleDeliveryDraftChange("idNumber", event.target.value.replace(/\D/g, "").slice(0, 13))}
-                          />
-                          <input
+                          /></CheckoutField>
+                          <CheckoutField label="Teléfono móvil" name="phone" required error={deliveryErrors.phone}><input
                             className="input"
                             placeholder="Teléfono móvil (10 dígitos) *"
                             aria-label="Teléfono para entrega"
                             inputMode="tel"
+                            type="tel"
+                            autoComplete="tel-national"
                             maxLength={10}
                             value={deliveryDraft.phone}
                             onChange={(event) => handleDeliveryDraftChange("phone", event.target.value.replace(/\D/g, "").slice(0, 10))}
-                          />
+                          /></CheckoutField>
                         </div>
                       </div>
 
@@ -889,27 +1014,29 @@ export function CartSummaryModal({
                             )}
 
                             <div className="checkout-delivery-grid">
-                              <input
+                              <CheckoutField label="Ciudad o cantón" name="city" required error={deliveryErrors.city}><input
                                 className="input"
                                 placeholder="Ciudad / Cantón *"
                                 aria-label="Ciudad"
                                 value={deliveryDraft.city}
+                                autoComplete="address-level2"
                                 onChange={(event) => handleDeliveryDraftChange("city", event.target.value)}
-                              />
-                              <textarea
+                              /></CheckoutField>
+                              <CheckoutField label="Dirección exacta" name="address" required className="checkout-delivery-full" error={deliveryErrors.address}><textarea
                                 className="textarea checkout-delivery-full"
                                 placeholder="Dirección exacta (Calle principal, número e intersección) *"
                                 aria-label="Dirección exacta"
                                 value={deliveryDraft.address}
+                                autoComplete="street-address"
                                 onChange={(event) => handleDeliveryDraftChange("address", event.target.value)}
-                              />
-                              <textarea
+                              /></CheckoutField>
+                              <CheckoutField label="Referencia de entrega (opcional)" name="reference" className="checkout-delivery-full"><textarea
                                 className="textarea checkout-delivery-full"
                                 placeholder="Referencia de entrega (Opcional: Color de fachada, depto, indicaciones...)"
                                 aria-label="Referencia de entrega (opcional)"
                                 value={deliveryDraft.reference}
                                 onChange={(event) => handleDeliveryDraftChange("reference", event.target.value)}
-                              />
+                              /></CheckoutField>
                             </div>
 
                             {currentUser?.id && (
@@ -930,7 +1057,14 @@ export function CartSummaryModal({
                     </>
                   )}
 
-                  {isPaymentStep && (
+                  <div className={`checkout-availability-notice ${availability.ok && !hasUnavailableItems ? "is-verified" : "is-blocked"}`} role={availability.ok && !hasUnavailableItems ? "status" : "alert"} ref={stockNoticeRef} tabIndex={-1}>
+                    <AlertCircle size={16} aria-hidden="true" />
+                    <div><strong>{availability.ok && !hasUnavailableItems ? "Disponibilidad actualizada" : "No realices el pago todavía"}</strong><p>{!availability.ok ? availability.message : hasUnavailableItems ? "Una prenda se agotó o cambió su stock. Ajusta el carrito antes de pagar." : availability.message}</p>{isPaymentStep && (!availability.ok || hasUnavailableItems) && <p>Si ya transferiste, no vuelvas a pagar. Conserva tu comprobante y {assistanceUrl ? <a href={assistanceUrl} target="_blank" rel="noopener noreferrer">contacta a la tienda</a> : "contacta a la tienda"} para resolverlo.</p>}</div>
+                    {isPaymentStep && availability.reservationId && <span className="checkout-reservation-time" aria-live="off">{reservationRemaining > 0 ? `Reserva: ${Math.floor(reservationRemaining / 60)}:${String(reservationRemaining % 60).padStart(2, "0")}` : "Reserva vencida. No realices el pago."}</span>}
+                    {(!availability.ok || (isPaymentStep && !reservationValid)) && <button type="button" className="link-btn" onClick={() => { void checkAvailability({ reserve: isPaymentStep }); }}>{isPaymentStep ? "Revisar y reservar de nuevo" : "Reintentar"}</button>}
+                  </div>
+
+                  {isPaymentStep && reservationValid && !hasUnavailableItems && (
                     <>
                     <div className="checkout-delivery-confirmation">
                       <div className="checkout-delivery-confirmation-icon" aria-hidden="true">
@@ -944,7 +1078,7 @@ export function CartSummaryModal({
                             : (pickupAddress || "La ubicación se coordina por WhatsApp.")}
                         </p>
                       </div>
-                      <button type="button" className="link-btn" onClick={() => setCheckoutStep(CHECKOUT_STEPS.delivery)}>Editar</button>
+                      <button type="button" className="link-btn" onClick={goBackCheckoutStep}>Editar</button>
                     </div>
 
                     <section className="checkout-payment-section" aria-labelledby="checkout-payment-title">
@@ -1003,7 +1137,9 @@ export function CartSummaryModal({
                                 aria-checked={isSelected}
                                 aria-controls="checkout-selected-bank-details"
                                 className={`checkout-bank-choice ${isSelected ? "active" : ""}`}
-                                onClick={() => {
+                                onClick={async () => {
+                                  const verified = await checkAvailability();
+                                  if (!verified.ok) { setCheckoutFormError(""); return; }
                                   setSelectedBankAccountId(account.id);
                                   setAccountCopyFeedback("");
                                   setCheckoutFormError("");
@@ -1055,11 +1191,16 @@ export function CartSummaryModal({
                           <button
                             type="button"
                             className="checkout-bank-qr-trigger"
-                            onClick={() => setLightboxImage({
+                            onClick={async () => {
+                              const verified = await checkAvailability();
+                              if (!verified.ok) { setCheckoutFormError(""); return; }
+                              const latestAccount = getReadyBankAccounts(verified.paymentSettings || {}).find(account => account.id === selectedBankAccount?.id);
+                              if (!latestAccount || latestAccount.bankQrImage !== bankQrImage) { setCheckoutFormError("El QR bancario cambió. Revisa los datos actualizados antes de transferir."); return; }
+                              setLightboxImage({
                               src: bankQrImage,
                               alt: `QR para transferir a ${sanitizeLine(selectedBankAccount?.bankName || "la cuenta bancaria")}`,
                               title: `QR · ${sanitizeLine(selectedBankAccount?.bankName || "Cuenta bancaria")}`,
-                            })}
+                            }); }}
                             aria-label={`Abrir QR de ${sanitizeLine(selectedBankAccount?.bankName || "la cuenta bancaria")}`}
                           >
                             <img className="checkout-bank-qr" src={bankQrImage} alt="" />
@@ -1069,7 +1210,7 @@ export function CartSummaryModal({
                       </div>
                       <div
                         ref={proofSectionRef}
-                        className={`checkout-payment-proof ${paymentProof ? "has-file" : ""} ${proofAttention && !paymentProof ? "is-required-attention" : ""}`}
+                        className={`checkout-payment-proof ${paymentProof ? "has-file" : ""} ${proofAttention && (!paymentProof || !proofMatchesCart) ? "is-required-attention" : ""}`}
                       >
                         <div className="checkout-payment-proof-heading">
                           <span className="checkout-payment-proof-icon" aria-hidden="true">
@@ -1106,9 +1247,9 @@ export function CartSummaryModal({
                             </button>
                             <div>
                               <strong>{paymentProofName || "Comprobante cargado"}</strong>
-                              <span>Listo para guardar con el pedido</span>
+                              <span>{proofMatchesCart ? "Listo para guardar con el pedido" : "El carrito cambió. Revisa el importe antes de enviarlo."}</span>
                             </div>
-                            <button type="button" className="icon-btn" onClick={handleRemovePaymentProof} aria-label="Quitar comprobante">
+                            <button type="button" disabled={checkoutBusy} className="icon-btn" onClick={handleRemovePaymentProof} aria-label="Quitar comprobante">
                               <Trash2 size={15} />
                             </button>
                           </div>
@@ -1157,6 +1298,12 @@ export function CartSummaryModal({
                 </div>
               )}
 
+              {!isCheckoutStep && checkoutFormError && (
+                <div className="checkout-form-notice" role="alert">
+                  <AlertCircle size={16} aria-hidden="true" />
+                  <span>{checkoutFormError}</span>
+                </div>
+              )}
               <div className={`cart-checkout-cta ${isCheckoutStep ? "is-confirm-step" : ""}`}>
                 <div className="checkout-amount-summary" aria-label="Resumen de importes">
                   <div className="cart-footer-meta-row"><span>Productos</span><strong>{totalItems}</strong></div>
@@ -1183,9 +1330,8 @@ export function CartSummaryModal({
                   type="button"
                   className="btn btn-primary"
                   onClick={handleCheckoutAction}
-                  disabled={cart.length === 0 || checkoutDisabled || checkoutBusy}
-                  aria-busy={checkoutBusy}
-                  style={{ opacity: cart.length === 0 || checkoutDisabled || checkoutBusy ? 0.6 : 1, cursor: cart.length === 0 || checkoutDisabled || checkoutBusy ? "not-allowed" : "pointer" }}
+                  disabled={cart.length === 0 || checkoutDisabled || checkoutBusy || availabilityBusy || hasUnavailableItems || (isPaymentStep && !reservationValid)}
+                  aria-busy={checkoutBusy || availabilityBusy}
                 >
                   {isPaymentStep
                     ? (selectedPaymentMethod === PAYMENT_METHODS.transfer ? <Landmark size={18} /> : <MessageCircle size={18} />)
@@ -1194,7 +1340,7 @@ export function CartSummaryModal({
                 </button>
               </div>
               {needsAccountChoice && cart.length > 0 && (
-                <button type="button" className="btn btn-outline" onClick={() => { setGuestCheckout(true); setCheckoutStep(CHECKOUT_STEPS.delivery); setCheckoutFormError(""); }}>Comprar sin cuenta</button>
+                <button type="button" className="btn btn-outline" onClick={async () => { if (availabilityBusy) return; setAvailabilityBusy(true); let verified; try { verified = await checkAvailability(); } finally { setAvailabilityBusy(false); } if (!verified.ok) { setCheckoutFormError(""); return; } setGuestCheckout(true); changeCheckoutStep(CHECKOUT_STEPS.delivery); setCheckoutFormError(""); }} disabled={availabilityBusy || hasUnavailableItems}>Comprar sin cuenta</button>
               )}
               {needsAccountChoice && cart.length > 0 && (
                 <p className="helper-text sheet-login-hint">

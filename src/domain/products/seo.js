@@ -16,7 +16,7 @@ function safeImage(value) {
   } catch { return ""; }
 }
 
-export function getProductSeo(product = {}, origin) {
+export function getProductSeo(product = {}, origin, brandName = "Adriego Store") {
   const mode = normalizeOfferDiscountMode(product.offerDiscountMode);
   const rawPrice = Math.max(0, Number(product.price) || 0);
   const explicitBase = Math.max(0, Number(product.basePrice) || 0);
@@ -33,7 +33,7 @@ export function getProductSeo(product = {}, origin) {
   const colors = [...new Set(variants.length ? variants.map((v) => String(v.color || "")) : (Array.isArray(product.colors) ? product.colors : []))].filter(Boolean);
   const sizes = [...new Set(variants.length ? variants.map((v) => String(v.size || "")) : (Array.isArray(product.sizes) ? product.sizes : []))].filter(Boolean);
   const name = String(product.name || "Producto");
-  const description = String(product.description || `Consulta los colores, tallas y disponibilidad de ${name} en Adriego Store. Compra desde la web.`);
+  const description = String(product.description || `Consulta los colores, tallas y disponibilidad de ${name} en ${brandName}. Compra desde la web.`);
   const url = `${origin}/producto/${getProductSlug(product)}`;
   const schema = {
     "@context": "https://schema.org", "@type": "Product", name, description,
@@ -44,7 +44,7 @@ export function getProductSeo(product = {}, origin) {
     offers: { "@type": "Offer", priceCurrency: "USD", price: String(price),
       availability: `https://schema.org/${inStock ? "InStock" : "OutOfStock"}`,
       itemCondition: "https://schema.org/NewCondition", url,
-      seller: { "@type": "Organization", name: "Adriego Store" } },
+      seller: { "@type": "Organization", name: brandName } },
   };
   return { name, description, price, images, colors, sizes, inStock, url, schema };
 }

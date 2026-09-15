@@ -18,31 +18,37 @@ export function useRealtimeSync({
   showAdminPanel,
   onStatusChange,
   retryKey,
+  shoppingActive = false,
 }) {
   useEffect(() => {
     if (!catalogReady) return undefined;
     let cancelled = false;
     let timerId = null;
     let inFlight = false;
+    let inFlightForce = false;
     let forceQueued = false;
 
     const scheduleNext = () => {
       if (cancelled) return;
       if (timerId) window.clearTimeout(timerId);
       const isVisible = typeof document === "undefined" || document.visibilityState === "visible";
-      const delayMs = computePollingDelay(isVisible ? "visible" : "hidden");
+      if (!isVisible || (typeof navigator !== "undefined" && navigator.onLine === false)) return;
+      const delayMs = shoppingActive ? 5000 : isAdmin ? 10000 : computePollingDelay("visible");
       timerId = window.setTimeout(() => {
-        void pollRealtimeSync();
+        void pollRealtimeSync(Boolean(shoppingActive || isAdmin || currentUserId));
       }, delayMs);
     };
 
     const pollRealtimeSync = async (force = false) => {
       if (cancelled) return;
+      if (typeof document !== "undefined" && document.hidden) return;
+      if (typeof navigator !== "undefined" && navigator.onLine === false) return;
       if (inFlight) {
-        forceQueued ||= force;
+        forceQueued ||= force && !inFlightForce;
         return;
       }
       inFlight = true;
+      inFlightForce = force;
       if (timerId) window.clearTimeout(timerId);
       onStatusChange?.({ state: "checking", updatedAt: "" });
       try {
@@ -50,7 +56,7 @@ export function useRealtimeSync({
         const result = await getRealtimeSyncStatus({
           privateStatus,
           force,
-          preferCache: !force,
+          preferCache: false,
           maxAgeMs: force ? 0 : (privateStatus ? 5000 : 30000),
         });
         if (cancelled) return;
@@ -104,6 +110,7 @@ export function useRealtimeSync({
     const refreshOnFocus = () => { void pollRealtimeSync(true); };
     const refreshOnVisibility = () => {
       if (typeof document !== "undefined" && document.visibilityState === "visible") void pollRealtimeSync(true);
+      else if (timerId) window.clearTimeout(timerId);
     };
 
     window.addEventListener("focus", refreshOnFocus);
@@ -118,5 +125,5 @@ export function useRealtimeSync({
       window.removeEventListener("online", refreshOnFocus);
       if (typeof document !== "undefined") document.removeEventListener("visibilitychange", refreshOnVisibility);
     };
-  }, [adminTab, applyCatalogState, catalogReady, currentUserId, isAdmin, onStatusChange, realtimeVersionsRef, refreshAdminUsers, refreshOrders, retryKey, setCurrentUser, showAdminPanel]);
+  }, [adminTab, applyCatalogState, catalogReady, currentUserId, isAdmin, onStatusChange, realtimeVersionsRef, refreshAdminUsers, refreshOrders, retryKey, setCurrentUser, showAdminPanel, shoppingActive]);
 }

@@ -59,7 +59,7 @@ test("product detail uses the same top notice without a second inline confirmati
   assert.doesNotMatch(modal, /cartFeedback|inlineFeedback|product-modal-cart-feedback/);
   assert.doesNotMatch(app, /inlineFeedback/);
   assert.doesNotMatch(css, /product-modal-cart-feedback/);
-  assert.match(modal, /onAddToCart\(product, \{ sourceElement: event\.currentTarget, image: activeImage \}\)/);
+  assert.match(modal, /onAddToCart\(product, \{ sourceElement: event\.currentTarget, image: activeImage \}, \{ \.\.\.resolvedSelection, quantity: requestedQuantity \}\)/);
   assert.match(app, /if \(selectedProduct\) closeProductModal\(\);\s*openCartPage\(\)/);
   assert.match(modal, /Guardar cambios/);
   assert.match(modal, /notificationActions = imagePreviewOpen \? \[\] : document\.querySelectorAll\("\.notification-region button"\)/);

@@ -1,6 +1,6 @@
 ﻿import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { sanitizeAdminCatalogPayload, sanitizeManagedEntities } from '../../api/_lib/storeSanitizers.js';
+import { sanitizeAdminCatalogPayload } from '../../api/_lib/storeSanitizers.js';
 
 function normalizeOptionLabel(value) {
   return String(value || "").trim().replace(/\s+/g, " ");

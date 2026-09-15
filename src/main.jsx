@@ -1,9 +1,16 @@
 import React from 'react'
+import { preload } from 'react-dom'
 import ReactDOM from 'react-dom/client'
+import manropeFontUrl from '@fontsource-variable/manrope/files/manrope-latin-wght-normal.woff2?url'
+import cormorantFontUrl from '@fontsource-variable/cormorant-garamond/files/cormorant-garamond-latin-wght-normal.woff2?url'
+import './fonts.css'
 import App from './App.jsx'
 import './index.css'
 import { ErrorBoundary } from './components/ui/ErrorBoundary.jsx'
 import { tryReloadStaleChunk } from './utils/chunkRecovery.js'
+
+preload(manropeFontUrl, { as: 'font', type: 'font/woff2', crossOrigin: 'anonymous' })
+preload(cormorantFontUrl, { as: 'font', type: 'font/woff2', crossOrigin: 'anonymous' })
 
 // Global recovery for stale chunks after new deployments
 // Guarded with a flag to prevent duplicate listeners during Vite HMR (#12)

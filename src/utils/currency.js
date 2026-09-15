@@ -2,8 +2,9 @@
  * Currency formatting and pricing utilities.
  */
 
+const usdFormatter = new Intl.NumberFormat("es-EC", { style: "currency", currency: "USD" });
 export function currency(value) {
-  return new Intl.NumberFormat("es-EC", { style: "currency", currency: "USD" }).format(Number(value) || 0);
+  return usdFormatter.format(Number(value) || 0);
 }
 
 export function discountPercent(price, oldPrice) {

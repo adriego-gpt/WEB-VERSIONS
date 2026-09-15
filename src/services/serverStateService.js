@@ -42,13 +42,14 @@ function getCatalogState(options = {}) {
     force = false,
     preferCache = true,
     maxAgeMs = 25000,
+    fresh = false,
   } = options;
   const normalizedVersion = Number.isInteger(Number(catalogVersion)) && Number(catalogVersion) > 0
     ? Math.floor(Number(catalogVersion))
     : 0;
   const endpoint = admin
     ? "/api/catalog-state?action=get"
-    : `/api/catalog-state?action=get-public${normalizedVersion ? `&v=${normalizedVersion}` : ""}`;
+    : `/api/catalog-state?action=get-public${fresh ? `&fresh=1&check=${createUuid()}` : (normalizedVersion ? `&v=${normalizedVersion}` : "")}`;
   return cachedRequest(
     admin ? SERVER_CACHE_KEYS.catalogAdmin : SERVER_CACHE_KEYS.catalogPublic,
     () => requestJson(endpoint, {
@@ -56,11 +57,11 @@ function getCatalogState(options = {}) {
       credentials: admin ? "include" : "omit",
     }),
     {
-      force,
-      preferCache,
+      force: force || fresh,
+      preferCache: preferCache && !fresh,
       maxAgeMs,
       persist: !admin,
-      allowStaleOnError: !force,
+      allowStaleOnError: !force && !fresh,
     },
   ).then(rememberCatalogVersion);
 }
@@ -81,6 +82,16 @@ function syncCatalogState(data, options = {}) {
         SERVER_CACHE_KEYS.realtimePublic,
         SERVER_CACHE_KEYS.realtimePrivate,
       ]);
+    }
+    return response;
+  });
+}
+
+function syncMaintenanceState(maintenanceSettings) {
+  return postJson("/api/catalog-state?action=sync-maintenance", { maintenanceSettings }).then((response) => {
+    if (response?.ok) {
+      rememberCatalogVersion(response);
+      invalidateCachedRequest([SERVER_CACHE_KEYS.catalogPublic, SERVER_CACHE_KEYS.catalogAdmin, SERVER_CACHE_KEYS.realtimePublic, SERVER_CACHE_KEYS.realtimePrivate]);
     }
     return response;
   });
@@ -178,6 +189,38 @@ function requestOrderDeletion(action, payload) {
   });
 }
 
+const RESERVATION_STORAGE_KEY = "adriego:checkout-reservation:v1";
+let memoryReservationId = "";
+export function getCheckoutReservationId() {
+  try { return sessionStorage.getItem(RESERVATION_STORAGE_KEY) || memoryReservationId; } catch { return memoryReservationId; }
+}
+export function clearCheckoutReservation() {
+  memoryReservationId = "";
+  try { sessionStorage.removeItem(RESERVATION_STORAGE_KEY); } catch { /* Storage may be disabled. */ }
+}
+export async function checkServerCheckoutReservation(cart, { reserve = false, allowCartChanges = false } = {}) {
+  const reservationId = getCheckoutReservationId();
+  if (!reserve && !reservationId) return { ok: false, code: "RESERVATION_REQUIRED", message: "Revisa el carrito y confirma la entrega para reservar las prendas antes de pagar." };
+  const result = await postJson(`/api/checkout-order?action=${reserve ? "reserve" : "reservation-status"}`, { cart, reservationId, allowCartChanges });
+  if (result.ok && result.reservationId) {
+    memoryReservationId = result.reservationId;
+    try { sessionStorage.setItem(RESERVATION_STORAGE_KEY, result.reservationId); } catch { /* The cart also keeps the id in memory. */ }
+    if (reserve) invalidateCachedRequest([SERVER_CACHE_KEYS.catalogPublic, SERVER_CACHE_KEYS.catalogAdmin, SERVER_CACHE_KEYS.realtimePublic, SERVER_CACHE_KEYS.realtimePrivate]);
+  }
+  return result;
+}
+
+export async function adjustServerCheckoutReservation(cart) {
+  const reservationId = getCheckoutReservationId();
+  if (!reservationId) return { ok: true };
+  const result = await postJson("/api/checkout-order?action=adjust-reservation", { cart, reservationId });
+  if (result.ok) {
+    if (!result.remainingReservationId && getCheckoutReservationId() === reservationId) clearCheckoutReservation();
+    invalidateCachedRequest([SERVER_CACHE_KEYS.catalogPublic, SERVER_CACHE_KEYS.catalogAdmin, SERVER_CACHE_KEYS.realtimePublic, SERVER_CACHE_KEYS.realtimePrivate]);
+  }
+  return result;
+}
+
 function deleteServerOrder(payload) {
   return requestOrderDeletion("delete", payload);
 }
@@ -224,7 +267,7 @@ function getRealtimeSyncStatus(options = {}) {
   } = options;
   return cachedRequest(
     privateStatus ? SERVER_CACHE_KEYS.realtimePrivate : SERVER_CACHE_KEYS.realtimePublic,
-    () => requestJson(`/api/realtime-sync?action=${privateStatus ? "status" : "public-status"}`, {
+    () => requestJson(`/api/realtime-sync?action=${privateStatus ? "status" : "public-status"}${force && !privateStatus ? `&live=1&check=${createUuid()}` : ""}`, {
       method: "GET",
       credentials: privateStatus ? "include" : "omit",
     }),
@@ -243,6 +286,7 @@ export {
   getCatalogState,
   syncCatalogState,
   syncContactState,
+  syncMaintenanceState,
   createServerCheckoutOrder,
   previewCouponApplication,
   listServerOrders,

@@ -1,0 +1,10 @@
+# Adriego Store
+
+Adriego Store es una tienda de ropa en Ecuador. El catálogo público muestra precios, colores, tallas y disponibilidad; las existencias deben confirmarse en la propia tienda antes de realizar un pago.
+
+## Enlaces oficiales
+
+- [Tienda y catálogo](https://www.adriego.shop/)
+- [Mapa del sitio](https://www.adriego.shop/sitemap.xml)
+- [Reglas para rastreadores](https://www.adriego.shop/robots.txt)
+

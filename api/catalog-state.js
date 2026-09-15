@@ -1,6 +1,7 @@
 
 import { createHmac, randomUUID } from "node:crypto";
 import { Buffer } from "node:buffer";
+import { normalizeMaintenanceSettings } from "../src/domain/store/maintenance.js";
 import { fetchWithTimeout } from "./_lib/network.js";
 import { bumpRealtimeMeta, getStoreBackend, readStore, updateStore } from "./_lib/store.js";
 import {
@@ -121,6 +122,8 @@ function collectCatalogImagePaths(catalog = {}, urlEndpoint = "") {
   for (const slide of (Array.isArray(catalog?.storeSettings?.heroSlides) ? catalog.storeSettings.heroSlides : [])) {
     urls.push(slide?.image);
   }
+  const seoImages = catalog?.storeSettings?.seoSettings;
+  urls.push(seoImages?.faviconUrl, seoImages?.logoUrl, seoImages?.imageUrl);
   for (const account of (Array.isArray(catalog?.contactSettings?.paymentSettings?.bankAccounts)
     ? catalog.contactSettings.paymentSettings.bankAccounts
     : [])) {
@@ -310,7 +313,12 @@ export default async function handler(req, res) {
       const isVersioned = Number.isInteger(requestedVersion)
         && requestedVersion > 0
         && requestedVersion === payload.catalogVersion;
-      setPublicCatalogCacheHeaders(res, { versioned: isVersioned });
+      if (req.query?.fresh === "1") {
+        res.setHeader("Cache-Control", "no-store, max-age=0");
+        res.setHeader("Vercel-CDN-Cache-Control", "no-store");
+      } else {
+        setPublicCatalogCacheHeaders(res, { versioned: isVersioned });
+      }
     } else {
       res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
     }
@@ -319,7 +327,7 @@ export default async function handler(req, res) {
     return;
   }
 
-  if (action !== "sync" && action !== "sync-contact") {
+  if (action !== "sync" && action !== "sync-contact" && action !== "sync-maintenance") {
     res.status(400).json({ ok: false, message: "Accion no valida" });
     return;
   }
@@ -349,6 +357,22 @@ export default async function handler(req, res) {
   const body = requireJsonBody(req, res, { endpoint: ENDPOINT_NAME });
   if (!body) return;
 
+  if (action === "sync-maintenance") {
+    if (typeof body?.maintenanceSettings?.enabled !== "boolean") {
+      return res.status(400).json({ ok: false, message: "Indica si el mantenimiento está activo." });
+    }
+    const maintenanceSettings = normalizeMaintenanceSettings(body.maintenanceSettings);
+    const nextStore = await updateStore((draft) => {
+      draft.storeSettings = { ...(draft.storeSettings || {}), maintenanceSettings };
+      bumpRealtimeMeta(draft, ["catalog"]);
+      return draft;
+    });
+    return res.status(200).json({ ok: true, data: {
+      maintenanceSettings,
+      catalogVersion: getCatalogVersion(nextStore),
+    } });
+  }
+
   if (action === "sync-contact") {
     const nextContactSettings = sanitizeContactSettings(body?.contactSettings || {});
     const rawStoreSettings = body?.storeSettings && typeof body.storeSettings === "object"
@@ -360,6 +384,7 @@ export default async function handler(req, res) {
         draft.storeSettings = sanitizeStoreSettings({
           ...(draft.storeSettings || {}),
           ...rawStoreSettings,
+          maintenanceSettings: normalizeMaintenanceSettings(draft.storeSettings?.maintenanceSettings),
         });
       }
       bumpRealtimeMeta(draft, ["catalog"]);
@@ -412,13 +437,13 @@ export default async function handler(req, res) {
     draft.products = sanitized.products;
     draft.coupons = sanitized.coupons;
     draft.contactSettings = sanitized.contactSettings;
-    draft.storeSettings = sanitized.storeSettings;
+    draft.storeSettings = { ...sanitized.storeSettings, maintenanceSettings: normalizeMaintenanceSettings(draft.storeSettings?.maintenanceSettings) };
     draft.productTypes = sanitized.productTypeRecords;
     draft.filterTags = sanitized.filterTagRecords;
     const retainedImagePaths = collectCatalogImagePaths(draft, imageKitEndpoint);
     const noLongerReferencedPaths = [...previousImagePaths].filter((imagePath) => !retainedImagePaths.has(imagePath));
     const currentQueue = getPendingImageCleanupPaths(draft?.meta?.imageCleanupQueue);
-    queuedImageCleanupPaths = getPendingImageCleanupPaths([...currentQueue, ...noLongerReferencedPaths]);
+    queuedImageCleanupPaths = getPendingImageCleanupPaths([...currentQueue, ...noLongerReferencedPaths]).filter(imagePath => !retainedImagePaths.has(imagePath));
     draft.meta = {
       ...(draft.meta || {}),
       imageCleanupQueue: queuedImageCleanupPaths,

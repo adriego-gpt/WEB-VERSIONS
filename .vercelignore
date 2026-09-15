@@ -1,5 +1,6 @@
 ﻿.agents
 tests
+.impeccable
 public/bocetos
 *.log
 .github

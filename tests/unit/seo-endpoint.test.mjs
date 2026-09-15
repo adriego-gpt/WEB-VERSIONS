@@ -133,6 +133,19 @@ test("SEO endpoint tests", async (t) => {
     } finally { if (previous === undefined) delete process.env.PUBLIC_SITE_URL; else process.env.PUBLIC_SITE_URL = previous; }
   });
 
+  await t.test("renders persisted custom search identity on the homepage and product", async () => {
+    await updateStore(draft => { draft.storeSettings = { ...draft.storeSettings, brandName: "Adriego Boutique", seoSettings: { title: "Adriego | Moda", description: "Nuestra colección", faviconUrl: "https://images.example.com/icon.png", logoUrl: "https://images.example.com/logo.png", imageUrl: "https://images.example.com/share.jpg" } }; return draft; });
+    const home = createMockResponse();
+    await seoHandler({ query: { path: "/" } }, home);
+    assert.equal(home.statusCode, 200);
+    assert.match(home.data, /<title>Adriego \| Moda<\/title>/);
+    assert.match(home.data, /rel="icon" href="https:\/\/images\.example\.com\/icon\.png"/);
+    const product = createMockResponse();
+    await seoHandler({ query: { path: "/producto/vestido-lino-natural" } }, product);
+    assert.match(product.data, /Vestido Lino Natural \| Adriego Boutique/);
+    assert.doesNotMatch(product.data, /<title>Adriego \| Moda/);
+  });
+
   await t.test("rejects write methods and sends restrictive security headers", async () => {
     const res = createMockResponse();
     await seoHandler({ method: "POST", query: {}, headers: {} }, res);

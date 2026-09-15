@@ -32,6 +32,12 @@ test("catalog synchronization preserves a color the shopper explicitly selected"
   assert.deepEqual(selections[product.id], { color: "Negro", size: "S", source: "user" });
 });
 
+test("a realtime stock change never silently swaps the shopper's chosen size", () => {
+  const updated = { ...product, variants: [{ color: "Negro", size: "S", stock: 0 }, { color: "Negro", size: "M", stock: 3 }] };
+  const selections = syncProductSelections([updated], { [product.id]: { color: "Negro", size: "S", source: "user" } });
+  assert.equal(selections[product.id].size, "S");
+});
+
 test("principal color remains visible even when its variant is out of stock", () => {
   const soldOutPrincipal = {
     ...product,

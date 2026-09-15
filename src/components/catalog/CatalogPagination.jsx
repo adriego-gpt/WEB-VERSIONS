@@ -24,7 +24,7 @@ export function CatalogPagination({
 
       <div className="catalog-page-numbers">
         {pageWindow[0] > 1 && <button type="button" className="catalog-page-number" onClick={() => onPageChange(1)} aria-label="Ir a la página 1" aria-controls="catalog-results">1</button>}
-        {pageWindow[0] > 2 && <span className="catalog-page-ellipsis" aria-hidden="true">...</span>}
+        {pageWindow[0] > 2 && <span className="catalog-page-ellipsis" aria-hidden="true">…</span>}
         {pageWindow.map((pageNumber) => (
           <button
             key={pageNumber}
@@ -38,7 +38,7 @@ export function CatalogPagination({
             {pageNumber}
           </button>
         ))}
-        {pageWindow[pageWindow.length - 1] < totalPages - 1 && <span className="catalog-page-ellipsis" aria-hidden="true">...</span>}
+        {pageWindow[pageWindow.length - 1] < totalPages - 1 && <span className="catalog-page-ellipsis" aria-hidden="true">…</span>}
         {pageWindow[pageWindow.length - 1] < totalPages && <button type="button" className="catalog-page-number" onClick={() => onPageChange(totalPages)} aria-label={`Ir a la página ${totalPages}`} aria-controls="catalog-results">{totalPages}</button>}
       </div>
 

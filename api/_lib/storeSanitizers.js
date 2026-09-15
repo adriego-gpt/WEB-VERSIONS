@@ -1,4 +1,6 @@
 import crypto from "node:crypto";
+import { normalizeSeoSettings } from "../../src/domain/store/seoSettings.js";
+import { normalizeMaintenanceSettings } from "../../src/domain/store/maintenance.js";
 import { alignImageViews } from "../../src/domain/products/imageViews.js";
 import { PRODUCT_FORM_LIMITS } from "../../src/constants/product.js";
 import { normalizeCouponList } from "../../src/services/couponService.js";
@@ -286,6 +288,8 @@ function sanitizeContactSettings(rawSettings = {}) {
   const primaryBankAccount = bankAccounts[0] || {};
   return {
     address: sanitizeParagraph(rawSettings?.address || "").slice(0, 280),
+    legalBusinessName: normalizeLine(rawSettings?.legalBusinessName || "").slice(0, 160),
+    legalAddress: sanitizeParagraph(rawSettings?.legalAddress || "").slice(0, 280),
     locationNote: sanitizeParagraph(rawSettings?.locationNote || "").slice(0, 320),
     whatsappNumber: normalizePhone(rawSettings?.whatsappNumber || "").slice(0, 20),
     whatsappLink: normalizeSafeUrl(rawSettings?.whatsappLink || ""),
@@ -331,6 +335,7 @@ function sanitizeStoreSettings(rawSettings = {}) {
   return {
     brandLabel: normalizeLine(rawSettings?.brandLabel || "").slice(0, 80),
     brandName: normalizeLine(rawSettings?.brandName || "").slice(0, 80),
+    seoSettings: normalizeSeoSettings(rawSettings?.seoSettings),
     heroBadgeText,
     primaryCtaText: normalizeLine(rawSettings?.primaryCtaText || "").slice(0, 40),
     offerLabel: normalizeLine(rawSettings?.offerLabel || "").slice(0, 40),
@@ -340,6 +345,7 @@ function sanitizeStoreSettings(rawSettings = {}) {
     saleDescription: sanitizeParagraph(rawSettings?.saleDescription || "").slice(0, 320),
     footerTitle: normalizeLine(rawSettings?.footerTitle || "").slice(0, 120),
     footerText: sanitizeParagraph(rawSettings?.footerText || "").slice(0, 320),
+    maintenanceSettings: normalizeMaintenanceSettings(rawSettings?.maintenanceSettings),
     automationSettings: {
       postPurchaseEnabled: automationSource.postPurchaseEnabled !== false,
       postPurchaseTemplate: sanitizeParagraph(automationSource.postPurchaseTemplate || DEFAULT_POST_PURCHASE_TEMPLATE).slice(0, 600) || DEFAULT_POST_PURCHASE_TEMPLATE,

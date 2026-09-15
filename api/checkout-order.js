@@ -1,5 +1,7 @@
 
 import crypto from "node:crypto";
+import { handleCheckoutReservation } from "./_lib/checkoutReservationHandler.js";
+import { getReservedProducts, reservationCartKey, syncReservationDeadline } from "./_lib/checkoutReservations.js";
 import { ensureGuestSession } from "./_lib/guestSession.js";
 import { bumpRealtimeMeta, updateStore } from "./_lib/store.js";
 import { dispatchOrderNotifications } from "./_lib/notifications.js";
@@ -38,6 +40,7 @@ import {
 } from "../src/domain/orders/payment.js";
 import { getReadyBankAccounts } from "../src/domain/contact/paymentSettings.js";
 import { calculateShippingFee } from "../src/domain/orders/shippingSettings.js";
+import { resolvePickupLocation } from "../src/domain/contact/pickupLocation.js";
 
 const USER_COOKIE_NAME = "adriego_user_session";
 const CART_ITEM_LIMIT = 25;
@@ -180,6 +183,7 @@ function sanitizeDeliveryPayload(rawDelivery = {}, user = {}, contactSettings = 
 
   const configuredPickupAddress = normalizeLine(contactSettings?.address || "");
   const hasRealPickupAddress = configuredPickupAddress.toLowerCase() !== LEGACY_PICKUP_ADDRESS;
+  const pickupLocation = resolvePickupLocation({ ...contactSettings, address: hasRealPickupAddress ? configuredPickupAddress : "" });
   const safePayload = {
     deliveryType,
     deliveryLabel: deliveryType === "delivery" ? "Envio a domicilio" : "Retiro en local",
@@ -191,6 +195,8 @@ function sanitizeDeliveryPayload(rawDelivery = {}, user = {}, contactSettings = 
     deliveryPhone: basePhone.slice(0, 20),
     pickupAddress: deliveryType === "pickup" && hasRealPickupAddress ? configuredPickupAddress.slice(0, 280) : "",
     pickupNote: deliveryType === "pickup" && hasRealPickupAddress ? normalizeLine(contactSettings?.locationNote || "").slice(0, 320) : "",
+    pickupMapsLink: deliveryType === "pickup" ? pickupLocation.mapsLink : "",
+    pickupMapsEmbedUrl: deliveryType === "pickup" ? pickupLocation.mapsEmbedUrl : "",
   };
 
   if (deliveryType === "delivery") {
@@ -303,6 +309,11 @@ export default async function handler(req, res) {
     return;
   }
 
+  if (["reserve", "reservation-status", "adjust-reservation"].includes(req.query?.action)) {
+    const reservationBody = requireJsonBody(req, res, { endpoint: ENDPOINT_NAME });
+    if (reservationBody) await handleCheckoutReservation(req, res, reservationBody);
+    return;
+  }
   const requestIp = getClientIp(req);
   const rateLimit = await consumeRateLimit("checkout-ip", requestIp, 10, 10 * 60 * 1000, {
     endpoint: ENDPOINT_NAME,
@@ -330,6 +341,7 @@ export default async function handler(req, res) {
     res.status(400).json({ ok: false, message: "Ingresa tu nombre y teléfono de 10 dígitos para comprar sin cuenta." });
     return;
   }
+
   const guestSession = isGuest ? ensureGuestSession(req, res) : null;
   if (isGuest) {
     const guestLimit = await consumeRateLimit("checkout-guest-phone", guestPhone, 4, 60 * 60 * 1000, {
@@ -395,13 +407,23 @@ export default async function handler(req, res) {
       return draft;
     }
 
+    if (draft.storeSettings?.maintenanceSettings?.enabled === true) {
+      responsePayload = { ok: false, status: 503, code: "STORE_MAINTENANCE", message: "La tienda está en mantenimiento. Tu carrito sigue guardado; vuelve a intentarlo cuando reabramos." };
+      return draft;
+    }
+
     const products = Array.isArray(draft.products) ? draft.products : [];
     if (!products.length) {
       responsePayload = { ok: false, status: 409, message: "El catálogo seguro no está sincronizado. Inicia sesión admin y guarda cambios." };
       return draft;
     }
 
-    const productsById = new Map(products.map((entry) => [String(entry.id), entry]));
+    const reservation = body.reservationId ? (draft.checkoutReservations || []).find(r => r.id === body.reservationId && r.owner === String(user.id) && r.expiresAt > Date.now()) : null;
+    if (body.reservationId && (!reservation || reservationCartKey(reservation.items) !== reservationCartKey(rawCart))) {
+      responsePayload = { ok: false, status: 409, code: "RESERVATION_EXPIRED", message: "La reserva terminó o el carrito cambió. No vuelvas a pagar. Si ya transferiste, conserva tu comprobante y contacta a la tienda." };
+      return draft;
+    }
+    const productsById = new Map((reservation ? getReservedProducts(draft, reservation) : products).map((entry) => [String(entry.id), entry]));
     const cartState = sanitizeCart(rawCart, productsById);
     if (!cartState.ok) {
       responsePayload = { ok: false, status: 400, message: cartState.message };
@@ -540,6 +562,8 @@ export default async function handler(req, res) {
       deliveryPhone: deliveryState.delivery.deliveryPhone,
       pickupAddress: deliveryState.delivery.pickupAddress,
       pickupNote: deliveryState.delivery.pickupNote,
+      pickupMapsLink: deliveryState.delivery.pickupMapsLink,
+      pickupMapsEmbedUrl: deliveryState.delivery.pickupMapsEmbedUrl,
       stockReservation: {
         state: "reserved",
         reservedAt: nowIso,
@@ -567,7 +591,7 @@ export default async function handler(req, res) {
         const variantKey = buildVariantKey(product.id, variant.color, variant.size);
         const requestedQuantity = requestedByVariant.get(variantKey) || 0;
         if (!requestedQuantity) return variant;
-        const nextStock = Math.max(0, (Number(variant.stock) || 0) - requestedQuantity);
+        const nextStock = Math.max(0, (Number(variant.stock) || 0) - (reservation ? 0 : requestedQuantity));
         if (nextStock <= 1) {
           lowStockAlerts.push({
             productName: product.name,
@@ -599,6 +623,10 @@ export default async function handler(req, res) {
       };
     });
 
+    if (reservation) {
+      draft.checkoutReservations = draft.checkoutReservations.filter(r => r.id !== reservation.id);
+      syncReservationDeadline(draft);
+    }
     if (couponEvaluation.ok && couponEvaluation.coupon?.id) {
       draft.coupons = coupons.map((coupon) => (
         coupon.id === couponEvaluation.coupon.id
@@ -646,8 +674,10 @@ export default async function handler(req, res) {
   }
 
   if (!responsePayload.ok) {
+    if (responsePayload.code === "STORE_MAINTENANCE") res.setHeader("Retry-After", "300");
     res.status(responsePayload.status || 400).json({
       ok: false,
+      ...(responsePayload.code ? { code: responsePayload.code } : {}),
       message: responsePayload.message || "No pudimos procesar el pedido.",
     });
     return;

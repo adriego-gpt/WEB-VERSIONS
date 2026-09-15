@@ -25,12 +25,20 @@ await updateStore((draft) => {
   draft.products = [{ id: "audit-product", sku: "TEST-001", name: "Prenda de prueba", category: "Mujer", productType: "Cortas", price: 25, basePrice: 25, isPublic: true, isFeatured: true, colors: ["Rojo"], sizes: ["M"], catalogColor: "Rojo", description: "Producto ficticio, solo para verificación local.", imagesByColor: { Rojo: ["https://images.unsplash.com/photo-1529139574466-a303027c1d8b?auto=format&fit=crop&w=640&q=70"] }, variants: [{ uid: "audit-variant", color: "Rojo", size: "M", stock: 1 }] }];
   draft.contactSettings = { whatsappNumber: "593999999999", paymentSettings: { accountNumber: "0000000000", accountHolder: "PRUEBA LOCAL", bankName: "Banco de prueba", accountType: "Ahorros", bankAccounts: [{ id: "audit-bank", bankName: "Banco de prueba", accountNumber: "0000000000", accountHolder: "PRUEBA LOCAL", accountType: "Ahorros", enabled: true }] } };
   if (process.argv.includes("--orders")) {
+    // A non-payment test image lets the UI exercise transfer controls too.
+    const qrFixture = draft.products[0].imagesByColor.Rojo[0];
+    draft.contactSettings.paymentSettings.bankQrImage = qrFixture;
+    draft.contactSettings.paymentSettings.bankAccounts[0].bankQrImage = qrFixture;
     draft.orders = Array.from({ length: 3 }, (_, index) => ({
       id: `audit-order-${index + 1}`, code: `TEST-ORDER-${index + 1}`, customerName: "Cliente ficticio de prueba",
       status: "Pendiente", deliveryType: "pickup", paymentMethod: "transfer", total: 25, createdAt: new Date().toISOString(),
       items: [{ id: "audit-product", name: "Prenda de prueba", color: "Rojo", size: "M", quantity: 1, price: 25 }],
       paymentProof: "data:image/png;base64,dGVzdA==", stockReservation: { state: "reserved" },
     }));
+  }
+  if (process.argv.includes("--maintenance")) {
+    draft.storeSettings = { ...(draft.storeSettings || {}), brandName: "Adriego Store", maintenanceSettings: { enabled: true, title: "Volvemos pronto", message: "Estamos realizando ajustes para cuidar cada detalle de tu experiencia. Gracias por tu paciencia.", returnMessage: "" } };
+    draft.contactSettings = { ...draft.contactSettings, address: "Punto de retiro ficticio de prueba", mapsLink: "https://www.google.com/maps/search/?api=1&query=Quito", mapsEmbedUrl: "https://www.google.com/maps?q=Quito&output=embed", email: "audit@localhost.test", legalBusinessName: "Responsable ficticio de prueba", legalAddress: "Domicilio ficticio de prueba" };
   }
   if (process.argv.includes("--gallery")) {
     const source = draft.products[0];
@@ -59,6 +67,15 @@ const previewPlugins = productionPreview ? [{
           res.setHeader("Content-Type", pathname.endsWith(".css") ? "text/css" : pathname.endsWith(".js") ? "application/javascript" : "application/octet-stream");
           res.end(bytes);
         } catch { res.statusCode = 404; res.end(); }
+        return;
+      }
+      if (/^\/(?:admin|cuenta)(?:\/.*)?$|^\/(?:carrito|favoritos|pedidos|buscar)$/.test(pathname)) {
+        // Match Vercel's SPA rewrites so these checks use the compiled app too.
+        try {
+          res.setHeader("Content-Type", "text/html; charset=utf-8");
+          res.setHeader("Cache-Control", "no-store");
+          res.end(await fs.readFile(path.join(projectRoot, "dist", "index.html")));
+        } catch { res.statusCode = 500; res.end("Compilación local no disponible."); }
         return;
       }
       if (pathname !== "/" && !pathname.startsWith("/producto/") && pathname !== "/robots.txt" && pathname !== "/sitemap.xml") { next(); return; }

@@ -17,7 +17,7 @@ export function StoreNotification({ notification, onDismiss, onOpenCart, cartOpe
   const Icon = tone === "success" ? Check : tone === "info" ? Info : CircleAlert;
 
   return (
-    <div className="notification-region" aria-live={tone === "error" ? "assertive" : "polite"} aria-atomic="true">
+    <div className="notification-region" aria-live={tone === "error" || notification?.kind === "stock" ? "assertive" : "polite"} aria-atomic="true">
       <AnimatePresence>
         {notification && (
           <Motion.div

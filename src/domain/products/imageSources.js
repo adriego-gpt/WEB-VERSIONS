@@ -1,4 +1,4 @@
-export function getResponsiveImageSources(src = "", widths = [320, 640, 960]) {
+export function getResponsiveImageSources(src = "", widths = [320, 480, 640, 960]) {
   try {
     const url = new URL(src);
     if (url.protocol !== "https:" || url.username || url.password) return undefined;

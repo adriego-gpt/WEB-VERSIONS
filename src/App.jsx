@@ -2,7 +2,8 @@ import React, { Suspense, useCallback, useDeferredValue, useEffect, useMemo, use
 import { alignImageViews } from "./domain/products/imageViews.js";
 import { getPublicSiteOrigin } from "./constants/site.js";
 import { StoreNotification } from "./components/common/StoreNotification.jsx";
-import { getProductSeo, SITE_DESCRIPTION, SITE_TITLE } from "./domain/products/seo.js";
+import { getProductSeo } from "./domain/products/seo.js";
+import { getStoreSeo, normalizeSeoSettings } from "./domain/store/seoSettings.js";
 import {
   ShoppingBag,
   Plus,
@@ -38,8 +39,6 @@ import {
   MapPin,
   Send,
   ArrowUpRight,
-  Pause,
-  Play,
 } from "lucide-react";
 import { motion as Motion, AnimatePresence, MotionConfig, useReducedMotion } from "framer-motion";
 import {
@@ -75,15 +74,21 @@ import {
 import {
   adoptCatalogVersion,
   createServerCheckoutOrder,
+  checkServerCheckoutReservation,
+  adjustServerCheckoutReservation,
+  getCheckoutReservationId,
+  clearCheckoutReservation,
   deleteServerOrder,
   deleteServerOrders,
   getCatalogState,
+  getRealtimeSyncStatus,
   getSecurityMetricsSnapshot,
   listServerOrders,
   previewCouponApplication,
   resetSecurityMetricsSnapshot,
   syncCatalogState,
   syncContactState,
+  syncMaintenanceState,
   updateServerOrder,
 } from "./services/serverStateService";
 import { dataUrlToBlob, uploadCatalogProductImage, uploadPreparedCatalogImage } from "./services/blobImageService";
@@ -94,6 +99,11 @@ import { useMobileNavGuards } from "./hooks/useMobileNavGuards";
 import { useSwipeGesture } from "./hooks/useSwipeGesture";
 import { useCatalogBootstrap } from "./hooks/useCatalogBootstrap";
 import { useRealtimeSync } from "./hooks/useRealtimeSync";
+import { useCheckoutAvailability } from "./hooks/useCheckoutAvailability";
+import { checkCartAvailability } from "./domain/orders/cartAvailability.js";
+import { projectCartStock, preserveCartSelection } from "./domain/orders/cartEditing.js";
+import { getStockNotificationPresentation, isMaintenanceAvailability } from "./domain/notifications/stock.js";
+import { readCheckoutHistoryDepth } from "./domain/orders/checkoutHistory.js";
 import { useUserStateSync } from "./hooks/useUserStateSync";
 import { buildUserStateSignature, hydrateRemoteUserState } from "./domain/user/remoteState";
 import { resolvePublicLocation } from "./domain/contact/publicLocation";
@@ -117,6 +127,10 @@ import { EmotionalEmptyState } from "./components/ui/EmotionalEmptyState";
 import { ConfirmModal } from "./components/ui/ConfirmModal";
 import { CustomDropdown } from "./components/ui/CustomDropdown";
 import { AnnouncementBar } from "./components/ui/AnnouncementBar";
+import { MaintenancePage } from "./components/common/MaintenancePage";
+import { GoogleMapPreview } from "./components/common/GoogleMapPreview";
+import { normalizeMaintenanceSettings, DEFAULT_MAINTENANCE_SETTINGS, readMaintenanceBootstrap } from "./domain/store/maintenance.js";
+import { resolvePickupLocation } from "./domain/contact/pickupLocation.js";
 import { normalizeOrderStatusForOrder } from "./domain/orders/status";
 import {
   PAYMENT_METHODS,
@@ -132,7 +146,6 @@ import {
   normalizePendingWhatsAppConfirmation,
 } from "./domain/orders/pendingWhatsAppConfirmation";
 import { OrderStatusProgress } from "./components/orders/OrderStatusProgress";
-import { ProductDraftPreview } from "./components/products/ProductDraftPreview";
 import { MemoFeaturedProductMarquee as ExternalFeaturedProductMarquee } from "./components/catalog/FeaturedProductMarquee";
 import { MemoCatalogProductCard as ExternalMemoCatalogProductCard } from "./components/catalog/CatalogProductCard";
 import { CatalogSkeletonCard as ExternalCatalogSkeletonCard } from "./components/catalog/CatalogSkeletonCard";
@@ -144,6 +157,7 @@ import facebookIconUrl from "./assets/social/facebook.svg";
 import tiktokIconUrl from "./assets/social/tiktok.svg";
 import { getProductColorSwatch, normalizeProductColorHex } from "./utils/productColor";
 import { syncProductSelections } from "./domain/products/catalogPresentation";
+import { getResponsiveImageSources, applyImageFallback } from "./domain/products/imageSources.js";
 import "./App.css";
 import {
   ANIMATION,
@@ -244,6 +258,7 @@ const ADMIN_ROUTE_TO_TAB = {
   "/admin/ofertas": "ofertas", "/admin/cupones": "cupones", "/admin/taxonomias": "taxonomias",
   "/admin/pedidos": "pedidos", "/admin/clientes": "usuarios", "/admin/configuracion": "portada",
   "/admin/cuentas": "cuentas", "/admin/contacto": "contacto", "/admin/seguridad": "seguridad",
+  "/admin/identidad": "seo",
 };
 const ADMIN_TAB_TO_ROUTE = {
   resumen: "/admin/hoy", catalogo: "/admin/catalogo", producto: "/admin/catalogo/nuevo",
@@ -251,6 +266,7 @@ const ADMIN_TAB_TO_ROUTE = {
   cupones: "/admin/cupones", taxonomias: "/admin/taxonomias", pedidos: "/admin/pedidos",
   usuarios: "/admin/clientes", portada: "/admin/configuracion", cuentas: "/admin/cuentas",
   contacto: "/admin/contacto", seguridad: "/admin/seguridad",
+  seo: "/admin/identidad",
 };
 
 function resolveAdminTabFromPath(path = "") {
@@ -461,131 +477,6 @@ function ensureManagedEntity(records = [], rawName, prefix = "item") {
 }
 
 
-const initialProducts = [
-  {
-    id: 1,
-    name: "Blazer Oversize Premium",
-    price: 89.99,
-    oldPrice: 109.99,
-    category: "Mujer",
-    description: "Blazer de silueta amplia con cada elegante. Ideal para looks de da y noche.",
-    imagesByColor: {
-      Negro: [
-        "https://images.unsplash.com/photo-1529139574466-a303027c1d8b?auto=format&fit=crop&w=1200&q=80",
-        "https://images.unsplash.com/photo-1524504388940-b1c1722653e1?auto=format&fit=crop&w=1200&q=80",
-      ],
-      Beige: ["https://images.unsplash.com/photo-1483985988355-763728e1935b?auto=format&fit=crop&w=1200&q=80"],
-      Blanco: ["https://images.unsplash.com/photo-1496747611176-843222e1e57c?auto=format&fit=crop&w=1200&q=80"],
-    },
-    colors: ["Negro", "Beige", "Blanco"],
-    sizes: ["XS", "S", "M", "L"],
-    featured: true,
-    rating: 4.9,
-    newArrival: true,
-    productType: "Blazers",
-    filterTags: ["Premium", "Oficina", "Nueva coleccion"],
-  },
-  {
-    id: 2,
-    name: "Camisa Linen Fit",
-    price: 49.99,
-    oldPrice: 59.99,
-    category: "Hombre",
-    description: "Camisa ligera de inspiracin resort con tacto fresco y ajuste impecable.",
-    imagesByColor: {
-      Blanco: ["https://images.unsplash.com/photo-1512436991641-6745cdb1723f?auto=format&fit=crop&w=1200&q=80"],
-      Celeste: ["https://images.unsplash.com/photo-1507679799987-c73779587ccf?auto=format&fit=crop&w=1200&q=80"],
-      Negro: ["https://images.unsplash.com/photo-1506629905607-d9c297d66f42?auto=format&fit=crop&w=1200&q=80"],
-    },
-    colors: ["Blanco", "Celeste", "Negro"],
-    sizes: ["S", "M", "L", "XL"],
-    featured: false,
-    rating: 4.8,
-    newArrival: false,
-    productType: "Camisas",
-    filterTags: ["Casual", "Lino"],
-  },
-  {
-    id: 3,
-    name: "Vestido Midi Satin",
-    price: 79.99,
-    oldPrice: 95.99,
-    category: "Mujer",
-    description: "Vestido de acabado satinado con movimiento suave y estilo sofisticado.",
-    imagesByColor: {
-      Rojo: ["https://images.unsplash.com/photo-1496747611176-843222e1e57c?auto=format&fit=crop&w=1200&q=80"],
-      Negro: ["https://images.unsplash.com/photo-1515886657613-9f3515b0c78f?auto=format&fit=crop&w=1200&q=80"],
-      Champagne: ["https://images.unsplash.com/photo-1487412947147-5cebf100ffc2?auto=format&fit=crop&w=1200&q=80"],
-    },
-    colors: ["Rojo", "Negro", "Champagne"],
-    sizes: ["XS", "S", "M"],
-    featured: true,
-    rating: 4.9,
-    newArrival: true,
-    productType: "Vestidos",
-    filterTags: ["Fiesta", "Satinado", "Premium"],
-  },
-  {
-    id: 4,
-    name: "Chaqueta Urban",
-    price: 99.99,
-    oldPrice: 119.99,
-    category: "Hombre",
-    description: "Chaqueta verstil con presencia moderna para elevar outfits casuales.",
-    imagesByColor: {
-      Negro: ["https://images.unsplash.com/photo-1521572267360-ee0c2909d518?auto=format&fit=crop&w=1200&q=80"],
-      Gris: ["https://images.unsplash.com/photo-1515886657613-9f3515b0c78f?auto=format&fit=crop&w=1200&q=80"],
-      Verde: ["https://images.unsplash.com/photo-1507679799987-c73779587ccf?auto=format&fit=crop&w=1200&q=80"],
-    },
-    colors: ["Negro", "Gris", "Verde"],
-    sizes: ["M", "L", "XL"],
-    featured: false,
-    rating: 4.7,
-    newArrival: false,
-    productType: "Chaquetas",
-    filterTags: ["Streetwear", "Urbano"],
-  },
-  {
-    id: 5,
-    name: "Top Rib Essential",
-    price: 34.99,
-    oldPrice: 42.99,
-    category: "Mujer",
-    description: "Top ajustado bsico premium, perfecto para combinar con prendas clave.",
-    imagesByColor: {
-      Blanco: ["https://images.unsplash.com/photo-1483985988355-763728e1935b?auto=format&fit=crop&w=1200&q=80"],
-      Negro: ["https://images.unsplash.com/photo-1524504388940-b1c1722653e1?auto=format&fit=crop&w=1200&q=80"],
-      Nude: ["https://images.unsplash.com/photo-1487412947147-5cebf100ffc2?auto=format&fit=crop&w=1200&q=80"],
-    },
-    colors: ["Blanco", "Negro", "Nude"],
-    sizes: ["XS", "S", "M", "L"],
-    featured: false,
-    rating: 4.8,
-    newArrival: true,
-    productType: "Tops",
-    filterTags: ["Bsicos", "Rib", "Nuevo"],
-  },
-  {
-    id: 6,
-    name: "Pantalón Tailored Flow",
-    price: 69.99,
-    oldPrice: 84.99,
-    category: "Mujer",
-    description: "Pantalón recto de talle alto con estructura impecable y caída fluida.",
-    imagesByColor: {
-      Negro: ["https://images.unsplash.com/photo-1594633312681-425c7b97ccd1?auto=format&fit=crop&w=1200&q=80"],
-      Camel: ["https://images.unsplash.com/photo-1512436991641-6745cdb1723f?auto=format&fit=crop&w=1200&q=80"],
-      Gris: ["https://images.unsplash.com/photo-1521572267360-ee0c2909d518?auto=format&fit=crop&w=1200&q=80"],
-    },
-    colors: ["Negro", "Camel", "Gris"],
-    sizes: ["S", "M", "L"],
-    featured: true,
-    rating: 4.9,
-    newArrival: false,
-    productType: "Pantalones",
-    filterTags: ["Oficina", "Sastrero"],
-  },
-];
 
 const defaultContactSettings = {
   address: "Av. Principal 123, Quito, Ecuador",
@@ -632,6 +523,7 @@ const defaultStoreSettings = {
     abandonedCartTemplate: "Hola {cliente}, tienes {items} producto(s) pendientes por {total}. Si quieres, te ayudo a cerrarlo ahora mismo.",
   },
   shippingSettings: { ...DEFAULT_SHIPPING_SETTINGS },
+  maintenanceSettings: { ...DEFAULT_MAINTENANCE_SETTINGS },
   heroSlides: [
     {
       id: "slide-1",
@@ -981,6 +873,8 @@ function normalizeContactSettings(rawSettings = {}) {
   const primaryBankAccount = bankAccounts[0] || {};
   return {
     address: sanitizeParagraph(rawSettings.address != null ? rawSettings.address : defaultContactSettings.address),
+    legalBusinessName: sanitizeLine(rawSettings.legalBusinessName || "").slice(0, 160),
+    legalAddress: sanitizeParagraph(rawSettings.legalAddress || "").slice(0, 280),
     locationNote: sanitizeParagraph(rawSettings.locationNote != null ? rawSettings.locationNote : defaultContactSettings.locationNote),
     whatsappNumber: normalizePhoneNumber(rawSettings.whatsappNumber != null ? rawSettings.whatsappNumber : defaultContactSettings.whatsappNumber),
     whatsappLink: normalizeSafeUrl(rawSettings.whatsappLink != null ? rawSettings.whatsappLink : defaultContactSettings.whatsappLink),
@@ -1010,15 +904,14 @@ function resolveContactSettingsWithServerFallback(serverSettings = {}, fallbackS
   const normalizedFallback = normalizeContactSettings(fallbackSettings);
   return {
     ...normalizedServer,
-    mapsLink: normalizedServer.mapsLink || normalizedFallback.mapsLink,
-    mapsEmbedUrl: normalizedServer.mapsEmbedUrl || normalizedFallback.mapsEmbedUrl,
+    mapsLink: serverSettings.mapsLink != null ? normalizedServer.mapsLink : normalizedFallback.mapsLink,
+    mapsEmbedUrl: serverSettings.mapsEmbedUrl != null ? normalizedServer.mapsEmbedUrl : normalizedFallback.mapsEmbedUrl,
   };
 }
 
 function normalizeBrandText(value = "", fallback = "Adriego Store") {
   const normalized = sanitizeLine(value || "");
   if (!normalized) return fallback;
-  if (/atelier/i.test(normalized)) return "Adriego Store";
   return normalized;
 }
 
@@ -1046,9 +939,7 @@ function mergeStoreSettings(rawSettings = {}) {
     rawSettings.brandLabel != null ? rawSettings.brandLabel : defaultStoreSettings.brandLabel,
     defaultStoreSettings.brandLabel,
   );
-  const brandLabel = normalizedBrandLabel.toLowerCase() === brandName.toLowerCase()
-    ? defaultStoreSettings.brandLabel
-    : normalizedBrandLabel;
+  const brandLabel = normalizedBrandLabel;
 
   return {
     ...defaultStoreSettings,
@@ -1107,6 +998,8 @@ function mergeStoreSettings(rawSettings = {}) {
       ],
       defaultStoreSettings.footerText,
     ),
+    maintenanceSettings: normalizeMaintenanceSettings(rawSettings.maintenanceSettings),
+    seoSettings: normalizeSeoSettings(rawSettings.seoSettings),
     automationSettings: normalizeAutomationSettings(
       rawSettings.automationSettings != null
         ? rawSettings.automationSettings
@@ -1458,6 +1351,8 @@ function normalizeOrderRecord(order = {}) {
     deliveryPhone: normalizeUserPhoneNumber(order.deliveryPhone || ""),
     pickupAddress: sanitizeLine(order.pickupAddress || ""),
     pickupNote: sanitizeParagraph(order.pickupNote || ""),
+    pickupMapsLink: resolvePickupLocation({ mapsLink: order.pickupMapsLink }).mapsLink,
+    pickupMapsEmbedUrl: resolvePickupLocation({ mapsEmbedUrl: order.pickupMapsEmbedUrl }).mapsEmbedUrl,
     stockReservation: {
       state: order?.stockReservation?.state === "released"
         ? "released"
@@ -1687,8 +1582,12 @@ export default function App() {
   const [catalogPage, setCatalogPage] = useState(initialCatalogRouteState.page);
   const [selectedProduct, setSelectedProduct] = useState(null);
   const [editingCartItemKey, setEditingCartItemKey] = useState(null);
+  const [cartStockSnapshot, setCartStockSnapshot] = useState(null);
+  const cartStockSnapshotRef = useRef(null);
+  const reservationEditQueueRef = useRef(Promise.resolve());
+  const getCartStockProduct = (product) => projectCartStock(product, cartStockSnapshotRef.current);
   const [heroIndex, setHeroIndex] = useState(0);
-  const [presentationPaused, setPresentationPaused] = useState(false);
+  const [maintenanceSaveBusy, setMaintenanceSaveBusy] = useState(false);
   const [heroHasFocus, setHeroHasFocus] = useState(false);
   const reduceMotion = useReducedMotion();
   const [showAdminPanel, setShowAdminPanel] = useState(false);
@@ -1775,7 +1674,7 @@ export default function App() {
   const [securityMetricsUpdatedAt, setSecurityMetricsUpdatedAt] = useState("");
   const [contactSettings, setContactSettings] = useState(() => normalizeContactSettings(defaultContactSettings));
   const [contactDraft, setContactDraft] = useState(() => normalizeContactSettings(defaultContactSettings));
-  const [storeSettings, setStoreSettings] = useState(() => mergeStoreSettings(defaultStoreSettings));
+  const [storeSettings, setStoreSettings] = useState(() => mergeStoreSettings({ ...defaultStoreSettings, ...readMaintenanceBootstrap() }));
   const [storeDraft, setStoreDraft] = useState(() => mergeStoreSettings(defaultStoreSettings));
   const [adminCatalogQuery, setAdminCatalogQuery] = useState("");
   const [adminUsers, setAdminUsers] = useState([]);
@@ -1795,6 +1694,7 @@ export default function App() {
   const [couponBusy, setCouponBusy] = useState(false);
   const [couponApplyNonce, setCouponApplyNonce] = useState(0);
   const [checkoutBusy, setCheckoutBusy] = useState(false);
+  const checkoutBusyRef = useRef(false);
   const [confettiBursts, setConfettiBursts] = useState([]);
   const [flyToCartFx, setFlyToCartFx] = useState(null);
   const [activeMobileSection, setActiveMobileSection] = useState("inicio");
@@ -1820,6 +1720,7 @@ export default function App() {
   const orderPatchTimersRef = useRef(new Map());
   const orderDeletionLocksRef = useRef(new Set());
   const orderDeleteConfirmationRef = useRef(false);
+  const stockNoticeRef = useRef({ key: "", shownAt: 0 });
   const confettiTimersRef = useRef(new Map());
   const pendingCouponCelebrationRef = useRef("");
   const flyToCartTimerRef = useRef(null);
@@ -1972,7 +1873,7 @@ export default function App() {
     if (typeof window !== "undefined") {
       const nextRoute = ADMIN_TAB_TO_ROUTE[nextTab] || "/admin/hoy";
       if (window.location.pathname !== nextRoute) {
-        window.history.replaceState(window.history.state || {}, document.title, nextRoute);
+        window.history.pushState({ [ADMIN_WORKSPACE_HISTORY_KEY]: true }, document.title, nextRoute);
         setPathname(nextRoute);
       }
     }
@@ -2004,15 +1905,16 @@ export default function App() {
     setShowFavoritesPanel(false);
     setShowCartSummary(true);
     if (typeof window !== "undefined" && window.location.pathname !== "/carrito") {
-      window.history.pushState({ ...(window.history.state || {}), [CART_PAGE_HISTORY_KEY]: true }, document.title, "/carrito");
+      window.history.pushState({ adriegoNavigation: true, [CART_PAGE_HISTORY_KEY]: true, adriegoCheckoutDepth: 0 }, document.title, "/carrito");
       setPathname("/carrito");
     }
   }, []);
-  const closeCartPage = useCallback(() => {
+  const closeCartPage = useCallback(({ force = false } = {}) => {
+    if (checkoutBusyRef.current && !force) return;
     setShowCartSummary(false);
     if (typeof window === "undefined" || window.location.pathname !== "/carrito") return;
     if (window.history.state?.[CART_PAGE_HISTORY_KEY]) {
-      window.history.back();
+      window.history.go(-(readCheckoutHistoryDepth(window.history.state) + 1));
       return;
     }
     window.history.replaceState({}, document.title, "/");
@@ -2077,6 +1979,13 @@ export default function App() {
 
   useEffect(() => {
     if (typeof window === "undefined") return undefined;
+    // A direct link gets an in-site parent once. Do not trap Back on the home page.
+    const initialPath = window.location.pathname;
+    if (!window.history.state?.adriegoNavigation && !window.history.state?.[ADMIN_WORKSPACE_HISTORY_KEY] && (/^\/(carrito|favoritos|pedidos|producto\/|admin(?:\/|$))/.test(initialPath))) {
+      const originalUrl = `${initialPath}${window.location.search}${window.location.hash}`;
+      window.history.replaceState({ adriegoNavigation: true }, document.title, "/");
+      window.history.pushState({ adriegoNavigation: true, ...(initialPath === "/carrito" ? { [CART_PAGE_HISTORY_KEY]: true } : {}) }, document.title, originalUrl);
+    }
     const handlePopState = (event) => {
       const nextPathname = window.location.pathname || "/";
       setPathname(nextPathname);
@@ -2144,7 +2053,8 @@ export default function App() {
     }
     robotsMeta.setAttribute("content", robots);
     const origin = getPublicSiteOrigin(import.meta.env.VITE_PUBLIC_SITE_URL);
-    const productSeo = routedProduct ? getProductSeo(routedProduct, origin) : null;
+    const site = getStoreSeo(storeSettings, origin);
+    const productSeo = routedProduct ? getProductSeo(routedProduct, origin, site.brandName) : null;
     const productName = sanitizeLine(routedProduct?.name || "Producto");
     const productDescription = sanitizeParagraph(
       productSeo?.description || `Consulta los colores, tallas y disponibilidad de ${productName} en Adriego Store. Compra desde la web.`,
@@ -2165,21 +2075,39 @@ export default function App() {
       ? "Restablecer contraseña | Adriego Store"
       : (isMissingRoute
         ? "Página no encontrada | Adriego Store"
-        : (routedProduct ? `${productName} | Adriego Store` : (utilityRouteTitle || SITE_TITLE)));
+        : (routedProduct ? `${productName} | ${site.brandName}` : (utilityRouteTitle || site.title)));
     const description = adminRouteActive
       ? "Espacio privado de administración de Adriego Store."
-      : routedProduct ? productDescription : SITE_DESCRIPTION;
+      : routedProduct ? productDescription : site.description;
     document.title = title;
     upsertRouteMeta('meta[name="description"]', ["name", "description"], description);
     upsertRouteMeta('meta[property="og:title"]', ["property", "og:title"], title);
+    upsertRouteMeta('meta[property="og:site_name"]', ["property", "og:site_name"], site.brandName);
     upsertRouteMeta('meta[property="og:description"]', ["property", "og:description"], description);
     upsertRouteMeta('meta[property="og:type"]', ["property", "og:type"], routedProduct ? "product" : "website");
     upsertRouteMeta('meta[property="og:url"]', ["property", "og:url"], `${origin}${normalizedPathname}`);
-    upsertRouteMeta('meta[property="og:image"]', ["property", "og:image"], routedProduct ? productImage : `${origin}/og-cover.jpg`);
+    upsertRouteMeta('meta[property="og:image"]', ["property", "og:image"], routedProduct ? productImage : site.imageUrl);
     upsertRouteMeta('meta[name="twitter:card"]', ["name", "twitter:card"], "summary_large_image");
     upsertRouteMeta('meta[name="twitter:title"]', ["name", "twitter:title"], title);
     upsertRouteMeta('meta[name="twitter:description"]', ["name", "twitter:description"], description);
-    upsertRouteMeta('meta[name="twitter:image"]', ["name", "twitter:image"], routedProduct ? productImage : `${origin}/og-cover.jpg`);
+    upsertRouteMeta('meta[name="twitter:image"]', ["name", "twitter:image"], routedProduct ? productImage : site.imageUrl);
+    for (const rel of ["icon", "apple-touch-icon"]) {
+      const icons = document.querySelectorAll(`link[rel="${rel}"]`);
+      const icon = icons[0] || document.createElement("link");
+      for (let index = 1; index < icons.length; index += 1) icons[index].remove();
+      icon.rel = rel;
+      icon.removeAttribute("type");
+      icon.href = site.faviconUrl;
+      if (!icons.length) document.head.appendChild(icon);
+    }
+    const existingSiteSchema = document.getElementById("site-jsonld");
+    if (normalizedPathname === "/" && !adminRouteActive) {
+      const siteSchema = existingSiteSchema || document.createElement("script");
+      siteSchema.id = "site-jsonld";
+      siteSchema.type = "application/ld+json";
+      siteSchema.textContent = JSON.stringify(site.schema).replace(/</g, "\\u003c");
+      if (!existingSiteSchema) document.head.appendChild(siteSchema);
+    } else existingSiteSchema?.remove();
 
     let canonical = document.querySelector('link[rel="canonical"]');
     if (!canonical) {
@@ -2199,7 +2127,7 @@ export default function App() {
     schema.type = "application/ld+json";
     schema.textContent = JSON.stringify(productSeo.schema).replace(/</g, "\\u003c");
     if (!existingSchema) document.head.appendChild(schema);
-  }, [adminRouteActive, catalogReady, isResetRoute, normalizedPathname, productRouteSlug, routedProduct]);
+  }, [adminRouteActive, catalogReady, isResetRoute, normalizedPathname, productRouteSlug, routedProduct, storeSettings]);
   const knownAdminOrderIdsRef = useRef(new Set());
   const adminOrdersHydratedRef = useRef(false);
   const checkoutAttemptRef = useRef({ signature: "", idempotencyKey: "" });
@@ -2216,7 +2144,7 @@ export default function App() {
   const heroSlides = storeSettings.heroSlides.length ? storeSettings.heroSlides : defaultStoreSettings.heroSlides;
   const activeHeroSlide = heroSlides[heroIndex] || defaultStoreSettings.heroSlides[0];
   const heroSlideHasAction = Boolean(activeHeroSlide?.linkedProductId || activeHeroSlide?.targetUrl?.trim());
-  const shouldPauseHeroAutoplay = presentationPaused || heroHasFocus || reduceMotion || showAdminPanel
+  const shouldPauseHeroAutoplay = storeSettings.maintenanceSettings.enabled || heroHasFocus || reduceMotion || showAdminPanel
     || showMobileNav
     || showCartSummary
     || showFavoritesPanel
@@ -2577,6 +2505,10 @@ export default function App() {
 
     return {
       ...publicLocation,
+      legalBusinessName: contactSettings.legalBusinessName,
+      legalAddress: contactSettings.legalAddress,
+      email: contactSettings.email,
+      phone: contactSettings.phone,
       whatsappLink: hasPublicWhatsapp ? footerWhatsAppLink : "",
       emailLink: footerEmailLink,
       instagram: isLegacySocialLink(contactSettings.instagram) ? "" : contactSettings.instagram,
@@ -2586,6 +2518,14 @@ export default function App() {
     };
   }, [contactSettings, footerEmailLink, footerWhatsAppLink]);
   const isAdmin = Boolean(adminSession);
+
+  useEffect(() => {
+    if (!storeSettings.maintenanceSettings.enabled || isAdmin) return;
+    setSelectedProduct(null);
+    setShowCartSummary(false);
+    setShowFavoritesPanel(false);
+    setShowMobileNav(false);
+  }, [storeSettings.maintenanceSettings.enabled, isAdmin]);
 
   useEffect(() => {
     if (
@@ -2716,6 +2656,15 @@ export default function App() {
       kind: "",
     });
   }, []);
+
+  const notifyStockWarning = useCallback((result) => {
+    if (!result || result.ok || isMaintenanceAvailability(result)) return;
+    const presentation = getStockNotificationPresentation(result);
+    const now = Date.now();
+    if (stockNoticeRef.current.key === presentation.key && now - stockNoticeRef.current.shownAt < 10000) return;
+    stockNoticeRef.current = { key: presentation.key, shownAt: now };
+    showToastMessage({ ...presentation, tone: "warning", kind: "stock", action: "cart" });
+  }, [showToastMessage]);
 
   const refreshSecurityMetrics = useCallback(async ({ silent = false, force = false, preferCache = true } = {}) => {
     if (!silent) {
@@ -3178,6 +3127,63 @@ export default function App() {
     return enqueueAsyncOperation(catalogSyncQueueRef, runSync);
   }, [applyCatalogStateFromServer, catalogReady, isAdmin, showToastMessage]);
 
+  const verifyCheckoutAvailability = useCallback(async (lines, { background = false, reserve = false, reservationOnly = false } = {}) => {
+    if (reserve || reservationOnly) await reservationEditQueueRef.current.catch(() => {});
+    if (reserve || reservationOnly || getCheckoutReservationId()) {
+      const held = await checkServerCheckoutReservation(lines, { reserve, allowCartChanges: !reservationOnly });
+      if (reserve && JSON.stringify(lines) !== JSON.stringify(cartRef.current)) {
+        await adjustServerCheckoutReservation(cartRef.current);
+        return { ok: false, message: "El carrito cambió mientras comprobábamos el stock. Revisa las prendas y vuelve a confirmar la entrega." };
+      }
+      const snapshot = held.stockExpiresAt && held.stock ? { stock: held.stock, stockDeadline: Date.now() + Math.max(0, held.stockExpiresAt - held.serverNow) } : null;
+      cartStockSnapshotRef.current = snapshot;
+      setCartStockSnapshot(snapshot);
+      if (!reserve && !reservationOnly && (held.status === 401 || held.code === "RESERVATION_EXPIRED")) clearCheckoutReservation();
+      if (held.ok || reserve || reservationOnly || (held.status !== 401 && !["RESERVATION_EXPIRED", "RESERVATION_REQUIRED"].includes(held.code))) return held;
+    }
+    // Poll the small revision document, not all product photos every five seconds.
+    if (background) {
+      const live = await getRealtimeSyncStatus({ privateStatus: isAdmin, force: true, preferCache: false, maxAgeMs: 0 });
+      if (!live?.ok || !live.versions) return { ok: false, message: "No pudimos verificar el stock actualizado. No realices el pago todavía. Comprueba tu conexión." };
+      if (Number(live.versions.catalog) === Number(realtimeSyncVersionsRef.current.catalog)) {
+        if (storeSettingsRef.current?.maintenanceSettings?.enabled) return { ok: false, message: "La tienda está en mantenimiento. No realices el pago todavía." };
+        return { ...checkCartAvailability(lines, productsRef.current), paymentSettings: contactSettingsRef.current?.paymentSettings };
+      }
+    }
+    const result = await getCatalogState({ admin: isAdmin, force: true, fresh: true, preferCache: false, maxAgeMs: 0 });
+    if (!result?.ok || !Array.isArray(result.data?.products)) {
+      return { ok: false, message: "No pudimos verificar el stock actualizado. No realices el pago todavía. Comprueba tu conexión y vuelve a intentarlo." };
+    }
+    applyCatalogStateFromServer(result.data);
+    if (result.data.storeSettings?.maintenanceSettings?.enabled) {
+      return { ok: false, message: "La tienda está en mantenimiento. No realices el pago todavía." };
+    }
+    return { ...checkCartAvailability(lines, productsRef.current), paymentSettings: result.data.contactSettings?.paymentSettings };
+  }, [applyCatalogStateFromServer, isAdmin]);
+
+  useEffect(() => {
+    if (!catalogReady || isAdmin || checkoutBusyRef.current || !getCheckoutReservationId()) return;
+    let stopped = false;
+    reservationEditQueueRef.current = reservationEditQueueRef.current.catch(() => {}).then(async () => {
+      if (stopped) return;
+      const result = await adjustServerCheckoutReservation(cart);
+      if (stopped || !result.ok) return;
+      const snapshot = result.stockExpiresAt && result.stock ? { stock: result.stock, stockDeadline: Date.now() + Math.max(0, result.stockExpiresAt - result.serverNow) } : null;
+      cartStockSnapshotRef.current = snapshot;
+      setCartStockSnapshot(snapshot);
+    });
+    return () => { stopped = true; };
+  }, [cart, catalogReady, isAdmin]);
+
+  // Keep warning about a saved cart even while the customer is browsing.
+  useCheckoutAvailability({
+    open: catalogReady && !isAdmin && !showCartSummary && !storeSettings.maintenanceSettings.enabled,
+    cart,
+    onCheckAvailability: verifyCheckoutAvailability,
+    onAvailabilityWarning: notifyStockWarning,
+    refreshKey: products,
+  });
+
 
   const resolveCatalogConflict = useCallback(async (decision) => {
     const conflict = catalogConflict;
@@ -3633,8 +3639,9 @@ export default function App() {
       if (product) {
         setSelectedProduct((previous) => (String(previous?.id) === String(product.id) ? previous : product));
       }
-    } else if (selectedProduct && !editingCartItemKey) {
+    } else if (selectedProduct || editingCartItemKey) {
       setSelectedProduct(null);
+      setEditingCartItemKey(null);
     }
   }, [catalogReady, editingCartItemKey, productRouteSlug, products, selectedProduct]);
 
@@ -3674,10 +3681,6 @@ export default function App() {
     admin: adminRouteActive,
   });
 
-  useEffect(() => {
-    void refreshOrdersFromServer({ silent: true });
-  }, [refreshOrdersFromServer]);
-
   useRealtimeSync({
     adminTab,
     applyCatalogState: applyCatalogStateFromServer,
@@ -3691,6 +3694,9 @@ export default function App() {
     showAdminPanel,
     onStatusChange: setRealtimeSyncStatus,
     retryKey: realtimeSyncRetryKey,
+    // Checkout has its own five-second authoritative reservation check; keep
+    // this catalog poll for product detail only so a cart does not duplicate it.
+    shoppingActive: Boolean(selectedProduct),
   });
 
   useEffect(() => {
@@ -3922,9 +3928,15 @@ export default function App() {
       return;
     }
     if (freshProduct !== selectedProduct) {
+      const selection = selections[selectedProduct.id];
+      if (selection?.color && selection?.size && !getCheckoutReservationId()
+        && getStockForVariant(selectedProduct, selection.color, selection.size) > 0
+        && getStockForVariant(freshProduct, selection.color, selection.size) <= 0) {
+        notifyStockWarning({ code: "OUT_OF_STOCK", message: `${freshProduct.name} (${selection.color} / ${selection.size}) se agotó mientras la estabas viendo. Elige otra variante; no realices el pago.` });
+      }
       setSelectedProduct(freshProduct);
     }
-  }, [products, selectedProduct]);
+  }, [products, selectedProduct, selections, notifyStockWarning]);
 
   useEffect(() => {
     if (!catalogReady) return;
@@ -3932,7 +3944,7 @@ export default function App() {
       const next = previous
         .map((item) => {
           const product = productsById.get(normalizeEntityId(item.id));
-          if (!product) return null;
+          if (!product) return item;
           return {
             ...item,
             id: normalizeEntityId(item.id),
@@ -3965,10 +3977,8 @@ export default function App() {
     if (isAdmin || !catalogReady) return;
     setCart((previous) => {
       const normalized = normalizeStoredCart(previous);
-      const filtered = normalized.filter((item) => {
-        const product = productsById.get(normalizeEntityId(item.id));
-        return Boolean(product) && product.isPublic !== false;
-      });
+      // Keep unavailable lines visible so customers are told what changed.
+      const filtered = normalized;
       if (filtered.length !== normalized.length) return filtered;
       const unchanged = filtered.length === previous.length && filtered.every((item, index) => {
         const current = previous[index];
@@ -4106,7 +4116,7 @@ export default function App() {
     || showCartSummary
     || showFavoritesPanel
     || showOrdersModal
-    || (!adminRouteActive && orderSuccessModal.open)
+    || (!adminRouteActive && !(storeSettings.maintenanceSettings.enabled && !isAdmin) && orderSuccessModal.open)
     || showUserAuth
     || showProfileModal
     || legalModalState.open
@@ -4324,7 +4334,7 @@ export default function App() {
   };
 
   const handleSelection = (productId, field, value) => {
-    const product = productsById.get(productId);
+    const product = getCartStockProduct(productsById.get(productId));
     setSelections((previous) => {
       const current = previous[productId] || {};
       if (!product) {
@@ -4370,7 +4380,7 @@ export default function App() {
   const clearCartState = () => {
     setCart([]);
     removeStorage(STORAGE_KEYS.cart);
-    closeCartPage();
+    closeCartPage({ force: true });
   };
 
   const openProductDetail = (product, selectionOverride = null, options = {}) => {
@@ -4384,7 +4394,9 @@ export default function App() {
       setEditingCartItemKey(null);
     }
     const preferredInput = selectionOverride || selections[product.id] || {};
-    const preferred = getFallbackSelection(product, preferredInput);
+    const preferred = selectionOverride
+      ? preserveCartSelection(getCartStockProduct(product), preferredInput, getFallbackSelection)
+      : getFallbackSelection(getCartStockProduct(product), preferredInput);
     trackAnalyticsEvent("product_opened", {
       product_id: String(product.id || ""),
       slug: String(product.slug || product.id || ""),
@@ -4400,6 +4412,7 @@ export default function App() {
       [product.id]: {
         color: preferred.color,
         size: preferred.size,
+        ...(selectionOverride ? { source: "user" } : {}),
       },
     }));
 
@@ -4426,6 +4439,12 @@ export default function App() {
 
   const closeProductModal = ({ returnToCart = false } = {}) => {
     const wasEditingCartItem = Boolean(editingCartItemKey);
+    if (returnToCart && wasEditingCartItem && typeof window !== "undefined" && window.history.state?.[PRODUCT_PAGE_HISTORY_KEY] && window.history.state?.[CART_PAGE_HISTORY_KEY]) {
+      setSelectedProduct(null);
+      setEditingCartItemKey(null);
+      window.history.back();
+      return;
+    }
     if (typeof window !== "undefined" && /^\/producto\/[^/]+\/?$/.test(window.location.pathname)) {
       window.history.replaceState({}, document.title, "/");
       setPathname("/");
@@ -4452,21 +4471,26 @@ export default function App() {
   };
 
   const addToCart = (product, animationMeta = null, selectionOverride = null) => {
+    if (checkoutBusyRef.current) return false;
+    product = getCartStockProduct(productsById.get(normalizeEntityId(product.id)) || product);
     if (!isAdmin && product?.isPublic === false) {
       showToastMessage("Esta prenda ya no está disponible.", "info");
       return false;
     }
-    const selection = getFallbackSelection(product, selectionOverride || selections[product.id] || {});
+    const preferredSelection = selectionOverride || selections[product.id] || {};
+    const selection = preserveCartSelection(product, preferredSelection, getFallbackSelection);
     if ((selections[product.id]?.color !== selection.color || selections[product.id]?.size !== selection.size) && selection.availableStock > 0) {
       setSelections((previous) => ({
         ...previous,
-        [product.id]: { color: selection.color, size: selection.size },
+        [product.id]: { color: selection.color, size: selection.size, source: "user" },
       }));
     }
     const key = `${product.id}-${selection.color}-${selection.size}`;
     const chosenImage = getCurrentImageForProduct(product, selection.color);
     const availableStock = selection.availableStock;
+    const requestedQuantity = Math.min(10, Math.max(1, Math.floor(Number(selectionOverride?.quantity) || 1)));
     let cartWasUpdated = false;
+    let addedQuantity = 0;
 
     if (!editingCartItemKey) {
       const knownExistingItem = cart.find((item) => item.key === key);
@@ -4480,7 +4504,7 @@ export default function App() {
       }
     }
 
-    setCart((previous) => {
+    const buildNextCart = (previous) => {
       if (editingCartItemKey) {
         const editingItem = previous.find((item) => item.key === editingCartItemKey);
         if (!editingItem) {
@@ -4493,7 +4517,6 @@ export default function App() {
           return previous;
         }
 
-        const requestedQuantity = Math.max(1, Number(editingItem.quantity) || 1);
         const adjustedQuantity = Math.min(requestedQuantity, availableStock);
 
         if (key === editingItem.key) {
@@ -4524,7 +4547,7 @@ export default function App() {
 
         if (duplicate) {
           const mergedDesired = duplicate.quantity + adjustedQuantity;
-          const mergedQuantity = Math.min(mergedDesired, availableStock);
+          const mergedQuantity = Math.min(mergedDesired, availableStock, 10);
           if (mergedQuantity < mergedDesired) {
             showToastMessage(`Se fusiono con un item existente y se ajusto a ${mergedQuantity} unidad(es) por stock.`, "warning");
           } else {
@@ -4572,20 +4595,40 @@ export default function App() {
 
       const existing = previous.find((item) => item.key === key);
       if (existing) {
-        if (existing.quantity >= availableStock) {
+        const quantityToAdd = Math.min(requestedQuantity, Math.max(0, Math.min(10, availableStock) - existing.quantity));
+        if (quantityToAdd <= 0) {
           showToastMessage("Ya alcanzaste el stock disponible para esa talla.", "warning");
           return previous;
         }
-        showToastMessage({ title: "Carrito actualizado", message: product.name, kind: "cart", action: "cart" });
+        showToastMessage({
+          title: "Carrito actualizado",
+          message: quantityToAdd < requestedQuantity
+            ? `${product.name}: agregamos las últimas ${quantityToAdd} unidad${quantityToAdd === 1 ? "" : "es"} disponibles.`
+            : product.name,
+          tone: quantityToAdd < requestedQuantity ? "warning" : "success",
+          kind: "cart",
+          action: "cart",
+        });
         cartWasUpdated = true;
-        return previous.map((item) => item.key === key ? { ...item, quantity: item.quantity + 1 } : item);
+        addedQuantity = quantityToAdd;
+        return previous.map((item) => item.key === key ? { ...item, quantity: item.quantity + quantityToAdd } : item);
       }
       if (availableStock <= 0) {
         showToastMessage("Esa talla está agotada por ahora.", "error");
         return previous;
       }
-      showToastMessage({ title: "Añadido al carrito", message: product.name, kind: "cart", action: "cart" });
+      const quantityToAdd = Math.min(requestedQuantity, availableStock);
+      showToastMessage({
+        title: "Añadido al carrito",
+        message: quantityToAdd < requestedQuantity
+          ? `${product.name}: agregamos las últimas ${quantityToAdd} unidad${quantityToAdd === 1 ? "" : "es"} disponibles.`
+          : product.name,
+        tone: quantityToAdd < requestedQuantity ? "warning" : "success",
+        kind: "cart",
+        action: "cart",
+      });
       cartWasUpdated = true;
+      addedQuantity = quantityToAdd;
       return [
         ...previous,
         {
@@ -4596,18 +4639,19 @@ export default function App() {
           image: chosenImage,
           color: selection.color,
           size: selection.size,
-          quantity: 1,
+          quantity: quantityToAdd,
         },
       ];
-    });
-
+    };
+    const nextCart = buildNextCart(cart);
     if (!cartWasUpdated) return false;
+    setCart(nextCart);
     trackAnalyticsEvent("cart_item_added", {
       product_id: String(product.id || ""),
       variant_size: String(selection.size || ""),
       variant_color: String(selection.color || ""),
       unit_price: Number(product.price || 0),
-      quantity: 1,
+      quantity: addedQuantity || requestedQuantity,
     });
     triggerFlyToCart({
       sourceElement: animationMeta?.sourceElement,
@@ -4617,6 +4661,7 @@ export default function App() {
   };
 
   const updateQuantity = async (key, delta) => {
+    if (checkoutBusyRef.current) return;
     const item = cart.find((entry) => entry.key === key);
     if (!item) return;
 
@@ -4634,10 +4679,10 @@ export default function App() {
       return;
     }
 
-    const product = productsById.get(normalizeEntityId(item.id));
+    const product = getCartStockProduct(productsById.get(normalizeEntityId(item.id)));
     const availableStock = getStockForVariant(product, item.color, item.size);
     const nextQuantity = item.quantity + delta;
-    if (delta > 0 && nextQuantity > availableStock) {
+    if (delta > 0 && nextQuantity > Math.min(10, availableStock)) {
       showToastMessage("Has alcanzado el stock disponible para esta prenda y talla.", "warning");
       return;
     }
@@ -4645,12 +4690,14 @@ export default function App() {
     setCart((previous) => previous
       .map((entry) => {
         if (entry.key !== key) return entry;
-        if (nextQuantity > availableStock) return entry;
-        return { ...entry, quantity: nextQuantity };
+        const currentNextQuantity = entry.quantity + delta;
+        if (delta > 0 && currentNextQuantity > Math.min(10, availableStock)) return entry;
+        return { ...entry, quantity: Math.max(1, currentNextQuantity) };
       }));
   };
 
   const removeItem = async (key) => {
+    if (checkoutBusyRef.current) return;
     const item = cart.find((entry) => entry.key === key);
     if (!item) return;
 
@@ -4763,6 +4810,10 @@ export default function App() {
   };
 
   const handleUserLogout = async ({ closeMobileNav = false } = {}) => {
+    if (checkoutBusyRef.current) {
+      showToastMessage("Espera a que termine la confirmación de tu pedido antes de cerrar sesión.", "info");
+      return;
+    }
     await flushUserStateSync();
     const logoutResult = await logoutUserAccount();
     if (!logoutResult?.ok) {
@@ -5707,7 +5758,7 @@ export default function App() {
   };
 
   const handleCheckoutViaWhatsApp = async (checkoutPayload = null) => {
-    if (!cart.length || checkoutBusy) return;
+    if (!cart.length || checkoutBusy || checkoutBusyRef.current) return;
 
     if (!currentUser?.email && !checkoutPayload?.guestCheckout) {
       setShowCartSummary(false);
@@ -5719,12 +5770,22 @@ export default function App() {
       return;
     }
 
+    checkoutBusyRef.current = true;
+    setCheckoutBusy(true);
+    try {
+    const availability = await verifyCheckoutAvailability(cart, { reservationOnly: true });
+    if (!availability.ok) {
+      if (!showCartSummary) notifyStockWarning(availability);
+      setShowCartSummary(true);
+      return availability;
+    }
+
     if (activeCouponCode && !appliedCouponState?.ok) {
       showToastMessage(appliedCouponState.message || "El cupón no es válido para este carrito. Corrígelo o quítalo para continuar.", "error");
       return;
     }
 
-    const unavailableCartLine = cart.find((line) => {
+    const unavailableCartLine = !availability.reservationId && cart.find((line) => {
       const product = productsById.get(normalizeEntityId(line.id));
       if (!product || product.isPublic === false) return true;
       const availableStock = getStockForVariant(product, line.color, line.size);
@@ -5733,11 +5794,12 @@ export default function App() {
     if (unavailableCartLine) {
       const product = productsById.get(normalizeEntityId(unavailableCartLine.id));
       const availableStock = product ? getStockForVariant(product, unavailableCartLine.color, unavailableCartLine.size) : 0;
-      if (availableStock <= 0) {
-        showToastMessage(`La prenda "${unavailableCartLine.name}" (${unavailableCartLine.color} / ${unavailableCartLine.size}) está agotada. Quítala del carrito para continuar.`, "warning");
-      } else {
-        showToastMessage(`Solo quedan ${availableStock} unidad(es) de "${unavailableCartLine.name}" (${unavailableCartLine.color} / ${unavailableCartLine.size}). Ajusta tu carrito para continuar.`, "warning");
-      }
+      notifyStockWarning({
+        code: availableStock <= 0 ? "OUT_OF_STOCK" : "INSUFFICIENT_STOCK",
+        message: availableStock <= 0
+          ? `${unavailableCartLine.name} (${unavailableCartLine.color} / ${unavailableCartLine.size}) se agotó.`
+          : `Solo quedan ${availableStock} unidades de ${unavailableCartLine.name} (${unavailableCartLine.color} / ${unavailableCartLine.size}).`,
+      });
       setShowCartSummary(true);
       return;
     }
@@ -5811,6 +5873,7 @@ export default function App() {
     try {
       const checkoutRequest = {
         cart,
+        reservationId: availability.reservationId,
         guestCheckout: !currentUser?.email && checkoutPayload?.guestCheckout === true,
         couponCode: activeCouponCode,
         paymentMethod,
@@ -5829,14 +5892,16 @@ export default function App() {
       const response = await createServerCheckoutOrder({ ...checkoutRequest, idempotencyKey });
       if (!response.ok || !response.order) {
         const errorDetail = response?.message || "No pudimos recibir tu pedido. Revisa tu carrito e inténtalo nuevamente.";
-        showToastMessage(errorDetail, "error");
+        const availabilityFailure = response?.code === "RESERVATION_EXPIRED" || /agot|stock|disponib|carrito cambió/i.test(errorDetail);
+        if (!availabilityFailure) showToastMessage(errorDetail, "error");
         if (Array.isArray(response?.products)) {
           setProducts(response.products.map(normalizeProduct));
         }
         setShowCartSummary(true);
-        return;
+        return availabilityFailure ? { ...response, ok: false, message: errorDetail } : undefined;
       }
       checkoutAttemptRef.current = { signature: "", idempotencyKey: "" };
+      clearCheckoutReservation();
       setGuestOrderId(response.guestId || "");
 
       trackAnalyticsEvent("order_created", {
@@ -5898,7 +5963,9 @@ export default function App() {
       }, "success");
     } catch {
       showToastMessage("No pudimos recibir tu pedido. Revisa tu conexión e inténtalo nuevamente.", "error");
+    }
     } finally {
+      checkoutBusyRef.current = false;
       setCheckoutBusy(false);
     }
   };
@@ -5939,12 +6006,14 @@ export default function App() {
   };
 
   const openProductFromCartItem = (item) => {
+    if (checkoutBusyRef.current) return;
     const product = productsById.get(normalizeEntityId(item.id));
     if (!product) return;
     openProductDetail(product, { color: item.color, size: item.size });
   };
 
   const startEditingCartItem = (item) => {
+    if (checkoutBusyRef.current) return;
     const product = productsById.get(normalizeEntityId(item.id));
     if (!product) return;
     setEditingCartItemKey(item.key);
@@ -6001,7 +6070,7 @@ export default function App() {
     setAdminTab("producto");
     if (typeof window !== "undefined") {
       const nextRoute = `/admin/catalogo/${encodeURIComponent(normalizeEntityId(product.id))}`;
-      window.history.replaceState(window.history.state || {}, document.title, nextRoute);
+      window.history.pushState({ [ADMIN_WORKSPACE_HISTORY_KEY]: true }, document.title, nextRoute);
       setPathname(nextRoute);
     }
     if (typeof document !== "undefined") {
@@ -6070,7 +6139,7 @@ export default function App() {
     setShowAdminPanel(true);
     setAdminTab("producto");
     if (typeof window !== "undefined") {
-      window.history.replaceState(window.history.state || {}, document.title, "/admin/catalogo/nuevo");
+      window.history.pushState({ [ADMIN_WORKSPACE_HISTORY_KEY]: true }, document.title, "/admin/catalogo/nuevo");
       setPathname("/admin/catalogo/nuevo");
     }
     showToastMessage(`Fotos de “${form.name}” listas para completar.`, "success");
@@ -6082,7 +6151,7 @@ export default function App() {
     const productSlug = slugify(product.slug || product.name || product.id || "");
     if (productSlug && typeof window !== "undefined") {
       const nextPath = `/producto/${encodeURIComponent(productSlug)}`;
-      window.history.replaceState(window.history.state, document.title, nextPath);
+      window.history.pushState({ [PRODUCT_PAGE_HISTORY_KEY]: true }, document.title, nextPath);
       setPathname(nextPath);
     }
     openProductDetail(product, null, { source: "product_recommendation", syncRoute: false });
@@ -6110,7 +6179,7 @@ export default function App() {
     setShowAdminPanel(true);
     setAdminTab("producto");
     if (typeof window !== "undefined") {
-      window.history.replaceState(window.history.state || {}, document.title, "/admin/catalogo/nuevo");
+      window.history.pushState({ [ADMIN_WORKSPACE_HISTORY_KEY]: true }, document.title, "/admin/catalogo/nuevo");
       setPathname("/admin/catalogo/nuevo");
     }
   };
@@ -7854,8 +7923,26 @@ export default function App() {
     }
   };
 
+  const saveBrandSeoConfiguration = async (draft) => {
+    if (!isAdmin || !catalogReady) return { ok: false, message: "Espera a que la tienda termine de cargar y vuelve a guardar." };
+    const next = mergeStoreSettings({
+      ...storeSettingsRef.current, brandName: draft.brandName, brandLabel: draft.brandLabel,
+      seoSettings: normalizeSeoSettings(draft.seoSettings),
+    });
+    const result = await syncCatalogSnapshot({ storeSettings: next }, { silent: true });
+    if (!result.ok) return { ok: false, message: result.message || "No se guardaron los cambios. Reintenta." };
+    const saved = mergeStoreSettings(result.data?.storeSettings || { ...next, maintenanceSettings: storeSettingsRef.current.maintenanceSettings });
+    storeSettingsRef.current = saved;
+    setStoreSettings(saved);
+    setStoreDraft(previous => ({ ...previous, brandName: saved.brandName, brandLabel: saved.brandLabel, seoSettings: saved.seoSettings }));
+    return { ok: true, data: saved };
+  };
+
   const saveStoreConfiguration = async () => {
-    const nextStoreSettings = mergeStoreSettings(storeDraft);
+    const nextStoreSettings = mergeStoreSettings({ ...storeDraft,
+      brandName: storeSettingsRef.current.brandName, brandLabel: storeSettingsRef.current.brandLabel,
+      seoSettings: storeSettingsRef.current.seoSettings,
+      maintenanceSettings: storeSettingsRef.current.maintenanceSettings });
     setStoreSettings(nextStoreSettings);
     storeSettingsRef.current = nextStoreSettings;
     setEditorMessage("La portada, branding, ofertas y slides fueron actualizados.");
@@ -7868,6 +7955,29 @@ export default function App() {
       return;
     }
     showToastMessage("Portada, branding y slides actualizados y sincronizados.", "success");
+  };
+
+  const saveMaintenanceConfiguration = async (settings) => {
+    if (maintenanceSaveBusy || !isAdmin || !catalogReady) return;
+    setMaintenanceSaveBusy(true);
+    try {
+      const result = await syncMaintenanceState(normalizeMaintenanceSettings(settings));
+      if (!result.ok) {
+        showToastMessage(result.message || "No se pudo guardar el mantenimiento. Reintenta.", "error");
+        return;
+      }
+      const maintenanceSettings = normalizeMaintenanceSettings(result.data.maintenanceSettings);
+      storeSettingsRef.current = { ...storeSettingsRef.current, maintenanceSettings };
+      setStoreSettings((previous) => ({ ...previous, maintenanceSettings }));
+      setStoreDraft((previous) => ({ ...previous, maintenanceSettings }));
+      adoptCatalogVersion(result.data.catalogVersion);
+      realtimeSyncVersionsRef.current.catalog = Number(result.data.catalogVersion);
+      showToastMessage(maintenanceSettings.enabled ? "Mantenimiento activado. El administrador conserva el acceso." : "Tienda abierta. Mantenimiento desactivado.", "success");
+    } catch {
+      showToastMessage("No se pudo guardar el mantenimiento. Revisa tu conexión y reintenta.", "error");
+    } finally {
+      setMaintenanceSaveBusy(false);
+    }
   };
 
   const updateOrderStatus = async (orderId, nextStatus) => {
@@ -8203,6 +8313,7 @@ export default function App() {
   };
 
   const checkoutDisabled = Boolean(checkoutBusy || couponBusy || (activeCouponCode && !appliedCouponState?.ok));
+  const maintenanceActive = storeSettings.maintenanceSettings.enabled && !isAdmin;
   const routeNotFound = catalogReady
     && !KNOWN_DIRECT_ROUTES.has(normalizedPathname)
     && !adminRouteActive
@@ -8236,23 +8347,23 @@ export default function App() {
   return (
     <MotionConfig reducedMotion="user">
       <>
-      {selectedProduct && (
+      {selectedProduct && !maintenanceActive && (
         <ErrorBoundary onReset={() => closeProductModal({ returnToCart: true })}>
           <Suspense fallback={null}>
             <ProductModal
-              product={selectedProduct}
+              product={projectCartStock(selectedProduct, cartStockSnapshot)}
               selection={selectedProduct ? selections[selectedProduct.id] : null}
               recommendations={recommendedProducts.slice(0, 4)}
               onOpenRecommendation={openRecommendedProduct}
               onClose={() => closeProductModal({ returnToCart: true })}
               onChange={handleSelection}
               cartEditMode={Boolean(editingCartItemKey)}
-              onAddToCart={(product, animationMeta) => {
+              cartEditQuantity={cart.find(item => item.key === editingCartItemKey)?.quantity || 1}
+              onAddToCart={(product, animationMeta, selectionOverride) => {
                 const wasEditingCartItem = Boolean(editingCartItemKey);
-                addToCart(product, animationMeta);
-                if (wasEditingCartItem) {
-                  closeProductModal();
-                  openCartPage();
+                const updated = addToCart(product, animationMeta, selectionOverride);
+                if (wasEditingCartItem && updated) {
+                  closeProductModal({ returnToCart: true });
                 }
               }}
               isAdmin={isAdmin}
@@ -8296,10 +8407,11 @@ export default function App() {
         </AnimatePresence>
       </div>
 
-      {showCartSummary && (
+      {(showCartSummary || cart.length > 0) && !maintenanceActive && (
         <ErrorBoundary onReset={closeCartPage}>
           <Suspense fallback={null}>
             <CartSummaryModal
+              key={currentUser?.id || "guest"}
               key={`cart-summary-${showCartSummary ? "open" : "closed"}-${currentUser?.id || "guest"}`}
               open={showCartSummary}
               onClose={closeCartPage}
@@ -8325,6 +8437,7 @@ export default function App() {
               hasActiveCoupon={Boolean(activeCouponCode)}
               couponBusy={couponBusy}
               checkoutBusy={checkoutBusy}
+              onCheckAvailability={verifyCheckoutAvailability}
               onBrowseCatalog={browseCatalogFromModal}
               currentUser={currentUser}
               savedAddresses={currentUserAddressBook}
@@ -8335,7 +8448,7 @@ export default function App() {
         </ErrorBoundary>
       )}
 
-      {showFavoritesPanel && (
+      {showFavoritesPanel && !maintenanceActive && (
         <ErrorBoundary onReset={closeFavoritesPage}>
           <Suspense fallback={null}>
             <FavoritesModal
@@ -8426,7 +8539,7 @@ export default function App() {
         </Suspense>
       </ErrorBoundary>
 
-      {!adminRouteActive && orderSuccessModal.open && orderSuccessModal.order && (
+      {!adminRouteActive && !maintenanceActive && orderSuccessModal.open && orderSuccessModal.order && (
         <ErrorBoundary
           onReset={() => setOrderSuccessModal(
             normalizePendingWhatsAppConfirmation(
@@ -8457,6 +8570,7 @@ export default function App() {
               open={showOrdersModal}
               onClose={closeOrdersPage}
               orders={customerOrders}
+              contactSettings={publicContactSettings}
               onSearchChange={setUserOrderSearch}
               searchValue={userOrderSearch}
               onCopyOrderCode={handleCopyOrderCode}
@@ -8475,6 +8589,7 @@ export default function App() {
               onTabChange={(tab) => setLegalModalState((prev) => ({ ...prev, tab }))}
               onClose={() => setLegalModalState((prev) => ({ ...prev, open: false }))}
               brandName={storeSettings.brandName || "Adriego Store"}
+              contactSettings={publicContactSettings}
             />
           </Suspense>
         </ErrorBoundary>
@@ -8549,6 +8664,11 @@ export default function App() {
               saveProduct={saveProduct}
               setStoreDraft={setStoreDraft}
               storeDraft={storeDraft}
+              storeSettings={storeSettings}
+              onSaveBrandSeo={saveBrandSeoConfiguration}
+              maintenanceEnabled={storeSettings.maintenanceSettings.enabled}
+              maintenanceSaveBusy={maintenanceSaveBusy}
+              onSaveMaintenance={saveMaintenanceConfiguration}
               handleStoreSlideImageUpload={handleStoreSlideImageUpload}
               handleBankImageUpload={handleBankImageUpload}
               saveStoreConfiguration={saveStoreConfiguration}
@@ -8732,9 +8852,13 @@ export default function App() {
         reducedMotion={reduceMotion}
       />
 
+      {maintenanceActive ? (
+        <MaintenancePage settings={storeSettings.maintenanceSettings} brandName={storeSettings.brandName} whatsappUrl={publicContactSettings.whatsappLink} onOpenOrders={openOrdersPage} onOpenLegal={(tab) => setLegalModalState({ open: true, tab })} />
+      ) : (<>
+      {isAdmin && storeSettings.maintenanceSettings.enabled && <aside className="maintenance-admin-banner" role="status">Mantenimiento activo para clientes. Estás viendo la tienda como administrador.</aside>}
       <a className="skip-link" href="#main-content">Saltar al catálogo</a>
 
-      <AnnouncementBar paused={presentationPaused} />
+      <AnnouncementBar paused={heroHasFocus} />
 
       <header className="topbar">
         <div className="container nav">
@@ -9104,6 +9228,8 @@ export default function App() {
                   <Motion.img
                     key={activeHeroSlide?.image || heroIndex}
                     src={activeHeroSlide?.image || FALLBACK_IMAGE}
+                    srcSet={getResponsiveImageSources(activeHeroSlide?.image || FALLBACK_IMAGE, [480, 768, 960, 1280])}
+                    sizes="(max-width: 900px) 100vw, 54vw"
                     alt={activeHeroSlide?.title || "Imagen de portada"}
                     loading="eager"
                     fetchPriority="high"
@@ -9113,11 +9239,7 @@ export default function App() {
                     exit={{ opacity: 0, scale: 0.99 }}
                     transition={{ duration: ANIMATION.medium }}
                     className="hero-img"
-                    onError={(event) => {
-                      if (event.currentTarget.src !== FALLBACK_IMAGE) {
-                        event.currentTarget.src = FALLBACK_IMAGE;
-                      }
-                    }}
+                    onError={(event) => applyImageFallback(event.currentTarget, FALLBACK_IMAGE)}
                   />
                 </AnimatePresence>
               </div>
@@ -9132,13 +9254,9 @@ export default function App() {
                     className={`hero-slide-dot ${index === heroIndex ? "active" : ""}`}
                     aria-label={`Ir a la imagen ${index + 1}`}
                     aria-current={index === heroIndex ? "true" : undefined}
-                    onClick={() => { setHeroIndex(index); setPresentationPaused(true); }}
+                    onClick={() => setHeroIndex(index)}
                   />
                 ))}
-                {!reduceMotion && <button className="btn btn-outline hero-motion-control" type="button" aria-label={presentationPaused ? "Reanudar portada y anuncios" : "Pausar portada y anuncios"} aria-pressed={presentationPaused} onClick={() => setPresentationPaused((paused) => !paused)}>
-                  {presentationPaused ? <Play size={14} aria-hidden="true" /> : <Pause size={14} aria-hidden="true" />}
-                  {presentationPaused ? "Reanudar" : "Pausar"}
-                </button>}
               </div>
             )}
           </Motion.div>
@@ -9170,10 +9288,23 @@ export default function App() {
                           key={item.value}
                           type="button"
                           role="tab"
+                          id={`collection-tab-${item.value}`}
+                          aria-controls="catalog-results"
                           aria-selected={isActive}
+                          tabIndex={isActive ? 0 : -1}
                           className={`collection-audience-tab ${isActive ? "active" : ""}`}
                           title={item.isOffer ? catalogOfferText : undefined}
                           onClick={() => setCategory(item.value)}
+                          onKeyDown={(event) => {
+                            if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+                            event.preventDefault();
+                            const index = collectionAudienceTabs.findIndex(tab => tab.value === item.value);
+                            const nextIndex = event.key === "Home" ? 0 : event.key === "End" ? collectionAudienceTabs.length - 1
+                              : (index + (event.key === "ArrowRight" ? 1 : -1) + collectionAudienceTabs.length) % collectionAudienceTabs.length;
+                            const next = collectionAudienceTabs[nextIndex];
+                            setCategory(next.value);
+                            document.getElementById(`collection-tab-${next.value}`)?.focus({ preventScroll: true });
+                          }}
                           whileTap={{ scale: 0.97 }}
                         >
                           <span className="collection-audience-label">{item.label}</span>
@@ -9290,7 +9421,7 @@ export default function App() {
                   } finally { setCatalogRetryBusy(false); }
                 }}>{catalogRetryBusy ? "Actualizando…" : "Volver a intentar"}</button>
               </div>}
-              <div id="catalog-results" className="products-grid catalog-products-grid" tabIndex={-1} aria-label="Prendas del catálogo" aria-describedby={catalogReady && filteredProducts.length > 0 ? "catalog-page-status" : undefined}>
+              <div id="catalog-results" role="tabpanel" aria-labelledby={`collection-tab-${category}`} className="products-grid catalog-products-grid" tabIndex={-1} aria-label="Prendas del catálogo" aria-describedby={catalogReady && filteredProducts.length > 0 ? "catalog-page-status" : undefined}>
                 {!catalogReady ? (
                   Array.from({ length: 8 }, (_, index) => <ExternalCatalogSkeletonCard key={`catalog-skeleton-${index}`} />)
                 ) : filteredProducts.length === 0 ? (
@@ -9539,16 +9670,7 @@ export default function App() {
                 <div className={`contact-map-card${publicContactSettings.mapsEmbedUrl ? "" : " contact-map-card-nomap"}`}>
                   {publicContactSettings.mapsEmbedUrl && (
                     <div className="contact-map-embed">
-                      <iframe
-                        title="Ubicación de la tienda"
-                        src={publicContactSettings.mapsEmbedUrl}
-                        width="100%"
-                        height="100%"
-                        style={{ border: 0 }}
-                        allowFullScreen=""
-                        loading="lazy"
-                        referrerPolicy="no-referrer-when-downgrade"
-                      />
+                      <GoogleMapPreview src={publicContactSettings.mapsEmbedUrl} enabled={catalogReady} />
                     </div>
                   )}
                   <div className="contact-map-info">
@@ -9624,6 +9746,7 @@ export default function App() {
           </div>
         </div>
       </Motion.footer>
+      </>)}
       </>
     </MotionConfig>
   );

@@ -7,7 +7,8 @@ export function syncProductSelections(products = [], previousSelections = {}) {
     const preferredSelection = wasChosenByUser
       ? previous
       : { color: product.catalogColor || product.colors?.[0] };
-    const fallback = getSelectionForColor(product, preferredSelection);
+    const chosenVariant = wasChosenByUser && product.variants?.find(variant => variant.color === previous.color && variant.size === previous.size);
+    const fallback = chosenVariant || getSelectionForColor(product, preferredSelection);
     return [product.id, {
       color: fallback.color,
       size: fallback.size,

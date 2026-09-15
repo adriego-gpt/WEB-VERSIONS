@@ -25,8 +25,13 @@ test("Google Maps embed normalizer extracts URL from raw string or full iframe s
 test("index.html CSP includes frame-src allowing Google Maps iframes", async () => {
   const fs = await import("node:fs/promises");
   const html = await fs.readFile(new URL("../../index.html", import.meta.url), "utf8");
+  const config = JSON.parse(await fs.readFile(new URL("../../vercel.json", import.meta.url), "utf8"));
+  const securityHeaders = config.headers.find((entry) => entry.source === "/(.*)")?.headers || [];
+  const responseCsp = securityHeaders.find((entry) => entry.key === "Content-Security-Policy")?.value || "";
   assert.match(html, /frame-src[^"]*https:\/\/www\.google\.com/);
   assert.match(html, /frame-src[^"]*https:\/\/maps\.google\.com/);
+  assert.doesNotMatch(html, /frame-ancestors/);
+  assert.match(responseCsp, /frame-ancestors 'none'/);
 });
 
 test("Google Maps links without protocol are normalized to HTTPS", () => {

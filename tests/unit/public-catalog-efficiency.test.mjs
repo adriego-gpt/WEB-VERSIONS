@@ -74,6 +74,26 @@ async function callApi(handler, query = {}) {
   return res;
 }
 
+test("checkout stock checks bypass browser and CDN cache without exposing private data", async () => {
+  const response = await callApi(catalogStateHandler, { action: "get-public", fresh: "1", check: "test" });
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.getHeader("Cache-Control"), "no-store, max-age=0");
+  assert.equal(response.getHeader("Vercel-CDN-Cache-Control"), "no-store");
+  assert.equal(response.jsonBody.data.products.some(product => product.isPublic === false), false);
+  assert.equal(response.jsonBody.data.orderHistory, undefined);
+  await updateStore(draft => { draft.products[0].variants[0].stock = 0; bumpRealtimeMeta(draft, ["catalog"]); return draft; });
+  const latest = await callApi(catalogStateHandler, { action: "get-public", fresh: "1", check: "next" });
+  assert.equal(latest.jsonBody.data.products[0].variants[0].stock, 0);
+});
+
+test("live public synchronization does not reuse stale CDN metadata", async () => {
+  const response = await callApi(realtimeSyncHandler, { action: "public-status", live: "1", check: "test" });
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.getHeader("Vercel-CDN-Cache-Control"), "no-store");
+  assert.equal(response.getHeader("Cache-Control"), "no-store, max-age=0");
+  assert.equal(response.jsonBody.versions.orders, 0);
+});
+
 before(async () => {
   await updateStore((draft) => {
     draft.products = [

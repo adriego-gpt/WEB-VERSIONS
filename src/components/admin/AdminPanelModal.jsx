@@ -1,23 +1,18 @@
 import { isValidEmail } from '../../utils';
-import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
+import React, { Suspense, useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import { RotateCcw, Plus, Package, UserRound, Navigation, ShieldCheck, Search, PencilLine, Mail, Copy, Trash2, CheckCircle2, Star, Link, Eye, EyeOff, AlertCircle, AlertTriangle, Play, RefreshCw, Upload, Image as ImageIcon, MapPin, SearchX, Clock, CreditCard, Tag, Tags, X, Image, ChevronDown, SlidersHorizontal, ZoomIn, MessageCircle, ExternalLink, Truck } from 'lucide-react';
 import { ShowcaseProductCard } from "../catalog/ShowcaseProductCard";
 import { CatalogProductCard } from "../catalog/CatalogProductCard";
 import { ProductDraftPreview } from '../products/ProductDraftPreview';
-import { ManagedEntitiesEditor } from './ManagedEntitiesEditor';
-import { CouponManagerPanel } from './CouponManagerPanel';
-import { ProductCatalogPanel } from './ProductCatalogPanel';
-import { OfferManagerPanel } from './OfferManagerPanel';
-import { ProductEditorPanel } from './ProductEditorPanel';
 import { AdminSectionHeader } from './AdminSectionHeader';
-import { BankAccountsPanel } from './BankAccountsPanel';
-import { CatalogImportPanel } from './CatalogImportPanel';
+import { MaintenanceSettingsPanel } from './MaintenanceSettingsPanel';
 import { ImageLightbox } from '../ui/ImageLightbox';
 import { OrderStatusProgress } from '../orders/OrderStatusProgress';
 import { normalizeOrderStatusForOrder, formatOrderDate, getOrderStatusMeta, getOrderStatusOptions } from '../../domain/orders/status';
 import { getImagesForColor } from '../../domain/products/variants';
 import { pruneSelection } from '../../domain/admin/selection';
 import { useBodyScrollLock } from '../../hooks/useBodyScrollLock';
+import { lazyWithRetry } from '../../utils/lazyWithRetry.js';
 import {
   STORAGE_KEYS, PASSWORD_SECURITY, AUTH_FORM_DEFAULTS,
   AUTH_FIELD_LIMITS, FILE_SECURITY, PRODUCT_FORM_LIMITS, FALLBACK_IMAGE,
@@ -31,6 +26,24 @@ import {
   normalizeSearchText, getCourierTrackingUrl
 } from '../../utils';
 
+
+function lazyAdminSection(importSection, exportName) {
+  const Section = lazyWithRetry(() => importSection().then(module => ({ default: module[exportName] })));
+  return function AdminSection(props) {
+    return <Suspense fallback={<div className="admin-section-loader" role="status">Cargando sección…</div>}>
+      <Section {...props} />
+    </Suspense>;
+  };
+}
+
+const ManagedEntitiesEditor = lazyAdminSection(() => import('./ManagedEntitiesEditor'), 'ManagedEntitiesEditor');
+const CouponManagerPanel = lazyAdminSection(() => import('./CouponManagerPanel'), 'CouponManagerPanel');
+const ProductCatalogPanel = lazyAdminSection(() => import('./ProductCatalogPanel'), 'ProductCatalogPanel');
+const OfferManagerPanel = lazyAdminSection(() => import('./OfferManagerPanel'), 'OfferManagerPanel');
+const ProductEditorPanel = lazyAdminSection(() => import('./ProductEditorPanel'), 'ProductEditorPanel');
+const BankAccountsPanel = lazyAdminSection(() => import('./BankAccountsPanel'), 'BankAccountsPanel');
+const CatalogImportPanel = lazyAdminSection(() => import('./CatalogImportPanel'), 'CatalogImportPanel');
+const SeoSettingsPanel = lazyAdminSection(() => import('./SeoSettingsPanel'), 'SeoSettingsPanel');
 
 function getOrderAgeMinutes(createdAt) {
   const createdMs = new Date(createdAt || "").getTime();
@@ -154,6 +167,11 @@ export function AdminPanelModal({
   saveProduct,
   setStoreDraft,
   storeDraft,
+  storeSettings,
+  onSaveBrandSeo,
+  maintenanceEnabled,
+  maintenanceSaveBusy,
+  onSaveMaintenance,
   handleStoreSlideImageUpload,
   handleBankImageUpload,
   saveStoreConfiguration,
@@ -524,6 +542,7 @@ export function AdminPanelModal({
       tabs: [
         { id: "taxonomias", label: "Tipos y tags", description: "Organiza los datos maestros usados por el catálogo.", icon: Tags },
         { id: "portada", label: "Portada y Envíos", description: "Edita la presentación, entrega y retiro de la tienda.", icon: Image },
+        { id: "seo", label: "Identidad y buscadores", description: "Nombre de marca, resultado de búsqueda e imágenes al compartir.", icon: Search },
         { id: "cuentas", label: "Cuentas bancarias", description: "Administra las cuentas visibles al confirmar pedidos.", icon: CreditCard },
         { id: "contacto", label: "Contacto", description: "Actualiza WhatsApp, ubicación y canales de atención.", icon: MapPin },
       ],
@@ -1614,6 +1633,8 @@ export function AdminPanelModal({
                     description="Actualiza los canales que usarán los clientes para encontrarte y escribirte."
                   />
                   <div className="settings-grid" style={{ marginTop: 18 }}>
+                    <label className="entity-field admin-full"><span>Nombre del responsable o razón social</span><input className="input" value={contactDraft.legalBusinessName || ""} maxLength={160} onChange={(event) => setContactDraft((previous) => ({ ...previous, legalBusinessName: event.target.value }))} /><small className="helper-text">Se publica en privacidad para identificar al responsable del tratamiento de datos.</small></label>
+                    <label className="entity-field admin-full"><span>Domicilio legal del negocio</span><input className="input" value={contactDraft.legalAddress || ""} maxLength={280} onChange={(event) => setContactDraft((previous) => ({ ...previous, legalAddress: event.target.value }))} /><small className="helper-text">Puede diferir del punto de retiro. Si lo dejas vacío se muestra la dirección del local.</small></label>
                     <div className="admin-full"><input className="input" placeholder="Direccion del local" value={contactDraft.address} onChange={(event) => setContactDraft((previous) => ({ ...previous, address: event.target.value }))} /></div>
                     <input className="input" placeholder="Numero de WhatsApp para pedidos" value={contactDraft.whatsappNumber} onChange={(event) => setContactDraft((previous) => ({ ...previous, whatsappNumber: event.target.value }))} />
                     <input className="input" placeholder="Enlace directo de WhatsApp (opcional)" value={contactDraft.whatsappLink} onChange={(event) => setContactDraft((previous) => ({ ...previous, whatsappLink: event.target.value }))} />
@@ -1671,12 +1692,21 @@ export function AdminPanelModal({
               </div>
             )}
 
+            {adminTab === "seo" && <SeoSettingsPanel settings={storeSettings} onSave={onSaveBrandSeo} />}
             {adminTab === "portada" && (
               <div className="admin-tab-panel">
                 <div className="card admin-general-card">
                   <AdminSectionHeader
                     title="Portada y Tarifas de Envío"
                     description="Configura los costos de envío a domicilio, la meta de envío gratis y la identidad visual de la tienda."
+                  />
+
+                  <MaintenanceSettingsPanel
+                    settings={storeDraft.maintenanceSettings}
+                    onChange={(maintenanceSettings) => setStoreDraft((previous) => ({ ...previous, maintenanceSettings }))}
+                    enabled={maintenanceEnabled}
+                    busy={maintenanceSaveBusy}
+                    onSave={onSaveMaintenance}
                   />
 
                   {/* SECCIÓN 1: TARIFAS DE ENVÍO */}
@@ -1795,8 +1825,6 @@ export function AdminPanelModal({
                   </div>
 
                   <div className="settings-grid">
-                    <input className="input" placeholder="Etiqueta de marca" value={storeDraft.brandLabel || ""} onChange={(event) => setStoreDraft((previous) => ({ ...previous, brandLabel: event.target.value }))} />
-                    <input className="input" placeholder="Nombre de marca" value={storeDraft.brandName || ""} onChange={(event) => setStoreDraft((previous) => ({ ...previous, brandName: event.target.value }))} />
                     <input className="input" placeholder="Badge principal del hero" value={storeDraft.heroBadgeText || ""} onChange={(event) => setStoreDraft((previous) => ({ ...previous, heroBadgeText: event.target.value }))} />
                     <input className="input" placeholder="Texto CTA principal" value={storeDraft.primaryCtaText || ""} onChange={(event) => setStoreDraft((previous) => ({ ...previous, primaryCtaText: event.target.value }))} />
                     <input className="input" placeholder="Etiqueta de ofertas (ej: Ofertas)" value={storeDraft.offerLabel || ""} onChange={(event) => setStoreDraft((previous) => ({ ...previous, offerLabel: event.target.value }))} />

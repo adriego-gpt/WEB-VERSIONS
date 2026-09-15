@@ -81,7 +81,8 @@ export default async function handler(req, res) {
   if (isPublicStatus) {
     const realtime = await readRealtimeMeta();
     res.setHeader("Cache-Control", "public, max-age=0, must-revalidate");
-    res.setHeader("Vercel-CDN-Cache-Control", "public, s-maxage=30, stale-while-revalidate=120");
+    res.setHeader("Vercel-CDN-Cache-Control", req.query?.live === "1" ? "no-store" : "public, s-maxage=30, stale-while-revalidate=120");
+    if (req.query?.live === "1") res.setHeader("Cache-Control", "no-store, max-age=0");
     res.status(200).json({
       ok: true,
       versions: {

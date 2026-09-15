@@ -1,8 +1,10 @@
 import { readStore } from "./_lib/store.js";
 import { getPublicSiteOrigin } from "../src/constants/site.js";
 import { getProductSlug } from "../src/domain/products/seo.js";
-import { escapeHtml, readPublicTemplate, renderPublicDocument } from "./_lib/seoDocument.js";
+import { escapeHtml, readPublicTemplate, renderPublicDocument, renderMaintenanceDocument } from "./_lib/seoDocument.js";
 import { consumeRateLimit, getClientIp, monitorApiRequest, normalizeLine, setCommonSecurityHeaders } from "./_lib/security.js";
+
+const PUBLIC_HTML_CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://upload.imagekit.io; frame-src 'self' https://www.google.com https://maps.google.com; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; manifest-src 'self'";
 
 export default async function handler(req, res) {
   monitorApiRequest(req, res, "seo");
@@ -31,6 +33,14 @@ export default async function handler(req, res) {
       // lastmod needs actual page dates; do not claim every page changed today.
       return res.status(200).send(`<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${paths.map((p) => `<url><loc>${escapeHtml(origin + p)}</loc></url>`).join("")}</urlset>`);
     }
+    if (store.storeSettings?.maintenanceSettings?.enabled === true) {
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.setHeader("Content-Security-Policy", PUBLIC_HTML_CSP);
+      res.setHeader("Cache-Control", "no-store, max-age=0");
+      res.setHeader("Retry-After", "300");
+      const template = action === "page" ? await readPublicTemplate() : undefined;
+      return res.status(503).send(renderMaintenanceDocument({ template, storeSettings: store.storeSettings, origin }));
+    }
     const slug = path.startsWith("/producto/") && path.split("/").length === 3 ? path.slice(10) : "";
     const product = slug ? products.find((p) => getProductSlug(p) === slug) : null;
     res.setHeader("Content-Type", "text/html; charset=utf-8");
@@ -41,10 +51,10 @@ export default async function handler(req, res) {
     const template = action === "page" ? await readPublicTemplate() : undefined;
     if (template) {
       // Same compiled app and public content for visitors and crawlers.
-      res.setHeader("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob: https:; font-src 'self' https://fonts.gstatic.com data:; connect-src 'self' https://upload.imagekit.io; frame-src 'self' https://www.google.com https://maps.google.com; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; manifest-src 'self'");
+      res.setHeader("Content-Security-Policy", PUBLIC_HTML_CSP);
     }
     res.setHeader("Cache-Control", "public, max-age=0, s-maxage=60, must-revalidate");
-    return res.status(200).send(renderPublicDocument({ template, products, product, origin }));
+    return res.status(200).send(renderPublicDocument({ template, products, product, origin, storeSettings: store.storeSettings }));
   } catch (error) {
     console.error("Public page unavailable:", error?.code || error?.name || "upstream-error");
     res.setHeader("Cache-Control", "no-store");

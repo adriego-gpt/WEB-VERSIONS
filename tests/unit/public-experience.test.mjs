@@ -55,6 +55,31 @@ test("public page routes are identical for browsers and search crawlers", async 
   assert.equal(config.functions["api/seo.js"].includeFiles, "dist/index.html");
 });
 
+test("agent discovery file is useful Markdown with canonical public links", async () => {
+  const contents = await fs.readFile(new URL("../../public/llms.txt", import.meta.url), "utf8");
+  assert.match(contents, /^# Adriego Store/m);
+  assert.match(contents, /\[Tienda y catálogo\]\(https:\/\/www\.adriego\.shop\/\)/);
+  assert.match(contents, /\[Mapa del sitio\]\(https:\/\/www\.adriego\.shop\/sitemap\.xml\)/);
+});
+
+test("brand fonts are stable from first paint and never injected after load", async () => {
+  const template = await fs.readFile(new URL("../../index.html", import.meta.url), "utf8");
+  const entry = await fs.readFile(new URL("../../src/main.jsx", import.meta.url), "utf8");
+  const fonts = await fs.readFile(new URL("../../src/fonts.css", import.meta.url), "utf8");
+  assert.doesNotMatch(template + entry, /fonts\.(?:googleapis|gstatic)\.com|loadDeferredFonts|requestIdleCallback/);
+  assert.match(entry, /import ['"]\.\/fonts\.css['"]/);
+  assert.match(fonts, /@font-face[\s\S]*font-family: "Manrope"[\s\S]*font-display: optional/);
+  assert.match(fonts, /@font-face[\s\S]*font-family: "Cormorant Garamond"[\s\S]*font-display: optional/);
+  assert.match(fonts, /\.woff2/);
+});
+
+test("catalog color controls keep a compact visual inside an accessible touch target", async () => {
+  const css = await fs.readFile(new URL("../../src/App.css", import.meta.url), "utf8");
+  assert.match(css, /\.product-card-color-swatch::after,[\s\S]*?width: 44px;[\s\S]*?height: 44px;/);
+  assert.match(css, /\.product-card-color-swatch,[\s\S]*?width: 34px;[\s\S]*?height: 34px;/);
+  assert.match(css, /\.product-card-color-swatch\.active \{[^}]*border-color: var\(--text-strong\);/);
+});
+
 test("stale chunks refresh once per session and tolerate blocked storage", () => {
   const values = new Map();
   let reloads = 0;

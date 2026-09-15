@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { X, Eye, EyeOff, KeyRound, UserRound, MapPin, Plus, PencilLine, Trash2, ArrowLeft, Check } from "lucide-react";
 import { motion as Motion, AnimatePresence } from "framer-motion";
+import { useOverlayHistory } from "../../hooks/useOverlayHistory";
 
 export function UserAuthModal({
   open,
@@ -20,6 +21,7 @@ export function UserAuthModal({
   onOpenLegal,
 }) {
   const isRegister = mode === "register";
+  useOverlayHistory({ open, onClose, step: mode, onStepChange: onModeChange });
   const isForgot = mode === "forgot";
   const isReset = mode === "reset";
   const isLogin = !isRegister && !isForgot && !isReset;
@@ -461,6 +463,7 @@ export function ProfileModal({
   passwordFeedback,
 }) {
   const [isAddingNewAddress, setIsAddingNewAddress] = useState(false);
+  useOverlayHistory({ open, onClose });
   const safeSection = activeSection === "password" || activeSection === "direccion" ? activeSection : "datos";
   const sectionMeta = safeSection === "password"
     ? { title: "Cambio de contraseña", subtitle: "Actualiza tu clave de acceso" }

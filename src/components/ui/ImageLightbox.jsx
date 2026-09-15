@@ -1,38 +1,26 @@
-import React, { useEffect, useRef } from "react";
+import React, { useId, useRef } from "react";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 import { FALLBACK_IMAGE } from "../../constants/product";
 import { useBodyScrollLock } from "../../hooks/useBodyScrollLock";
+import { useOverlayHistory } from "../../hooks/useOverlayHistory";
+import { useModalA11y } from "../../hooks/useModalA11y";
 
 export function ImageLightbox({ open, src, alt = "Imagen ampliada", title = "Vista completa", onClose }) {
   const closeButtonRef = useRef(null);
-  useBodyScrollLock(open);
-
-  useEffect(() => {
-    if (!open || typeof document === "undefined") return undefined;
-    const returnFocusTo = document.activeElement;
-    const focusTimer = window.setTimeout(() => closeButtonRef.current?.focus(), 0);
-    const handleKeyDown = (event) => {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      event.stopPropagation();
-      onClose?.();
-    };
-    document.addEventListener("keydown", handleKeyDown, true);
-    return () => {
-      window.clearTimeout(focusTimer);
-      document.removeEventListener("keydown", handleKeyDown, true);
-      if (returnFocusTo instanceof HTMLElement && returnFocusTo.isConnected) returnFocusTo.focus();
-    };
-  }, [open, onClose]);
+  const titleId = useId();
+  const visible = Boolean(open && src);
+  const containerRef = useModalA11y(visible, onClose, { initialFocusRef: closeButtonRef });
+  useBodyScrollLock(visible);
+  useOverlayHistory({ open: visible, onClose });
 
   if (!open || !src || typeof document === "undefined") return null;
 
   return createPortal(
     <div className="image-lightbox-backdrop" role="presentation" onClick={onClose}>
-      <div className="image-lightbox" role="dialog" aria-modal="true" aria-label={title} onClick={(event) => event.stopPropagation()}>
+      <div ref={containerRef} className="image-lightbox" role="dialog" aria-modal="true" aria-labelledby={titleId} onClick={(event) => event.stopPropagation()}>
         <div className="image-lightbox-header">
-          <strong>{title}</strong>
+          <strong id={titleId}>{title}</strong>
           <button ref={closeButtonRef} type="button" className="icon-btn" onClick={onClose} aria-label="Cerrar imagen ampliada">
             <X size={19} />
           </button>

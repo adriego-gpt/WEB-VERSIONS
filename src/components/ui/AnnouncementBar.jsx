@@ -11,7 +11,7 @@ const ANNOUNCEMENTS = [
   {
     id: "guarantee",
     icon: ShieldCheck,
-    text: "Garantía de cambio en 7 días",
+    text: "Cambios y devoluciones · Consulta nuestras políticas",
   },
   {
     id: "collection",
@@ -47,9 +47,9 @@ export function AnnouncementBar({ paused = false }) {
           <AnimatePresence mode="wait">
             <Motion.div
               key={currentItem.id}
-              initial={{ opacity: 0, y: 6 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -6 }}
+              initial={{ y: 6 }}
+              animate={{ y: 0 }}
+              exit={{ y: -6 }}
               transition={{ duration: 0.25, ease: "easeOut" }}
               className="announcement-message"
             >

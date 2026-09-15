@@ -46,7 +46,7 @@ export function isValidEmail(value = "") {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || "").trim());
 }
 
-export function normalizeContactEmail(value = "", fallback = "soporte@adriego.com") {
+export function normalizeContactEmail(value = "", fallback = "") {
   const clean = normalizeEmail(value);
   return isValidEmail(clean) ? clean : fallback;
 }
@@ -56,6 +56,7 @@ export function buildMailtoLink(options = {}) {
     ? { to: options }
     : (options || {});
   const email = normalizeContactEmail(to);
+  if (!email) return "";
   const params = new URLSearchParams();
   if (subject) params.set("subject", sanitizeParagraph(subject));
   if (body) params.set("body", String(body || "").trim());
