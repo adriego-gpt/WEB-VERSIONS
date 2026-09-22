@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { X, Eye, EyeOff, KeyRound, UserRound, MapPin, Plus, PencilLine, Trash2, ArrowLeft, Check } from "lucide-react";
 import { motion as Motion, AnimatePresence } from "framer-motion";
 import { useOverlayHistory } from "../../hooks/useOverlayHistory";
+import { useModalA11y } from "../../hooks/useModalA11y";
 
 export function UserAuthModal({
   open,
@@ -26,6 +27,7 @@ export function UserAuthModal({
   const isReset = mode === "reset";
   const isLogin = !isRegister && !isForgot && !isReset;
   const firstInputRef = useRef(null);
+  const authRef = useModalA11y(open, onClose, { initialFocusRef: firstInputRef, disableEscape: busy });
   const fieldErrors = validation?.fieldErrors || {};
   const passwordChecks = validation?.passwordChecks || { minLength: false, hasLetter: false, hasNumber: false };
   const passwordStrengthPercent = Number(validation?.passwordStrengthPercent) || 0;
@@ -85,21 +87,6 @@ export function UserAuthModal({
     };
   }, [open, mode]);
 
-  useEffect(() => {
-    if (!open) return undefined;
-
-    const handleKeyDown = (event) => {
-      if (event.key === "Escape" && !busy) {
-        onClose?.();
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [open, busy, onClose]);
-
   const submitDisabled = busy || !canSubmit;
   const showPasswordFields = isLogin || isRegister || isReset;
   const showPasswordMeter = isRegister || isReset;
@@ -122,6 +109,7 @@ export function UserAuthModal({
             exit={{ opacity: 0, y: 14, scale: 0.97 }}
             transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
             className="login-card"
+            ref={authRef}
             role="dialog"
             aria-modal="true"
             aria-label={isRegister ? "Crear cuenta" : isForgot ? "Recuperar cuenta" : isReset ? "Restablecer contraseña" : "Iniciar sesión"}
@@ -464,6 +452,7 @@ export function ProfileModal({
 }) {
   const [isAddingNewAddress, setIsAddingNewAddress] = useState(false);
   useOverlayHistory({ open, onClose });
+  const profileRef = useModalA11y(open, onClose);
   const safeSection = activeSection === "password" || activeSection === "direccion" ? activeSection : "datos";
   const sectionMeta = safeSection === "password"
     ? { title: "Cambio de contraseña", subtitle: "Actualiza tu clave de acceso" }
@@ -491,17 +480,6 @@ export function ProfileModal({
     }
   };
 
-  useEffect(() => {
-    if (!open) return undefined;
-    const handleKeyDown = (event) => {
-      if (event.key === "Escape") {
-        onClose?.();
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [open, onClose]);
-
   return (
     <AnimatePresence initial={false}>
       {open && (
@@ -519,6 +497,7 @@ export function ProfileModal({
             exit={{ opacity: 0, y: 14, scale: 0.97 }}
             transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
             className="sheet profile-sheet"
+            ref={profileRef}
             role="dialog"
             aria-modal="true"
             aria-label="Perfil y seguridad"

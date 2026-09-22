@@ -37,7 +37,7 @@ export function getProductSeo(product = {}, origin, brandName = "Adriego Store")
   const url = `${origin}/producto/${getProductSlug(product)}`;
   const schema = {
     "@context": "https://schema.org", "@type": "Product", name, description,
-    sku: String(product.sku || product.id || ""),
+    sku: String(product.sku || product.id || ""), url,
     ...(images.length ? { image: images } : {}),
     ...(colors.length ? { color: colors.join(", ") } : {}),
     ...(sizes.length ? { size: sizes.join(", ") } : {}),

@@ -75,6 +75,7 @@ async function callHandler(options) {
 }
 
 test("Catalog image upload API", async (t) => {
+  assert.equal(MAX_PRODUCT_IMAGE_BYTES, 350 * 1024);
   const previousEnv = {
     NODE_ENV: process.env.NODE_ENV,
     ADMIN_ALLOWED_ORIGIN: process.env.ADMIN_ALLOWED_ORIGIN,

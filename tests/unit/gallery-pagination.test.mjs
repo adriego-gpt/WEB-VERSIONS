@@ -26,6 +26,81 @@ test("panning reaches all edges without moving the image completely out of view"
   assert.equal(Math.abs(reset.y), 0);
 });
 
+test("lifting the second finger after a pinch keeps the image zoomed", async () => {
+  const source = await fs.readFile(new URL("../../src/components/products/ProductModal.jsx", import.meta.url), "utf8");
+  const handlersSource = source.slice(
+    source.indexOf("  const handlePreviewPointerDown"),
+    source.indexOf("  const handlePreviewImageClick"),
+  );
+  const refs = {
+    previewHandledByPointerRef: { current: false },
+    previewDidSwipeRef: { current: false },
+    previewDraggedRef: { current: false },
+    previewPointersRef: { current: new Map() },
+    previewPinchRef: { current: null },
+    previewPinchGestureRef: { current: false },
+    previewSwipeStartRef: { current: null },
+    previewSwipeIntentRef: { current: null },
+    previewPanStartRef: { current: null },
+    previewScaleRef: { current: 1 },
+    previewPanRef: { current: { x: 0, y: 0 } },
+  };
+  let zoomToggleCount = 0;
+  const dependencies = {
+    isTouchLikePointer: (type) => type === "touch" || type === "pen",
+    ...refs,
+    setPreviewPanning: () => {},
+    clampPreviewPan: (pan, scale, element) => clampImagePan(pan, scale, element.offsetWidth, element.offsetHeight),
+    setPreviewTransform: (scale, pan) => {
+      refs.previewScaleRef.current = scale;
+      refs.previewPanRef.current = pan;
+    },
+    zoomImageAtPoint,
+    hasMultipleImages: false,
+    goToPreviousImage: () => {},
+    goToNextImage: () => {},
+    togglePreviewZoom: () => { zoomToggleCount += 1; },
+  };
+  const { handlePreviewPointerDown, handlePreviewPointerMove, handlePreviewPointerUp } = new Function(
+    ...Object.keys(dependencies),
+    `${handlersSource}; return { handlePreviewPointerDown, handlePreviewPointerMove, handlePreviewPointerUp };`,
+  )(...Object.values(dependencies));
+  const target = {
+    offsetWidth: 320,
+    offsetHeight: 520,
+    setPointerCapture: () => {},
+    getBoundingClientRect: () => ({ left: 0, top: 0, width: 320, height: 520 }),
+  };
+  const pointer = (pointerId, clientX, clientY = 180) => ({
+    pointerId,
+    pointerType: "touch",
+    button: 0,
+    clientX,
+    clientY,
+    currentTarget: target,
+    cancelable: true,
+    preventDefault: () => {},
+  });
+
+  handlePreviewPointerDown(pointer(1, 90));
+  handlePreviewPointerDown(pointer(2, 190));
+  handlePreviewPointerMove(pointer(2, 310));
+  assert.ok(refs.previewScaleRef.current > 2, "the pinch must increase the scale before release");
+  handlePreviewPointerUp(pointer(1, 90));
+  handlePreviewPointerUp(pointer(2, 310));
+
+  assert.equal(zoomToggleCount, 0, "releasing a pinch must not be reinterpreted as a tap-to-reset");
+  assert.ok(refs.previewScaleRef.current > 2, "the pinch scale must remain after both fingers lift");
+
+  const panAfterPinch = { ...refs.previewPanRef.current };
+  handlePreviewPointerDown(pointer(3, 160, 220));
+  handlePreviewPointerMove(pointer(3, 220, 260));
+  handlePreviewPointerUp(pointer(3, 220, 260));
+
+  assert.notDeepEqual(refs.previewPanRef.current, panAfterPinch, "the enlarged image must pan with one finger after the pinch ends");
+  assert.equal(zoomToggleCount, 0, "dragging the enlarged image must not trigger tap-to-reset");
+});
+
 test("desktop catalogue has 12 products per page and never omits or duplicates items", () => {
   assert.equal(DESKTOP_CATALOG_PAGE_SIZE, 12);
   assert.equal(MOBILE_CATALOG_PAGE_SIZE, 8);

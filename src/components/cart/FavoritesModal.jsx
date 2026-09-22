@@ -70,7 +70,7 @@ export function FavoritesModal({
             ) : (
               <div className="favorites-list">
                 {favoriteProducts.map((product) => {
-                  const thumb = getCurrentImageForProduct(product, product.colors?.[0]);
+                  const thumb = getCurrentImageForProduct(product, product.catalogColor || product.colors?.[0]);
                   const priceNum = Number(product.price) || 0;
                   const oldPriceNum = Number(product.oldPrice) || 0;
                   const hasDiscount = oldPriceNum > priceNum;

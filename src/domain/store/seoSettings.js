@@ -29,9 +29,9 @@ export function getStoreSeo(store = {}, origin) {
   const settings = normalizeSeoSettings(source.seoSettings);
   const brandName = text(source.brandName, 80) || "Adriego Store";
   const absolute = (url, fallback) => new URL(url || fallback, `${origin}/`).href;
-  const faviconUrl = absolute(settings.faviconUrl, "/favicon.svg");
-  const logoUrl = absolute(settings.logoUrl, settings.faviconUrl || "/favicon.svg");
-  const imageUrl = absolute(settings.imageUrl, "/og-cover.jpg");
+  const faviconUrl = absolute(settings.faviconUrl, "/adriego-icon.png");
+  const logoUrl = absolute(settings.logoUrl, "/adriego-logo.png");
+  const imageUrl = absolute(settings.imageUrl, "/adriego-share.png");
   return {
     brandName, title: settings.title || `${brandName} | Ropa, colores y tallas`,
     description: settings.description || SITE_DESCRIPTION.replaceAll("Adriego Store", () => brandName),

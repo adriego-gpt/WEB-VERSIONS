@@ -15,10 +15,17 @@ test("tipos y tags exponen selección y acciones masivas seguras", async () => {
   assert.match(source, /Seleccionar todos/);
 });
 
-test("inventario y pedidos permiten seleccionar visibles y operar por lote", async () => {
+test("catálogo conserva acciones masivas, inventario usa matriz y pedidos operan por lote", async () => {
   const source = await fs.readFile(path.join(root, "src/components/admin/AdminPanelModal.jsx"), "utf8");
-  assert.match(source, /selectedInventoryProductIds/);
+  const catalogSource = await fs.readFile(path.join(root, "src/components/admin/ProductCatalogPanel.jsx"), "utf8");
+  const inventorySource = await fs.readFile(path.join(root, "src/components/admin/InventoryMatrixPanel.jsx"), "utf8");
+  assert.match(catalogSource, /onDeleteSelected/);
+  assert.match(catalogSource, /onSetFeatured/);
   assert.match(source, /bulkSetCatalogVisibility/);
+  assert.match(source, /<InventoryMatrixPanel/);
+  assert.match(inventorySource, /Stock de \{product\.name\} por color y talla/);
+  assert.match(inventorySource, /onSelectVariant\(product\.id, color, size\)/);
+  assert.doesNotMatch(inventorySource, /startEditingProduct|Ajustar producto/);
   assert.match(source, /selectedOrderIds/);
   assert.match(source, /Seleccionamos los primeros 25 pedidos visibles/);
   assert.match(source, /applyBulkOrderStatus/);
@@ -87,4 +94,3 @@ test("eliminación de tipos y tags en panel admin es atómica y no resucita enti
   assert.match(serverApply, /productTypeRecordsRef\.current = nextProductTypeRecords;/, "applyCatalogStateFromServer debe actualizar el ref");
   assert.match(serverApply, /filterTagRecordsRef\.current = nextFilterTagRecords;/, "applyCatalogStateFromServer debe actualizar el ref de tags");
 });
-

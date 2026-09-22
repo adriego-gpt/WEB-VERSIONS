@@ -75,6 +75,13 @@ test("SEO endpoint tests", async (t) => {
         imagesByColor: { Negro: ["https://ik.imagekit.io/adriego/catalog/chaqueta.webp"] },
         variants: [{ color: "Negro", size: "M", stock: 1 }],
       },
+      {
+        id: "prod-3",
+        name: "Vestido Lino Natural",
+        price: 45,
+        isPublic: true,
+        variants: [{ color: "Beige", size: "M", stock: 1 }],
+      },
     ];
     return draft;
   });
@@ -84,9 +91,12 @@ test("SEO endpoint tests", async (t) => {
     await seoHandler({ query: { action: "sitemap" } }, res);
 
     assert.equal(res.statusCode, 200);
-    assert.match(res.data, /https:\/\/adriego\.vercel\.app\/producto\/vestido-lino-natural/);
+    assert.match(res.data, /https:\/\/www\.adriego\.shop\/producto\/vestido-lino-natural/);
     assert.doesNotMatch(res.data, /chaqueta-oculta/);
     assert.match(res.data, /<urlset/);
+    assert.match(res.data, /xmlns:image="http:\/\/www\.google\.com\/schemas\/sitemap-image\/1\.1"/);
+    assert.match(res.data, /<image:loc>https:\/\/ik\.imagekit\.io\/adriego\/catalog\/vestido-beige\.webp<\/image:loc>/);
+    assert.equal((res.data.match(/<loc>https:\/\/www\.adriego\.shop\/producto\/vestido-lino-natural<\/loc>/g) || []).length, 1);
   });
 
   await t.test("prerenders product with image from imagesByColor and stock from variants", async () => {
@@ -99,10 +109,11 @@ test("SEO endpoint tests", async (t) => {
     const schema = JSON.parse(res.data.match(/<script[^>]*type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/)[1]);
     assert.equal(schema.offers.price, "45");
     assert.equal(schema.sku, "VES-001");
+    assert.equal(schema.url, "https://www.adriego.shop/producto/vestido-lino-natural");
     assert.match(res.data, /<p>Vestido de lino fresco para toda ocasión\.<\/p>/);
     assert.match(res.data, /Colores: Beige, Negro\. Tallas: M, S\./);
     assert.match(res.data, /Vestido Lino Natural \| Adriego Store/);
-    assert.match(res.data, /<link rel="canonical" href="https:\/\/adriego\.vercel\.app\/producto\/vestido-lino-natural">/);
+    assert.match(res.data, /<link rel="canonical" href="https:\/\/www\.adriego\.shop\/producto\/vestido-lino-natural">/);
   });
 
   await t.test("returns 404 for unknown product slug", async () => {
@@ -118,6 +129,15 @@ test("SEO endpoint tests", async (t) => {
     await seoHandler({ query: { path: "/producto/chaqueta-oculta" } }, res);
     assert.equal(res.statusCode, 404);
     assert.doesNotMatch(res.data, /Chaqueta Oculta/);
+  });
+
+  await t.test("homepage remains available when optional store settings are null", async () => {
+    await updateStore(draft => { draft.storeSettings = null; return draft; });
+    const res = createMockResponse();
+    await seoHandler({ query: { path: "/" } }, res);
+    assert.equal(res.statusCode, 200);
+    assert.match(res.data, /Vestido Lino Natural/);
+    assert.doesNotMatch(res.data, /catálogo no está disponible temporalmente/i);
   });
 
   await t.test("robots and sitemap follow the configured domain", async () => {
@@ -144,6 +164,33 @@ test("SEO endpoint tests", async (t) => {
     await seoHandler({ query: { path: "/producto/vestido-lino-natural" } }, product);
     assert.match(product.data, /Vestido Lino Natural \| Adriego Boutique/);
     assert.doesNotMatch(product.data, /<title>Adriego \| Moda/);
+  });
+
+  await t.test("exposes the first homepage slide to the HTML preload scanner", async () => {
+    const heroImage = "https://images.unsplash.com/photo-1445205170230-053b83016050?auto=format&fit=crop&w=1400&q=80";
+    await updateStore(draft => {
+      draft.storeSettings = {
+        ...draft.storeSettings,
+        heroSlides: [{ id: "slide-1", title: "Nueva colección", image: heroImage }],
+      };
+      return draft;
+    });
+    const home = createMockResponse();
+    await seoHandler({ query: { path: "/" } }, home);
+    assert.match(home.data, /<link rel="preload" as="image" fetchpriority="high"/);
+    assert.match(home.data, /imagesrcset="[^"]*images\.unsplash\.com[^"]*480w/);
+    assert.match(home.data, /imagesizes="\(max-width: 900px\) 100vw, 54vw"/);
+    const product = createMockResponse();
+    await seoHandler({ query: { path: "/producto/vestido-lino-natural" } }, product);
+    assert.doesNotMatch(product.data, /imagesizes="\(max-width: 900px\) 100vw, 54vw"/);
+    await updateStore(draft => {
+      draft.storeSettings = { ...draft.storeSettings, heroSlides: [] };
+      return draft;
+    });
+    const fallbackHome = createMockResponse();
+    await seoHandler({ query: { path: "/" } }, fallbackHome);
+    assert.match(fallbackHome.data, /<link rel="preload" as="image" fetchpriority="high"/);
+    assert.match(fallbackHome.data, /photo-1445205170230-053b83016050/);
   });
 
   await t.test("rejects write methods and sends restrictive security headers", async () => {

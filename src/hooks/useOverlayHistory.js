@@ -5,6 +5,7 @@ import { createUuid } from "../utils/uid.js";
 export function useOverlayHistory({ open, onClose, step, onStepChange }) {
   const callbacks = useRef({ onClose, onStepChange });
   const keyRef = useRef(null);
+  const lifetimeRef = useRef(0);
   const initialStep = useRef(step);
   useLayoutEffect(() => {
     callbacks.current = { onClose, onStepChange };
@@ -12,11 +13,15 @@ export function useOverlayHistory({ open, onClose, step, onStepChange }) {
   }, [onClose, onStepChange, step]);
   useEffect(() => {
     if (!open || typeof window === "undefined") return undefined;
+    const lifetime = ++lifetimeRef.current;
     const pathname = window.location.pathname;
-    const key = createUuid();
-    keyRef.current = key;
+    // React StrictMode replays setup/cleanup. Reuse our entry rather than
+    // pushing twice and immediately navigating back out of the new overlay.
     const parent = window.history.state || {};
-    window.history.pushState({ ...parent, adriegoModal: { key, step: initialStep.current, depth: 0 } }, document.title, window.location.href);
+    const reuseEntry = keyRef.current && parent.adriegoModal?.key === keyRef.current;
+    const key = reuseEntry ? keyRef.current : createUuid();
+    keyRef.current = key;
+    if (!reuseEntry) window.history.pushState({ ...parent, adriegoModal: { key, step: initialStep.current, depth: 0 } }, document.title, window.location.href);
     const restore = () => {
       const modal = window.history.state?.adriegoModal;
       if (modal?.key !== key) callbacks.current.onClose?.();
@@ -25,9 +30,15 @@ export function useOverlayHistory({ open, onClose, step, onStepChange }) {
     window.addEventListener("popstate", restore);
     return () => {
       window.removeEventListener("popstate", restore);
-      const modal = window.history.state?.adriegoModal;
-      if (modal?.key === key && window.location.pathname === pathname) window.history.go(-(modal.depth + 1));
-      keyRef.current = null;
+      queueMicrotask(() => {
+        // The current generation must be re-read here: StrictMode may already
+        // have replayed this effect before this cleanup microtask runs.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+        if (lifetimeRef.current !== lifetime) return;
+        const modal = window.history.state?.adriegoModal;
+        if (modal?.key === key && window.location.pathname === pathname) window.history.go(-(modal.depth + 1));
+        keyRef.current = null;
+      });
     };
   }, [open]);
 

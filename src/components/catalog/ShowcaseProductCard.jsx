@@ -2,6 +2,8 @@ import React from "react";
 import { currency, discountPercent } from "../../utils/currency";
 import { FALLBACK_IMAGE } from "../../constants/product";
 import { getResponsiveImageSources, applyImageFallback } from "../../domain/products/imageSources.js";
+import { useImagePending } from "../../hooks/useImagePending.js";
+import { ImageLoadingIndicator } from "../ui/ImageLoadingIndicator.jsx";
 import {
   getCurrentImageForProduct,
   getSelectionForColor,
@@ -12,6 +14,7 @@ export function ShowcaseProductCard({ product, onOpenDetail, isDuplicate = false
   const principalColor = principalSelection.color;
   const discount = discountPercent(product.price, product.oldPrice);
   const previewImage = getCurrentImageForProduct(product, principalColor) || FALLBACK_IMAGE;
+  const { pending: imagePending, markReady: markImageReady } = useImagePending(previewImage);
 
   const handleOpen = () => {
     const resolved = getSelectionForColor(product, { color: principalColor });
@@ -29,6 +32,7 @@ export function ShowcaseProductCard({ product, onOpenDetail, isDuplicate = false
           aria-label={`Ver detalle de ${product.name}, ${currency(product.price)}`}
         >
           <span className="featured-product-image-wrap">
+            <ImageLoadingIndicator pending={imagePending} />
             <img
               src={previewImage}
               srcSet={getResponsiveImageSources(previewImage)}
@@ -37,7 +41,11 @@ export function ShowcaseProductCard({ product, onOpenDetail, isDuplicate = false
               className="featured-product-image"
               loading="lazy"
               decoding="async"
-              onError={(event) => applyImageFallback(event.currentTarget, FALLBACK_IMAGE)}
+              onLoad={markImageReady}
+              onError={(event) => {
+                if (event.currentTarget.getAttribute("src") === FALLBACK_IMAGE) markImageReady();
+                else applyImageFallback(event.currentTarget, FALLBACK_IMAGE);
+              }}
             />
             {product.offerEnabled && discount > 0 ? <span className="featured-product-discount">-{discount}%</span> : null}
           </span>

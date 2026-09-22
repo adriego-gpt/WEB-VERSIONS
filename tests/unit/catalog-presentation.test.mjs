@@ -70,6 +70,46 @@ test("featured cards use the principal catalog color without showing color selec
   assert.doesNotMatch(source, /featured-product-swatches|featured-swatch/);
 });
 
+test("admin, offers and favorites consistently preview the saved principal color", async () => {
+  const files = [
+    "../../src/components/admin/ProductCatalogPanel.jsx",
+    "../../src/components/admin/OfferManagerPanel.jsx",
+    "../../src/components/cart/FavoritesModal.jsx",
+  ];
+  const sources = await Promise.all(files.map((file) => readFile(new URL(file, import.meta.url), "utf8")));
+  for (const source of sources) {
+    assert.match(source, /product\.catalogColor \|\| product\.colors\?*\.?\[0\]|product\.catalogColor \|\| colors\[0\]/);
+  }
+});
+
+test("product editor and inventory make the principal catalog color explicit", async () => {
+  const editor = await readFile(new URL("../../src/components/admin/ProductEditorPanel.jsx", import.meta.url), "utf8");
+  const inventory = await readFile(new URL("../../src/components/admin/InventoryMatrixPanel.jsx", import.meta.url), "utf8");
+
+  assert.match(editor, /onFieldChange\("catalogColor", color\.name\)/);
+  assert.match(editor, /role="radiogroup"/);
+  assert.match(editor, /aria-checked=\{selected\}/);
+  assert.match(inventory, /color === principalColor/);
+  assert.match(inventory, />Principal</);
+});
+
+test("product editor can reorder each color gallery and exposes its cover image", async () => {
+  const [app, admin, editor] = await Promise.all([
+    readFile(new URL("../../src/App.jsx", import.meta.url), "utf8"),
+    readFile(new URL("../../src/components/admin/AdminPanelModal.jsx", import.meta.url), "utf8"),
+    readFile(new URL("../../src/components/admin/ProductEditorPanel.jsx", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(app, /const moveImageField = \(uid, fromIndex, toIndex\) =>/);
+  assert.match(app, /moveImageField=\{moveImageField\}/);
+  assert.match(admin, /onMoveImageField=\{moveImageField\}/);
+  assert.match(editor, /La primera foto será la portada de este color/);
+  assert.match(editor, /onClick=\{\(\) => moveImage\(color, imageIndex, 0\)\}/);
+  assert.match(editor, /Mover imagen \$\{imageIndex \+ 1\} una posición arriba/);
+  assert.match(editor, /Mover imagen \$\{imageIndex \+ 1\} una posición abajo/);
+  assert.match(editor, /role="status" aria-live="polite"/);
+});
+
 test("featured marquee hides repeated filler cards from assistive technology", async () => {
   const source = await readFile(new URL("../../src/components/catalog/FeaturedProductMarquee.jsx", import.meta.url), "utf8");
 

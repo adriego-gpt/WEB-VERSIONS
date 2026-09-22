@@ -128,6 +128,28 @@ function localApiPlugin() {
   };
 }
 
+function preloadLocalFontsPlugin() {
+  return {
+    name: "preload-local-fonts",
+    apply: "build",
+    transformIndexHtml: {
+      order: "post",
+      handler(_html, context) {
+        const names = Object.keys(context.bundle || {});
+        const fonts = [
+          names.find((name) => /^assets\/manrope-latin-wght-normal-[^/]+\.woff2$/.test(name)),
+          names.find((name) => /^assets\/cormorant-garamond-latin-wght-normal-[^/]+\.woff2$/.test(name)),
+        ].filter(Boolean);
+        return fonts.map((name) => ({
+          tag: "link",
+          attrs: { rel: "preload", as: "font", type: "font/woff2", crossorigin: true, href: `/${name}` },
+          injectTo: "head",
+        }));
+      },
+    },
+  };
+}
+
 export default defineConfig(({ mode }) => {
   // Load ALL env vars so the local dev API plugin (serverless function emulation)
   // can read backend secrets (TELEGRAM_BOT_TOKEN, KV_REST_API_TOKEN, etc.).
@@ -146,7 +168,7 @@ export default defineConfig(({ mode }) => {
   if (!publicSiteOrigin) throw new Error("PUBLIC_SITE_URL debe ser un origen HTTPS válido, sin rutas, credenciales ni parámetros.");
 
   return {
-    plugins: [react(), localApiPlugin(), {
+    plugins: [react(), localApiPlugin(), preloadLocalFontsPlugin(), {
       name: "public-site-origin",
       transformIndexHtml(html) {
         return html.replaceAll(DEFAULT_PUBLIC_SITE_ORIGIN, publicSiteOrigin);

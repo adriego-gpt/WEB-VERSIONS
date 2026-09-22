@@ -17,6 +17,8 @@ export function renderMaintenanceDocument({ template, storeSettings = {}, origin
     .replace('<div id="root"></div>', `<div id="root">${body}</div>`);
 }
 import { getProductSeo, getProductSlug } from "../../src/domain/products/seo.js";
+import { getResponsiveImageSources } from "../../src/domain/products/imageSources.js";
+import { DEFAULT_HERO_IMAGE } from "../../src/domain/store/defaultHero.js";
 
 let builtTemplate;
 export async function readPublicTemplate() {
@@ -34,14 +36,35 @@ function json(value) {
 }
 
 export function renderPublicDocument({ template, products = [], product, origin, storeSettings = {} }) {
-  const site = getStoreSeo(storeSettings, origin);
+  const safeStoreSettings = storeSettings && typeof storeSettings === "object" ? storeSettings : {};
+  const site = getStoreSeo(safeStoreSettings, origin);
   const publicProducts = products.filter((p) => p.isPublic !== false && getProductSlug(p));
   const data = product ? getProductSeo(product, origin, site.brandName) : null;
   const title = data ? `${data.name} | ${site.brandName}` : site.title;
   const description = data ? data.description.slice(0, 160) : site.description;
   const url = data ? data.url : `${origin}/`;
   const image = data?.images[0] || site.imageUrl;
+  const defaultShareImage = new URL("/adriego-share.png", `${origin}/`).href;
+  const defaultShareDimensions = !data && image === defaultShareImage
+    ? '<meta property="og:image:type" content="image/png">\n<meta property="og:image:width" content="1731">\n<meta property="og:image:height" content="909">'
+    : "";
   const schema = data ? data.schema : site.schema;
+  const heroImage = !data
+    ? (Array.isArray(safeStoreSettings.heroSlides) && safeStoreSettings.heroSlides.length
+      ? safeStoreSettings.heroSlides[0]?.image
+      : "") || DEFAULT_HERO_IMAGE
+    : "";
+  let heroPreload = "";
+  try {
+    const imageUrl = new URL(String(heroImage || ""));
+    if (!data && imageUrl.protocol === "https:" && !imageUrl.username && !imageUrl.password) {
+      const srcSet = getResponsiveImageSources(imageUrl.href, [480, 768, 960, 1280]);
+      // ASVS V1.2: encode administrator-controlled URLs for their HTML attribute context.
+      heroPreload = `<link rel="preload" as="image" fetchpriority="high" href="${escapeHtml(imageUrl.href)}"${srcSet ? ` imagesrcset="${escapeHtml(srcSet)}" imagesizes="(max-width: 900px) 100vw, 54vw"` : ""}>`;
+    }
+  } catch {
+    // Invalid or non-HTTPS image URLs do not become browser preloads.
+  }
   const head = `<title>${escapeHtml(title)}</title>
 <meta name="description" content="${escapeHtml(description)}">
 <meta name="robots" content="index, follow">
@@ -54,10 +77,15 @@ export function renderPublicDocument({ template, products = [], product, origin,
 <meta property="og:description" content="${escapeHtml(description)}">
 <meta property="og:url" content="${escapeHtml(url)}">
 <meta property="og:image" content="${escapeHtml(image)}">
+<meta property="og:image:secure_url" content="${escapeHtml(image)}">
+<meta property="og:image:alt" content="${escapeHtml(title)}">
+${defaultShareDimensions}
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="${escapeHtml(title)}">
 <meta name="twitter:description" content="${escapeHtml(description)}">
 <meta name="twitter:image" content="${escapeHtml(image)}">
+<meta name="twitter:image:alt" content="${escapeHtml(title)}">
+${heroPreload}
 <script id="${data ? "route-product-jsonld" : "site-jsonld"}" type="application/ld+json">${json(schema)}</script>`;
   const details = (p) => `<p>Colores: ${escapeHtml(p.colors.join(", ") || "Consulta el producto")}. Tallas: ${escapeHtml(p.sizes.join(", ") || "Consulta el producto")}.</p><p>${escapeHtml(new Intl.NumberFormat("es-EC", { style: "currency", currency: "USD" }).format(p.price))} · ${p.inStock ? "Disponible" : "Agotado"}</p>`;
   const body = data

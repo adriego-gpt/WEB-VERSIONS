@@ -60,6 +60,38 @@ export function removeSizeFromColorDrafts(colorsData = [], rawSize = "", options
   return changed ? nextColors : colorsData;
 }
 
+export function moveColorImageInDrafts(colorsData = [], colorUid, fromIndex, toIndex) {
+  if (!Array.isArray(colorsData)) return colorsData;
+  const safeColorUid = colorUid == null ? "" : String(colorUid);
+  const safeFromIndex = Number(fromIndex);
+  const safeToIndex = Number(toIndex);
+  if (!safeColorUid
+    || !Number.isInteger(safeFromIndex)
+    || !Number.isInteger(safeToIndex)
+    || safeFromIndex === safeToIndex) return colorsData;
+
+  let changed = false;
+  const nextColors = colorsData.map((color) => {
+    if (String(color?.uid) !== safeColorUid) return color;
+    const images = Array.isArray(color?.images) ? color.images : [];
+    if (safeFromIndex < 0
+      || safeToIndex < 0
+      || safeFromIndex >= images.length
+      || safeToIndex >= images.length) return color;
+
+    const nextImages = [...images];
+    const nextImageViews = images.map((_, index) => color.imageViews?.[index] || "");
+    const [movedImage] = nextImages.splice(safeFromIndex, 1);
+    const [movedView] = nextImageViews.splice(safeFromIndex, 1);
+    nextImages.splice(safeToIndex, 0, movedImage);
+    nextImageViews.splice(safeToIndex, 0, movedView);
+    changed = true;
+    return { ...color, images: nextImages, imageViews: nextImageViews };
+  });
+
+  return changed ? nextColors : colorsData;
+}
+
 function normalizeDraftColor(color = {}) {
   return {
     name: String(color.name || ""),

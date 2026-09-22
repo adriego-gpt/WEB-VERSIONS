@@ -262,3 +262,56 @@ test("CSV import with 'destacados' column preserves featured: true across sync a
   assert.equal(featuredProduct.featured, true);
   assert.equal(featuredProduct.isPublic, true);
 });
+
+test("API lifecycle preserves a non-first principal color across admin sync and public reload", async () => {
+  const preCheckResponse = await callApi({
+    method: "GET",
+    query: { action: "get" },
+    admin: true,
+  });
+  const currentVersion = preCheckResponse.jsonBody?.data?.catalogVersion ?? 0;
+  const principalColorProduct = {
+    id: "principal-color-roundtrip",
+    sku: "COLOR-002",
+    name: "Abrigo con color principal",
+    price: 49.99,
+    oldPrice: 59.99,
+    category: "Mujer",
+    productType: "Abrigos",
+    colors: ["Negro", "Rojo"],
+    catalogColor: "Rojo",
+    sizes: ["M"],
+    variants: [
+      { uid: "black-m", color: "Negro", size: "M", stock: 2 },
+      { uid: "red-m", color: "Rojo", size: "M", stock: 3 },
+    ],
+    imagesByColor: {
+      Negro: ["https://example.com/black.jpg"],
+      Rojo: ["https://example.com/red.jpg"],
+    },
+    colorSwatches: { Negro: "#171717", Rojo: "#ad3835" },
+    isPublic: true,
+    featured: true,
+  };
+
+  const syncResponse = await callApi({
+    method: "POST",
+    query: { action: "sync" },
+    admin: true,
+    csrf: true,
+    body: {
+      data: { products: [principalColorProduct] },
+      baseCatalogVersion: currentVersion,
+      writeProtocol: 2,
+    },
+  });
+
+  assert.equal(syncResponse.statusCode, 200);
+  assert.equal(syncResponse.jsonBody?.ok, true);
+
+  const publicResponse = await callApi({ method: "GET", query: { action: "get-public" } });
+  const reloaded = (publicResponse.jsonBody?.data?.products || []).find((item) => item.id === principalColorProduct.id);
+  assert.ok(reloaded);
+  assert.equal(reloaded.catalogColor, "Rojo");
+  assert.equal(reloaded.imagesByColor[reloaded.catalogColor][0], "https://example.com/red.jpg");
+});

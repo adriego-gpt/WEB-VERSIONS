@@ -52,3 +52,14 @@ test("photo-created products remain dirty so their draft can be recovered", () =
   assert.ok(handler.includes("setProductFormBaseline(getProductFormSignature(emptyBaseline))"));
   assert.ok(!handler.includes("setProductFormBaseline(getProductFormSignature(form))"));
 });
+
+test("sidebar Nuevo producto always starts from a clean editor baseline", () => {
+  const source = fs.readFileSync("src/components/admin/AdminPanelModal.jsx", "utf8");
+  const start = source.indexOf("const handleAdminTabClick =");
+  const end = source.indexOf("const offerPendingCount", start);
+  const handler = source.slice(start, end);
+
+  assert.match(handler, /tabId === ["']producto["']/);
+  assert.match(handler, /resetEditor\?\.\(\)/);
+  assert.match(source, /onClick=\{\(\) => handleAdminTabClick\(tab\.id\)\}/);
+});

@@ -14,6 +14,7 @@ export function CouponManagerPanel({
   onToggleCouponDraftProduct,
   onToggleCouponDraftProductType,
   onSaveCoupon,
+  saveBusy = false,
   onResetCouponDraft,
   onEditCoupon,
   onToggleCouponActive,
@@ -63,7 +64,7 @@ export function CouponManagerPanel({
           description="Consulta los códigos existentes y abre el editor solo cuando necesites crear o modificar uno."
           meta={<span className="admin-count-label">{coupons.length} registrados</span>}
           actions={(
-            <button className="btn btn-primary" type="button" onClick={startNewCoupon}>
+            <button className="btn btn-primary" type="button" onClick={startNewCoupon} disabled={saveBusy}>
               <Plus size={16} />Nuevo cupón
             </button>
           )}
@@ -77,8 +78,8 @@ export function CouponManagerPanel({
                 <p>Configura primero el descuento; los límites y restricciones son opcionales.</p>
               </div>
               <div className="admin-actions">
-                <button className="btn btn-outline" type="button" onClick={cancelEditor}><X size={16} />Cancelar</button>
-                <button className="btn btn-primary" type="button" onClick={onSaveCoupon}><ShieldCheck size={16} />Guardar cupón</button>
+                <button className="btn btn-outline" type="button" onClick={cancelEditor} disabled={saveBusy}><X size={16} />Cancelar</button>
+                <button className="btn btn-primary" type="button" onClick={onSaveCoupon} disabled={saveBusy} aria-busy={saveBusy}><ShieldCheck size={16} />{saveBusy ? "Guardando…" : "Guardar cupón"}</button>
               </div>
             </div>
 
@@ -216,8 +217,8 @@ export function CouponManagerPanel({
                   <ChevronDown size={17} aria-hidden="true" />
                 </button>
                 <div className="coupon-row-actions">
-                  <button className="btn btn-soft" type="button" onClick={() => editCoupon(coupon)}><PencilLine size={15} />Editar</button>
-                  <button className="btn btn-outline" type="button" onClick={() => onToggleCouponActive(coupon.id)}>{coupon.active ? "Desactivar" : "Activar"}</button>
+                  <button className="btn btn-soft" type="button" onClick={() => editCoupon(coupon)} disabled={saveBusy}><PencilLine size={15} />Editar</button>
+                  <button className="btn btn-outline" type="button" onClick={() => onToggleCouponActive(coupon.id)} disabled={saveBusy}>{coupon.active ? "Desactivar" : "Activar"}</button>
                 </div>
                 {isExpanded && (
                   <div id={detailsId} className="coupon-row-details">
@@ -228,7 +229,7 @@ export function CouponManagerPanel({
                       {coupon.expiresAt && <span>Expira: {new Date(coupon.expiresAt).toLocaleString("es-EC")}</span>}
                       {!!coupon.excludedProductIds?.length && <span>{coupon.excludedProductIds.length} productos excluidos</span>}
                     </div>
-                    <button className="btn btn-danger" type="button" onClick={() => onDeleteCoupon(coupon.id)}><Trash2 size={15} />Eliminar cupón</button>
+                    <button className="btn btn-danger" type="button" onClick={() => onDeleteCoupon(coupon.id)} disabled={saveBusy}><Trash2 size={15} />Eliminar cupón</button>
                   </div>
                 )}
               </article>

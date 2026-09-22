@@ -28,6 +28,7 @@ export function ProductCatalogPanel({
   onToggleSelection,
   onToggleAllVisible,
   onClearSelection,
+  onSetVisibility,
   onSetFeatured,
   onToggleFeatured,
   onDeleteSelected,
@@ -119,6 +120,12 @@ export function ProductCatalogPanel({
         <div className="admin-selection-bar" role="region" aria-label="Acciones para productos seleccionados">
           <strong>{selectedCount} seleccionado{selectedCount === 1 ? "" : "s"}</strong>
           <div className="admin-selection-actions">
+            <button className="btn btn-soft" type="button" disabled={bulkBusy} onClick={() => onSetVisibility(true)}>
+              <Eye size={15} />Publicar
+            </button>
+            <button className="btn btn-outline" type="button" disabled={bulkBusy} onClick={() => onSetVisibility(false)}>
+              <EyeOff size={15} />Ocultar
+            </button>
             <button className="btn btn-soft" type="button" disabled={bulkBusy} onClick={() => onSetFeatured(true)}>
               <Star size={15} />Destacar
             </button>
@@ -156,7 +163,7 @@ export function ProductCatalogPanel({
                 />
               </label>
               <img
-                src={getProductImage(product, colors[0])}
+                src={getProductImage(product, product.catalogColor || colors[0])}
                 alt=""
                 width="64"
                 height="68"

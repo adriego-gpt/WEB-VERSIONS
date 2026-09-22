@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { getResponsiveImageSources, applyImageFallback } from "../../src/domain/products/imageSources.js";
+import { getOptimizedImageSource, getResponsiveImageSources, applyImageFallback } from "../../src/domain/products/imageSources.js";
 import { createFrameQueue } from "../../src/utils/frameQueue.js";
 
 test("release builds set production before resolving Vite, independent of local developer env", () => {
@@ -30,6 +30,19 @@ test("default responsive candidates include an intermediate card width", () => {
   assert.match(result, /tr=w-320[^,]* 320w/);
   assert.match(result, /tr=w-480[^,]* 480w/);
   assert.match(result, /tr=w-640[^,]* 640w/);
+});
+
+test("product detail and zoom can request premium ImageKit quality without changing the stored source", () => {
+  const source = "https://ik.imagekit.io/shop/ropa/azul.jpg?v=2";
+  const srcSet = getResponsiveImageSources(source, [640, 1280], { quality: 88 });
+  for (const candidate of srcSet.split(", ")) {
+    const url = new URL(candidate.split(" ")[0]);
+    assert.match(url.searchParams.get("tr"), /^w-(?:640|1280),q-88,f-auto$/);
+    assert.equal(url.searchParams.get("v"), "2");
+  }
+  const zoom = new URL(getOptimizedImageSource(source, { quality: 90 }));
+  assert.equal(zoom.searchParams.get("tr"), "q-90,f-auto");
+  assert.equal(zoom.searchParams.get("v"), "2");
 });
 
 test("the public map waits until it is near the viewport without requiring a click", () => {
@@ -84,7 +97,7 @@ test("pointer bursts render once per frame using the final position", () => {
 test("catalog memoization does not retain old action callbacks", () => {
   const source = readFileSync(new URL("../../src/components/catalog/CatalogProductCard.jsx", import.meta.url), "utf8");
   assert.match(source, /React\.memo\(CatalogProductCard\)/);
-  assert.equal((source.match(/if \(added === false\) return;/g) || []).length, 2);
+  assert.equal((source.match(/if \(added === false\) return;/g) || []).length, 1);
   assert.match(source, /useEffect\(\(\) => \(\) => clearTimeout\(feedbackTimerRef\.current\)/);
 });
 

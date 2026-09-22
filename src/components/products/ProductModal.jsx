@@ -18,13 +18,19 @@ import { motion as Motion, AnimatePresence } from "framer-motion";
 import { ANIMATION } from "../../constants/animation";
 import { FALLBACK_IMAGE } from "../../constants/product";
 import { useSwipeGesture } from "../../hooks/useSwipeGesture";
+import { useImagePending } from "../../hooks/useImagePending.js";
+import { ImageLoadingIndicator } from "../ui/ImageLoadingIndicator.jsx";
 import { currency, discountPercent } from "../../utils/currency";
 import { getProductColorSwatch } from "../../utils/productColor";
 import { triggerHaptic } from "../../utils/haptics";
 import { clampImagePan, zoomImageAtPoint } from "../../domain/products/imageZoom";
-import { getResponsiveImageSources, applyImageFallback } from "../../domain/products/imageSources.js";
+import { getOptimizedImageSource, getResponsiveImageSources, applyImageFallback } from "../../domain/products/imageSources.js";
 import { createFrameQueue } from "../../utils/frameQueue.js";
 import { preserveCartSelection } from "../../domain/orders/cartEditing.js";
+import whatsappIconUrl from "../../assets/social/whatsapp.svg";
+import instagramIconUrl from "../../assets/social/instagram.svg";
+import facebookIconUrl from "../../assets/social/facebook.svg";
+import tiktokIconUrl from "../../assets/social/tiktok.svg";
 import {
   getSelectionForColor,
   getImagesForColor,
@@ -32,6 +38,39 @@ import {
   getStockForVariant,
   getStockStatus,
 } from "../../domain/products/variants";
+
+const PRODUCT_SOCIAL_ICON_MAP = {
+  whatsapp: whatsappIconUrl,
+  instagram: instagramIconUrl,
+  facebook: facebookIconUrl,
+  tiktok: tiktokIconUrl,
+};
+
+function ProductSocialIcon({ icon, size = 18 }) {
+  const iconUrl = PRODUCT_SOCIAL_ICON_MAP[icon];
+  if (!iconUrl) return null;
+  return <img src={iconUrl} alt="" aria-hidden="true" width={size} height={size} loading="lazy" decoding="async" />;
+}
+
+function RecommendationImage({ source }) {
+  const { pending, markReady } = useImagePending(source);
+  return <>
+    <ImageLoadingIndicator pending={pending} />
+    <img
+      src={source}
+      srcSet={getResponsiveImageSources(source)}
+      sizes="(max-width: 760px) 220px, 260px"
+      alt=""
+      loading="lazy"
+      decoding="async"
+      onLoad={markReady}
+      onError={(event) => {
+        if (event.currentTarget.getAttribute("src") === FALLBACK_IMAGE) markReady();
+        else applyImageFallback(event.currentTarget, FALLBACK_IMAGE);
+      }}
+    />
+  </>;
+}
 
 export function ProductModal({
   product,
@@ -45,12 +84,14 @@ export function ProductModal({
   onEditProduct,
   recommendations = [],
   onOpenRecommendation,
+  mobileHeader,
+  interactionSuspended = false,
+  contactSettings = {},
 }) {
   const productTitleId = useId();
   const resolvedSelection = product ? preserveCartSelection(product, selection, getSelectionForColor) : null;
   const [imageIndex, setImageIndex] = useState(0);
   const [imagePreviewOpen, setImagePreviewOpen] = useState(false);
-  const [showImageHint, setShowImageHint] = useState(true);
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
   const [quantitySelection, setQuantitySelection] = useState({ productId: "", quantity: 1 });
   const [previewScale, setPreviewScale] = useState(1);
@@ -66,6 +107,7 @@ export function ProductModal({
   const previewCloseRef = useRef(null);
   const previewPointersRef = useRef(new Map());
   const previewPinchRef = useRef(null);
+  const previewPinchGestureRef = useRef(false);
   const recommendationTrackRef = useRef(null);
   const galleryPaginationRef = useRef(null);
   const modalRef = useRef(null);
@@ -81,6 +123,9 @@ export function ProductModal({
   const currentImages = product ? getImagesForColor(product, resolvedSelection?.color) : [];
   const safeImageIndex = currentImages.length ? Math.min(imageIndex, currentImages.length - 1) : 0;
   const activeImage = currentImages[safeImageIndex] || currentImages[0] || FALLBACK_IMAGE;
+  const detailImage = getOptimizedImageSource(activeImage, { quality: 88 });
+  const { pending: detailImagePending, markReady: markDetailImageReady } = useImagePending(detailImage);
+  const previewImage = getOptimizedImageSource(activeImage, { quality: 90 });
   const discount = product ? discountPercent(product.price, product.oldPrice) : 0;
   const sizesForSelectedColor = product ? getSizesForColor(product, resolvedSelection?.color) : [];
   const selectedStock = product ? getStockForVariant(product, resolvedSelection?.color, resolvedSelection?.size) : 0;
@@ -105,11 +150,6 @@ export function ProductModal({
       };
     });
   };
-
-  useEffect(() => {
-    const timerId = window.setTimeout(() => setShowImageHint(false), 2600);
-    return () => window.clearTimeout(timerId);
-  }, []);
 
   const clampPreviewPan = (pan, scale, element) => {
     return clampImagePan(pan, scale, element.offsetWidth, element.offsetHeight);
@@ -142,6 +182,7 @@ export function ProductModal({
     previewDraggedRef.current = false;
     previewPointersRef.current.clear();
     previewPinchRef.current = null;
+    previewPinchGestureRef.current = false;
   }, [cancelPreviewFrame, setImagePreviewOpen, setPreviewPan, setPreviewPanning, setPreviewScale]);
 
   const openImagePreview = () => {
@@ -170,6 +211,7 @@ export function ProductModal({
     previewDraggedRef.current = false;
     previewPointersRef.current.clear();
     previewPinchRef.current = null;
+    previewPinchGestureRef.current = false;
   };
 
   const closeImagePreview = useCallback(() => {
@@ -231,6 +273,7 @@ export function ProductModal({
         center: { x: (first.x + second.x) / 2, y: (first.y + second.y) / 2 },
         imageCenter: { x: bounds.left + bounds.width / 2 - previewPanRef.current.x, y: bounds.top + bounds.height / 2 - previewPanRef.current.y },
       };
+      previewPinchGestureRef.current = true;
       previewSwipeStartRef.current = null;
       previewSwipeIntentRef.current = null;
       setPreviewPanning(true);
@@ -298,6 +341,7 @@ export function ProductModal({
   const handlePreviewPointerUp = (event) => {
     if (!previewPointersRef.current.has(event.pointerId)) return;
     const hadPinch = Boolean(previewPinchRef.current) || previewPointersRef.current.size >= 2;
+    const belongsToPinchGesture = previewPinchGestureRef.current;
     previewPointersRef.current.delete(event.pointerId);
     if (hadPinch) {
       previewPinchRef.current = null;
@@ -312,6 +356,13 @@ export function ProductModal({
       } else {
         setPreviewPanning(false);
       }
+      previewHandledByPointerRef.current = true;
+      return;
+    }
+    if (belongsToPinchGesture) {
+      previewPinchGestureRef.current = false;
+      previewPanStartRef.current = null;
+      setPreviewPanning(false);
       previewHandledByPointerRef.current = true;
       return;
     }
@@ -381,6 +432,7 @@ export function ProductModal({
       previewPanStartRef.current = null;
       previewPointersRef.current.clear();
       previewPinchRef.current = null;
+      previewPinchGestureRef.current = false;
     });
     return () => window.cancelAnimationFrame(frame);
   }, [activeImage, safeImageIndex, cancelPreviewFrame]);
@@ -442,16 +494,21 @@ export function ProductModal({
 
   useEffect(() => {
     if (!product?.id || typeof window === "undefined") return undefined;
+    const productPath = window.location.pathname;
     const handlePopState = () => {
+      if (interactionSuspended) return;
       if (imagePreviewOpenRef.current) {
         resetImagePreview();
         return;
       }
+      // Account overlays add entries at the same product URL. Closing those
+      // entries must not also dismiss the underlying product.
+      if (window.location.pathname === productPath) return;
       onCloseRef.current?.();
     };
     window.addEventListener("popstate", handlePopState);
     return () => window.removeEventListener("popstate", handlePopState);
-  }, [product?.id, resetImagePreview]);
+  }, [product?.id, resetImagePreview, interactionSuspended]);
 
   const previousFocusRef = useRef(null);
 
@@ -472,7 +529,7 @@ export function ProductModal({
   }, [product?.id]);
 
   useEffect(() => {
-    if (!product || typeof window === "undefined") return undefined;
+    if (!product || interactionSuspended || typeof window === "undefined") return undefined;
     const handleKeyDown = (event) => {
       const activeDialog = document.activeElement?.closest('[role="dialog"]');
       const editingText = event.target instanceof HTMLElement
@@ -486,10 +543,10 @@ export function ProductModal({
         } else {
           closeProductDetail();
         }
-      } else if (event.key === "ArrowLeft" && hasMultipleImages && !editingText) {
+      } else if (event.key === "ArrowLeft" && hasMultipleImages && !(imagePreviewOpen && previewZoomed) && !editingText) {
         event.preventDefault();
         setImageIndex((previous) => (previous - 1 + currentImages.length) % currentImages.length);
-      } else if (event.key === "ArrowRight" && hasMultipleImages && !editingText) {
+      } else if (event.key === "ArrowRight" && hasMultipleImages && !(imagePreviewOpen && previewZoomed) && !editingText) {
         event.preventDefault();
         setImageIndex((previous) => (previous + 1) % currentImages.length);
       } else if (event.key === "Tab") {
@@ -518,7 +575,7 @@ export function ProductModal({
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [product, hasMultipleImages, currentImages.length, imagePreviewOpen, closeImagePreview, closeProductDetail]);
+  }, [product, hasMultipleImages, currentImages.length, imagePreviewOpen, previewZoomed, closeImagePreview, closeProductDetail, interactionSuspended]);
 
   if (!product) return null;
 
@@ -530,13 +587,15 @@ export function ProductModal({
         animate={{ opacity: 1, transition: { duration: 0.2, ease: "easeOut" } }}
         exit={{ opacity: 0, transition: { duration: 0.14, ease: "easeOut" } }}
         className="modal-backdrop"
+        inert={interactionSuspended || undefined}
+        aria-hidden={interactionSuspended || undefined}
         onClick={closeProductDetail}
       >
         <Motion.div
           initial={{ opacity: 0, y: 18, scale: 0.96 }}
           animate={{ opacity: 1, y: 0, scale: 1, transition: { duration: 0.22, ease: ANIMATION.easeOut } }}
           exit={{ opacity: 0, y: 10, scale: 0.97, transition: { duration: 0.14, ease: "easeOut" } }}
-          className="modal"
+          className={`modal${mobileHeader ? " product-modal-has-mobile-header" : ""}`}
           ref={modalRef}
           role="dialog"
           aria-modal="true"
@@ -544,14 +603,17 @@ export function ProductModal({
           tabIndex={-1}
           onClick={(event) => event.stopPropagation()}
         >
+          {mobileHeader && (
+            <div className="product-mobile-chrome">
+              {mobileHeader}
+            </div>
+          )}
           <button onClick={closeProductDetail} className="icon-btn product-modal-close" aria-label="Cerrar detalle del producto">
             <X size={18} />
           </button>
 
           <div className="modal-left">
-            <button onClick={closeProductDetail} className="icon-btn product-modal-mobile-close" aria-label="Cerrar detalle del producto">
-              <X size={18} />
-            </button>
+            <ImageLoadingIndicator pending={detailImagePending} />
             <AnimatePresence mode="wait">
               <button
                 type="button"
@@ -562,8 +624,8 @@ export function ProductModal({
               >
                 <Motion.img
                   key={`${product.id}-${resolvedSelection?.color}-${safeImageIndex}-${activeImage}`}
-                  src={activeImage}
-                  srcSet={getResponsiveImageSources(activeImage, [320, 640, 960, 1280])}
+                  src={detailImage}
+                  srcSet={getResponsiveImageSources(activeImage, [320, 640, 960, 1280], { quality: 88 })}
                   sizes="(max-width: 760px) 100vw, 50vw"
                   alt={product.name}
                   loading="eager"
@@ -578,18 +640,14 @@ export function ProductModal({
                     cursor: "zoom-in",
                     touchAction: "pan-y pinch-zoom",
                   }}
-                  onError={(event) => applyImageFallback(event.currentTarget, FALLBACK_IMAGE)}
+                  onLoad={markDetailImageReady}
+                  onError={(event) => {
+                    if (event.currentTarget.getAttribute("src") === FALLBACK_IMAGE) markDetailImageReady();
+                    else applyImageFallback(event.currentTarget, FALLBACK_IMAGE);
+                  }}
                 />
               </button>
             </AnimatePresence>
-            {showImageHint && (
-              <div className="product-modal-zoom-wrap">
-                <button type="button" className="badge badge-light modal-zoom-toggle" onClick={openImagePreview} aria-label="Abrir imagen del producto">
-                  <span className="pointer-instruction">Haz clic para ampliar</span>
-                  <span className="touch-instruction">Toca para ampliar</span>
-                </button>
-              </div>
-            )}
             {hasMultipleImages && (
               <>
                 <button
@@ -739,11 +797,20 @@ export function ProductModal({
             <div className={`product-modal-actions ${isAdmin ? "product-modal-actions-admin" : ""}`}>
               <div className={`product-modal-buy-composer${selectedStock <= 0 ? " is-disabled" : ""}`} role="group" aria-label="Cantidad y compra">
                 {selectedStock > 0 && (
-                  <button type="button" className="product-modal-buy-control is-decrease" aria-label="Quitar una unidad" onClick={() => updateRequestedQuantity((quantity) => quantity - 1)} disabled={requestedQuantity <= 1}>
-                    <Minus size={15} aria-hidden="true" />
-                  </button>
+                  <div className="product-modal-quantity-stepper" role="group" aria-label="Unidades">
+                    <button type="button" className="product-modal-buy-control is-decrease" aria-label="Quitar una unidad" onClick={() => { updateRequestedQuantity((quantity) => quantity - 1); triggerHaptic("selection"); }} disabled={requestedQuantity <= 1}>
+                      <Minus size={17} aria-hidden="true" />
+                    </button>
+                    <output className="product-modal-buy-quantity" aria-live="polite" aria-label={`${requestedQuantity} ${requestedQuantity === 1 ? "unidad" : "unidades"}`}>
+                      {requestedQuantity}
+                    </output>
+                    <button type="button" className="product-modal-buy-control is-increase" aria-label={requestedQuantity >= quantityLimit ? `Máximo de ${quantityLimit} unidades disponibles` : "Agregar una unidad"} onClick={() => { updateRequestedQuantity((quantity) => quantity + 1); triggerHaptic("selection"); }} disabled={requestedQuantity >= quantityLimit}>
+                      <Plus size={17} aria-hidden="true" />
+                    </button>
+                  </div>
                 )}
                 <button
+                  type="button"
                   className="btn btn-primary product-modal-buy-btn"
                   onClick={(event) => {
                     if (selectedStock > 0) {
@@ -753,21 +820,15 @@ export function ProductModal({
                   }}
                   disabled={selectedStock <= 0}
                 >
-                  <ShoppingBag size={18} />
+                  <ShoppingBag size={17} aria-hidden="true" />
                   <span className="product-modal-buy-copy">
-                    <span>{selectedStock <= 0 ? "Agotado" : cartEditMode ? "Guardar cambios" : "Agregar al carrito"}</span>
-                    {selectedStock > 0 && <output className="product-modal-buy-quantity" aria-live="polite">{requestedQuantity} {requestedQuantity === 1 ? "unidad" : "unidades"} · {currency(product.price * requestedQuantity)}</output>}
+                    <span className="product-modal-buy-title">{selectedStock <= 0 ? "Agotado" : cartEditMode ? "Guardar cambios" : "Agregar al carrito"}</span>
+                    {selectedStock > 0 && (
+                      <span className="product-modal-buy-total">Total · {currency(product.price * requestedQuantity)}</span>
+                    )}
                   </span>
                 </button>
-                {selectedStock > 0 && (
-                  <button type="button" className="product-modal-buy-control is-increase" aria-label="Agregar una unidad" onClick={() => updateRequestedQuantity((quantity) => quantity + 1)} disabled={requestedQuantity >= quantityLimit}>
-                    <Plus size={15} aria-hidden="true" />
-                  </button>
-                )}
               </div>
-              <button className="btn btn-outline product-modal-dismiss-btn" onClick={closeProductDetail}>
-                Seguir viendo
-              </button>
               {isAdmin && (
                 <button className="btn btn-soft" onClick={() => onEditProduct(product)}>
                   <Eye size={16} />
@@ -803,7 +864,7 @@ export function ProductModal({
                     <p className="product-modal-related-eyebrow">Para seguir explorando</p>
                     <h4 id="product-related-title">También te puede gustar</h4>
                   </div>
-                  <div className="product-modal-recommend-controls" aria-label="Mover recomendaciones">
+                  <div className="product-modal-recommend-controls" role="group" aria-label="Mover recomendaciones">
                     <button type="button" className="product-modal-recommend-arrow" onClick={() => scrollRecommendations(-1)} aria-label="Recomendaciones anteriores">
                       <ChevronLeft size={17} />
                     </button>
@@ -827,15 +888,7 @@ export function ProductModal({
                           aria-label={`Ver ${recommendedProduct.name}, ${currency(recommendedProduct.price)}`}
                         >
                           <span className="product-modal-recommend-image-wrap">
-                            <img
-                              src={recommendedImage}
-                              srcSet={getResponsiveImageSources(recommendedImage)}
-                              sizes="(max-width: 760px) 220px, 260px"
-                              alt=""
-                              loading="lazy"
-                              decoding="async"
-                              onError={(event) => applyImageFallback(event.currentTarget, FALLBACK_IMAGE)}
-                            />
+                            <RecommendationImage source={recommendedImage} />
                             <span className="product-modal-recommend-price">{currency(recommendedProduct.price)}</span>
                             {recommendedDiscount > 0 && <span className="product-modal-recommend-discount">-{recommendedDiscount}%</span>}
                           </span>
@@ -852,6 +905,69 @@ export function ProductModal({
                   </div>
                 </div>
               </section>
+            )}
+
+            {(contactSettings.whatsappLink
+              || contactSettings.instagram
+              || contactSettings.facebook
+              || contactSettings.tiktok) && (
+              <div className="product-modal-social-signature" aria-labelledby="product-social-title">
+                <p className="product-modal-social-brand" aria-label="Adriego Store">
+                  <span>ADRIEGO</span>
+                  <small>STORE</small>
+                </p>
+                <p id="product-social-title" className="product-modal-social-intro">Síguenos y descubre las novedades</p>
+                <div className="product-modal-social-icons">
+                  {contactSettings.whatsappLink && (
+                    <a
+                      className="product-modal-social-icon"
+                      href={contactSettings.whatsappLink}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      aria-label="WhatsApp"
+                      title="WhatsApp"
+                    >
+                      <ProductSocialIcon icon="whatsapp" />
+                    </a>
+                  )}
+                  {contactSettings.facebook && (
+                    <a
+                      className="product-modal-social-icon"
+                      href={contactSettings.facebook}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      aria-label="Facebook"
+                      title="Facebook"
+                    >
+                      <ProductSocialIcon icon="facebook" />
+                    </a>
+                  )}
+                  {contactSettings.instagram && (
+                    <a
+                      className="product-modal-social-icon"
+                      href={contactSettings.instagram}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      aria-label="Instagram"
+                      title="Instagram"
+                    >
+                      <ProductSocialIcon icon="instagram" />
+                    </a>
+                  )}
+                  {contactSettings.tiktok && (
+                    <a
+                      className="product-modal-social-icon"
+                      href={contactSettings.tiktok}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      aria-label="TikTok"
+                      title="TikTok"
+                    >
+                      <ProductSocialIcon icon="tiktok" />
+                    </a>
+                  )}
+                </div>
+              </div>
             )}
           </div>
         </Motion.div>
@@ -891,7 +1007,7 @@ export function ProductModal({
             </div>
             <Motion.img
               key={`preview-${product.id}-${selection?.color}-${safeImageIndex}-${activeImage}`}
-              src={activeImage}
+              src={previewImage}
               alt={`${product.name} ampliada`}
               className="image-preview-media"
               loading="eager"
@@ -917,6 +1033,7 @@ export function ProductModal({
                 previewPanStartRef.current = null;
                 previewPointersRef.current.clear();
                 previewPinchRef.current = null;
+                previewPinchGestureRef.current = false;
                 previewHandledByPointerRef.current = true;
                 setPreviewPanning(false);
               }}
@@ -926,7 +1043,7 @@ export function ProductModal({
                 }
               }}
             />
-            {hasMultipleImages && (
+            {hasMultipleImages && !previewZoomed && (
               <div className="image-preview-side-navigation" role="group" aria-label="Navegación de imágenes">
                 <button className="icon-btn carousel-arrow left" type="button" onClick={goToPreviousImage} aria-label="Imagen anterior"><ChevronLeft size={18} /></button>
                 <button className="icon-btn carousel-arrow right" type="button" onClick={goToNextImage} aria-label="Imagen siguiente"><ChevronRight size={18} /></button>

@@ -1,4 +1,4 @@
-export const DEFAULT_PUBLIC_SITE_ORIGIN = "https://adriego.vercel.app";
+export const DEFAULT_PUBLIC_SITE_ORIGIN = "https://www.adriego.shop";
 
 export function normalizePublicSiteOrigin(value = "") {
   try {

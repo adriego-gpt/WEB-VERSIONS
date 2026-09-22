@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
 import { getFallbackSelection, getSelectionForColor } from "../../src/domain/products/variants.js";
 import { getProductColorSwatch, normalizeProductColorHex } from "../../src/utils/productColor.js";
 import { sanitizeProducts } from "../../api/_lib/storeSanitizers.js";
@@ -23,6 +24,17 @@ test("catalog color is the default color for catalog selections", () => {
 test("invalid catalog color keeps backwards-compatible first-color behavior", () => {
   const legacyProduct = { ...product, catalogColor: "No existe" };
   assert.equal(getSelectionForColor(legacyProduct).color, "Negro");
+});
+
+test("changing the principal catalog color also updates the admin preview immediately", async () => {
+  const source = await fs.readFile(new URL("../../src/App.jsx", import.meta.url), "utf8");
+  const start = source.indexOf("const handleProductFieldChange =");
+  const end = source.indexOf("const addManagedProductType =", start);
+  const handler = source.slice(start, end);
+
+  assert.match(handler, /field === ["']catalogColor["']/);
+  assert.match(handler, /setPreviewColor\(nextValue\)/);
+  assert.match(handler, /setPreviewImageIndex\(0\)/);
 });
 
 test("custom swatch tone takes priority over a color name", () => {

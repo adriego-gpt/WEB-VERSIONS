@@ -9,6 +9,7 @@ import { MaintenanceSettingsPanel } from './MaintenanceSettingsPanel';
 import { ImageLightbox } from '../ui/ImageLightbox';
 import { OrderStatusProgress } from '../orders/OrderStatusProgress';
 import { normalizeOrderStatusForOrder, formatOrderDate, getOrderStatusMeta, getOrderStatusOptions } from '../../domain/orders/status';
+import { getOrderSlaMeta, getNextOrderAction } from '../../domain/orders/orderAttention.js';
 import { getImagesForColor } from '../../domain/products/variants';
 import { pruneSelection } from '../../domain/admin/selection';
 import { useBodyScrollLock } from '../../hooks/useBodyScrollLock';
@@ -44,38 +45,7 @@ const ProductEditorPanel = lazyAdminSection(() => import('./ProductEditorPanel')
 const BankAccountsPanel = lazyAdminSection(() => import('./BankAccountsPanel'), 'BankAccountsPanel');
 const CatalogImportPanel = lazyAdminSection(() => import('./CatalogImportPanel'), 'CatalogImportPanel');
 const SeoSettingsPanel = lazyAdminSection(() => import('./SeoSettingsPanel'), 'SeoSettingsPanel');
-
-function getOrderAgeMinutes(createdAt) {
-  const createdMs = new Date(createdAt || "").getTime();
-  if (!Number.isFinite(createdMs)) return 0;
-  return Math.max(0, Math.round((Date.now() - createdMs) / 60000));
-}
-
-function formatOrderAge(minutes = 0) {
-  if (minutes < 60) return `${minutes} min`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ${minutes % 60}m`;
-  const days = Math.floor(hours / 24);
-  const remHours = hours % 24;
-  return remHours > 0 ? `${days}d ${remHours}h` : `${days}d`;
-}
-
-function getOrderSlaMeta(order = {}) {
-  const status = normalizeOrderStatusForOrder(order.status, order.deliveryType);
-  const ageMinutes = getOrderAgeMinutes(order.createdAt);
-  const formattedAge = formatOrderAge(ageMinutes);
-
-  if (status === "Pendiente") {
-    if (ageMinutes >= 90) return { tone: "danger", label: "SLA crítico", ageMinutes, formattedAge };
-    if (ageMinutes >= 30) return { tone: "warning", label: "SLA en riesgo", ageMinutes, formattedAge };
-    return { tone: "success", label: "SLA saludable", ageMinutes, formattedAge };
-  }
-  if (status === "Confirmado" || status === "Preparando") {
-    if (ageMinutes >= 24 * 60) return { tone: "danger", label: "Retrasado", ageMinutes, formattedAge };
-    return { tone: "warning", label: "En tiempo esperado", ageMinutes, formattedAge };
-  }
-  return { tone: "neutral", label: "SLA inactivo", ageMinutes, formattedAge };
-}
+const InventoryMatrixPanel = lazyAdminSection(() => import('./InventoryMatrixPanel'), 'InventoryMatrixPanel');
 
 function getCurrentImageForProduct(product, selectedColor) {
   return getImagesForColor(product, selectedColor)[0] || FALLBACK_IMAGE;
@@ -139,6 +109,7 @@ export function AdminPanelModal({
   toggleProductPublicVisibility,
   toggleProductFeatured,
   productForm,
+  productSaveBusy,
   productDraftRecovery,
   productDraftSavedAt,
   productDraftSaveError,
@@ -163,8 +134,10 @@ export function AdminPanelModal({
   cancelCatalogImageUpload,
   addImageField,
   handleColorImageChange,
+  moveImageField,
   removeImageField,
   saveProduct,
+  couponSaveBusy,
   setStoreDraft,
   storeDraft,
   storeSettings,
@@ -175,6 +148,7 @@ export function AdminPanelModal({
   handleStoreSlideImageUpload,
   handleBankImageUpload,
   saveStoreConfiguration,
+  storeSaveBusy,
   addHeroSlide,
   removeHeroSlide,
   previewColor,
@@ -295,8 +269,6 @@ export function AdminPanelModal({
   const [adminUserCopyResetBusyId, setAdminUserCopyResetBusyId] = useState("");
   const [selectedCatalogProductIds, setSelectedCatalogProductIds] = useState([]);
   const [catalogBulkBusy, setCatalogBulkBusy] = useState(false);
-  const [selectedInventoryProductIds, setSelectedInventoryProductIds] = useState([]);
-  const [inventoryBulkBusy, setInventoryBulkBusy] = useState(false);
   const [selectedOrderIds, setSelectedOrderIds] = useState([]);
   const [orderBulkStatus, setOrderBulkStatus] = useState("Preparando");
   const [orderBulkBusy, setOrderBulkBusy] = useState(false);
@@ -304,6 +276,8 @@ export function AdminPanelModal({
   const [orderBulkAction, setOrderBulkAction] = useState("");
   const [orderBulkFeedback, setOrderBulkFeedback] = useState(null);
   const [expandedOrderId, setExpandedOrderId] = useState(null);
+  const [savingOrderStatusId, setSavingOrderStatusId] = useState(null);
+  const savingOrderStatusRef = useRef(null);
   const [catalogQuickView, setCatalogQuickView] = useState("all");
   const [showOrderFilters, setShowOrderFilters] = useState(false);
   const [orderQuickView, setOrderQuickView] = useState("pending");
@@ -326,6 +300,29 @@ export function AdminPanelModal({
     () => products.find((product) => String(product.id) === String(inventoryProductId)) || null,
     [inventoryProductId, products],
   );
+  const selectedInventoryVariant = useMemo(() => {
+    try {
+      const parsed = JSON.parse(inventoryVariantKey || "[]");
+      return Array.isArray(parsed) ? parsed.slice(0, 2) : [];
+    } catch {
+      return [];
+    }
+  }, [inventoryVariantKey]);
+  const inventoryStats = useMemo(() => (products || []).reduce((summary, product) => {
+    (product.variants || []).forEach((variant) => {
+      const stock = Math.max(0, Math.floor(Number(variant.stock) || 0));
+      summary.units += stock;
+      if (stock === 0) summary.out += 1;
+      else if (stock <= 3) summary.low += 1;
+    });
+    return summary;
+  }, { units: 0, low: 0, out: 0 }), [products]);
+  const selectInventoryVariant = useCallback((productId, color, size) => {
+    setInventoryProductId(String(productId));
+    setInventoryVariantKey(JSON.stringify([color, size]));
+    setInventoryFeedback(null);
+    window.requestAnimationFrame(() => document.getElementById("inventory-delta")?.focus());
+  }, []);
   const matchesOrderView = (order, view) => {
     const status = normalizeOrderStatusForOrder(order.status, order.deliveryType);
     if (view === "pending") return status === "Pendiente";
@@ -339,7 +336,6 @@ export function AdminPanelModal({
     () => filteredOrderHistory.filter((order) => matchesOrderView(order, orderQuickView)),
     [filteredOrderHistory, orderQuickView],
   );
-  const selectedInventorySet = useMemo(() => new Set(selectedInventoryProductIds.map(String)), [selectedInventoryProductIds]);
   const selectedOrderSet = useMemo(() => new Set(selectedOrderIds.map(String)), [selectedOrderIds]);
   const operationalOrderIds = useMemo(() => operationalOrderHistory.map((order) => String(order.id)), [operationalOrderHistory]);
 
@@ -347,36 +343,25 @@ export function AdminPanelModal({
     setExpandedOrderId((current) => (String(current) === String(orderId) ? null : orderId));
   };
 
-  useEffect(() => {
-    const existingIds = new Set(products.map((product) => String(product.id)));
-    setSelectedInventoryProductIds((previous) => pruneSelection(previous, existingIds));
-  }, [products]);
+  const saveOrderStatus = async (orderId, nextStatus) => {
+    if (savingOrderStatusRef.current != null || orderBulkBusy) return;
+    savingOrderStatusRef.current = orderId;
+    setSavingOrderStatusId(orderId);
+    setOrderBulkFeedback(null);
+    try {
+      await updateOrderStatus(orderId, nextStatus);
+    } catch {
+      setOrderBulkFeedback({ tone: "error", message: "No pudimos guardar el estado. Revisa tu conexión y reintenta." });
+    } finally {
+      savingOrderStatusRef.current = null;
+      setSavingOrderStatusId(null);
+    }
+  };
 
   useEffect(() => {
     const visibleIds = new Set(operationalOrderIds);
     setSelectedOrderIds((previous) => pruneSelection(previous, visibleIds));
   }, [operationalOrderIds]);
-
-  const toggleInventorySelection = (productId) => {
-    const id = String(productId);
-    setSelectedInventoryProductIds((previous) => previous.includes(id) ? previous.filter((item) => item !== id) : [...previous, id]);
-  };
-
-  const toggleAllInventoryProducts = () => {
-    const ids = products.map((product) => String(product.id));
-    setSelectedInventoryProductIds(ids.every((id) => selectedInventorySet.has(id)) ? [] : ids);
-  };
-
-  const runInventoryBulkAction = async (runner) => {
-    if (!selectedInventorySet.size || inventoryBulkBusy) return;
-    setInventoryBulkBusy(true);
-    try {
-      const result = await runner([...selectedInventorySet]);
-      if (result?.ok) setSelectedInventoryProductIds([]);
-    } finally {
-      setInventoryBulkBusy(false);
-    }
-  };
 
   const toggleOrderSelection = (orderId) => {
     if (orderBulkBusy) return;
@@ -724,6 +709,13 @@ export function AdminPanelModal({
     setSelectedCatalogProductIds((previous) => pruneSelection(previous, visibleCatalogProductIds));
   }, [visibleCatalogProductIds]);
 
+  const handleAdminTabClick = (tabId) => {
+    if (tabId === "producto" && adminTab !== "producto") {
+      resetEditor?.();
+    }
+    setAdminTab(tabId);
+  };
+
   if (!open) return null;
 
   const offerPendingCount = Object.values(offerDirtyById).filter(Boolean).length;
@@ -841,7 +833,7 @@ export function AdminPanelModal({
                         <button type="button"
                           key={tab.id}
                           className={`admin-tab-btn ${adminTab === tab.id ? "active" : ""}`}
-                          onClick={() => setAdminTab(tab.id)}
+                          onClick={() => handleAdminTabClick(tab.id)}
                           aria-current={adminTab === tab.id ? "page" : undefined}
                         >
                           {React.createElement(tab.icon, { size: 16, "aria-hidden": true })}
@@ -1176,6 +1168,14 @@ export function AdminPanelModal({
                   onToggleSelection={toggleCatalogSelection}
                   onToggleAllVisible={toggleSelectAllVisibleCatalogProducts}
                   onClearSelection={clearCatalogSelection}
+                  onSetVisibility={(isPublic) => {
+                    void runCatalogBulkAction(
+                      (ids) => bulkSetCatalogVisibility(ids, isPublic),
+                      isPublic
+                        ? "Selecciona al menos un producto para publicar."
+                        : "Selecciona al menos un producto para ocultar.",
+                    );
+                  }}
                   onSetFeatured={(featured) => {
                     void runCatalogBulkAction(
                       (ids) => bulkSetCatalogFeatured(ids, featured),
@@ -1217,57 +1217,28 @@ export function AdminPanelModal({
             {adminTab === "inventario" && (
               <div className="admin-tab-panel">
                 <section className="admin-workspace admin-inventory-workspace">
-                  <AdminSectionHeader title="Inventario" description="Detecta agotados y stock bajo; abre el producto para ajustar sus variantes con seguridad." meta={<span className="admin-count-label">{adminOutOfStockCount + adminLowStockCount} requieren atención</span>} />
-                  <div className="inventory-summary-strip">
-                    <button type="button" onClick={() => { setAdminCatalogQuery(""); setCatalogQuickView("all"); setAdminTab("catalogo"); }}>
-                      <strong>{adminProductCount}</strong><span>Productos</span>
-                    </button>
-                    <button type="button" className="is-warning" onClick={() => { setAdminCatalogQuery(""); setCatalogQuickView("low"); setAdminTab("catalogo"); }}>
-                      <strong>{adminLowStockCount}</strong><span>Stock bajo</span>
-                    </button>
-                    <button type="button" className="is-danger" onClick={() => { setAdminCatalogQuery(""); setCatalogQuickView("out"); setAdminTab("catalogo"); }}>
-                      <strong>{adminOutOfStockCount}</strong><span>Agotados</span>
-                    </button>
+                  <AdminSectionHeader title="Inventario" description="Consulta cada color y talla, detecta faltantes y registra movimientos sin salir de esta sección." meta={<span className="admin-count-label">{inventoryStats.out + inventoryStats.low} variantes requieren atención</span>} />
+                  <div className="inventory-summary-strip" aria-label="Resumen de inventario">
+                    <div><strong>{inventoryStats.units}</strong><span>Unidades totales</span></div>
+                    <div className="is-warning"><strong>{inventoryStats.low}</strong><span>Variantes con stock bajo</span></div>
+                    <div className="is-danger"><strong>{inventoryStats.out}</strong><span>Variantes agotadas</span></div>
                   </div>
                   <form className="inventory-adjustment-form" onSubmit={submitInventoryMovement}>
-                    <div className="inventory-adjustment-heading"><strong>Registrar movimiento</strong><span>Entrada positiva o salida negativa. Cada cambio se sincroniza por separado.</span></div>
+                    <div className="inventory-adjustment-heading"><strong>Registrar movimiento</strong><span>Pulsa una cantidad en la matriz o elige la variante manualmente. Usa un valor positivo para entrada y negativo para salida.</span></div>
                     <label><span>Producto</span><select className="select" value={inventoryProductId} onChange={(event) => { setInventoryProductId(event.target.value); setInventoryVariantKey(""); }}><option value="">Seleccionar producto</option>{products.map((product) => <option key={product.id} value={product.id}>{product.name}</option>)}</select></label>
                     <label><span>Variante</span><select className="select" value={inventoryVariantKey} disabled={!inventoryProduct} onChange={(event) => setInventoryVariantKey(event.target.value)}><option value="">Seleccionar variante</option>{(inventoryProduct?.variants || []).map((variant) => <option key={`${variant.color}-${variant.size}`} value={JSON.stringify([variant.color, variant.size])}>{variant.color} / {variant.size} · {variant.stock || 0} disponibles</option>)}</select></label>
-                    <label><span>Cantidad</span><input className="input" type="number" step="1" placeholder="Ej. 5 o -2" value={inventoryDelta} onChange={(event) => setInventoryDelta(event.target.value)} /></label>
+                    <label><span>Cantidad</span><input id="inventory-delta" className="input" type="number" step="1" placeholder="Ej. 5 o -2" value={inventoryDelta} onChange={(event) => setInventoryDelta(event.target.value)} /></label>
                     <label className="inventory-reason-field"><span>Motivo</span><input className="input" maxLength={120} placeholder="Ej. Conteo físico o devolución" value={inventoryReason} onChange={(event) => setInventoryReason(event.target.value)} /></label>
-                    <button className="btn btn-primary" type="submit" disabled={inventoryBusy}>{inventoryBusy ? "Guardando…" : "Guardar movimiento"}</button>
+                    <button className="btn btn-primary" type="submit" disabled={inventoryBusy || !inventoryProductId || selectedInventoryVariant.length < 2}>{inventoryBusy ? "Guardando…" : "Guardar movimiento"}</button>
                     {inventoryFeedback && <div className={`status-message status-${inventoryFeedback.tone}`} role="status" aria-live="polite">{inventoryFeedback.message}</div>}
                   </form>
+                  <InventoryMatrixPanel
+                    products={products}
+                    selectedProductId={inventoryProductId}
+                    selectedVariant={selectedInventoryVariant}
+                    onSelectVariant={selectInventoryVariant}
+                  />
                   {visibleInventoryMovements.length > 0 && <div className="inventory-movement-log"><strong>Movimientos recientes</strong>{visibleInventoryMovements.slice(0, 12).map((movement) => <div key={movement.id}><span>{new Intl.DateTimeFormat("es-EC", { dateStyle: "short", timeStyle: "short" }).format(new Date(movement.createdAt))}</span><b>{movement.productName} · {movement.color}/{movement.size}</b><em className={movement.delta > 0 ? "is-positive" : "is-negative"}>{movement.delta > 0 ? "+" : ""}{movement.delta}</em><span>{movement.reason}{movement.status === "reverted" ? " · Deshecho" : ""}</span></div>)}</div>}
-                  {products.length > 0 && (
-                    <div className={`inventory-bulk-bar${selectedInventorySet.size ? " has-selection" : ""}`}>
-                      <label className="admin-selection-control">
-                        <input type="checkbox" checked={products.every((product) => selectedInventorySet.has(String(product.id)))} onChange={toggleAllInventoryProducts} />
-                        <span>{selectedInventorySet.size ? `${selectedInventorySet.size} seleccionados` : "Seleccionar inventario"}</span>
-                      </label>
-                      {selectedInventorySet.size > 0 && (
-                        <div className="inventory-bulk-actions">
-                          <button className="btn btn-soft" type="button" disabled={inventoryBulkBusy} onClick={() => runInventoryBulkAction((ids) => bulkSetCatalogVisibility(ids, true))}><Eye size={15} />Publicar</button>
-                          <button className="btn btn-outline" type="button" disabled={inventoryBulkBusy} onClick={() => runInventoryBulkAction((ids) => bulkSetCatalogVisibility(ids, false))}><EyeOff size={15} />Ocultar</button>
-                          <button className="btn btn-danger" type="button" disabled={inventoryBulkBusy} onClick={async () => {
-                            const count = selectedInventorySet.size;
-                            const confirmed = await requestDestructiveConfirmation({
-                              title: `¿Eliminar ${count} producto${count === 1 ? "" : "s"}?`,
-                              description: "Se eliminarán del catálogo y del inventario. Esta acción no se puede deshacer.",
-                            });
-                            if (confirmed) void runInventoryBulkAction(bulkDeleteCatalogProducts);
-                          }}><Trash2 size={15} />Eliminar</button>
-                          {inventoryBulkBusy && <span className="bulk-action-progress" role="status" aria-live="polite">Procesando acción...</span>}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                  <div className="inventory-product-list">
-                    {products.map((product) => {
-                      const stock = (product.variants || []).reduce((total, variant) => total + Math.max(0, Number(variant.stock) || 0), 0);
-                      return <article key={product.id} className={selectedInventorySet.has(String(product.id)) ? "is-selected" : ""}><label className="inventory-row-selector" aria-label={`Seleccionar ${product.name}`}><input type="checkbox" checked={selectedInventorySet.has(String(product.id))} onChange={() => toggleInventorySelection(product.id)} /></label><div><strong>{product.name}</strong><span>{product.sku || "Sin SKU"} · {(product.variants || []).length} variantes</span></div><span className={`inventory-stock${stock === 0 ? " is-danger" : stock <= 5 ? " is-warning" : ""}`}>{stock} unidades</span><button className="btn btn-outline" type="button" onClick={() => startEditingProduct(product)}><PencilLine size={15} />Ajustar</button></article>;
-                    })}
-                  </div>
                 </section>
               </div>
             )}
@@ -1327,6 +1298,7 @@ export function AdminPanelModal({
                     onCancelImageUpload={cancelCatalogImageUpload}
                     onAddImageField={addImageField}
                     onColorImageChange={handleColorImageChange}
+                    onMoveImageField={moveImageField}
                     onRemoveImageField={removeImageField}
                     onAddSize={addSizeRow}
                     onAddSizeToAll={addSizeToAllColors}
@@ -1334,6 +1306,7 @@ export function AdminPanelModal({
                     onSizeChange={handleSizeRowChange}
                     onRemoveSize={removeSizeRow}
                     onSave={saveProduct}
+                    saveBusy={productSaveBusy}
                     onReset={resetEditor}
                   />
                 </div>
@@ -1604,6 +1577,7 @@ export function AdminPanelModal({
                   onToggleCouponDraftProduct={toggleCouponDraftProduct}
                   onToggleCouponDraftProductType={toggleCouponDraftProductType}
                   onSaveCoupon={saveCoupon}
+                  saveBusy={couponSaveBusy}
                   onResetCouponDraft={resetCouponDraft}
                   onEditCoupon={startEditingCoupon}
                   onToggleCouponActive={toggleCouponActive}
@@ -1874,8 +1848,8 @@ export function AdminPanelModal({
                     </div>
 
                     <div className="admin-full" style={{ marginTop: 12 }}>
-                      <button type="button" className="btn btn-primary" onClick={saveStoreConfiguration}>
-                        <ShieldCheck size={16} />Guardar ajustes, tarifas y portada
+                      <button type="button" className="btn btn-primary" onClick={saveStoreConfiguration} disabled={storeSaveBusy} aria-busy={storeSaveBusy}>
+                        <ShieldCheck size={16} />{storeSaveBusy ? "Guardando…" : "Guardar ajustes, tarifas y portada"}
                       </button>
                     </div>
                   </div>
@@ -1929,7 +1903,7 @@ export function AdminPanelModal({
                   )}
 
                   <div className="admin-quick-views admin-order-quick-views" aria-label="Vistas operativas de pedidos">
-                    {[["pending", "Pendientes"], ["risk", "En riesgo"], ["preparing", "Preparando"], ["sent", "Enviados"], ["pickup", "Retiro"], ["all", "Todos"]].map(([value, label]) => (
+                    {[["pending", "Por revisar"], ["risk", "En riesgo"], ["preparing", "Preparando"], ["sent", "Enviados"], ["pickup", "Retiro"], ["all", "Todos"]].map(([value, label]) => (
                       <button key={value} type="button" aria-pressed={orderQuickView === value} className={orderQuickView === value ? "active" : ""} onClick={() => setOrderQuickView(value)}>{label} <span>{filteredOrderHistory.filter((order) => matchesOrderView(order, value)).length}</span></button>
                     ))}
                   </div>
@@ -2070,19 +2044,7 @@ export function AdminPanelModal({
                       const isExpanded = expandedOrderId === order.id;
                       const detailsId = `admin-order-${order.id}-details`;
                       const patchState = orderPatchStateById?.[order.id];
-                      const nextOrderAction = (() => {
-                        if (normalizedOrderStatus === "Pendiente") return { label: "Confirmar pedido", status: "Confirmado" };
-                        if (normalizedOrderStatus === "Confirmado") return { label: "Empezar preparación", status: "Preparando" };
-                        if (normalizedOrderStatus === "Preparando") {
-                          return isPickupOrder
-                            ? { label: "Marcar listo para retiro", status: "Listo para retiro" }
-                            : { label: "Registrar envío", status: "Enviado" };
-                        }
-                        if (normalizedOrderStatus === "Listo para retiro" || normalizedOrderStatus === "Enviado") {
-                          return { label: "Marcar entregado", status: "Entregado" };
-                        }
-                        return null;
-                      })();
+                      const nextOrderAction = getNextOrderAction(normalizedOrderStatus, order.deliveryType);
                       return (
                         <article key={order.id} className={`admin-order-row${isExpanded ? " is-expanded" : ""}`}>
                           <div className="admin-order-row-summary">
@@ -2099,6 +2061,7 @@ export function AdminPanelModal({
                               <span className="admin-order-identity">
                                 <strong>{order.code}</strong>
                                 <span>{order.customerName || "Cliente"}</span>
+                                {nextOrderAction && <span className="admin-order-next-step">Siguiente: {nextOrderAction.label}</span>}
                               </span>
                               <span className="admin-order-row-meta">
                                 {formatOrderDate(order.createdAt)} · {order.itemCount} {order.itemCount === 1 ? "artículo" : "artículos"} · {isDeliveryOrder ? "Domicilio" : "Retiro"}
@@ -2131,14 +2094,14 @@ export function AdminPanelModal({
                                 </div>
                                 <div className="admin-order-detail-actions">
                                   {nextOrderAction && (
-                                    <button type="button" className="btn btn-primary" onClick={() => updateOrderStatus(order.id, nextOrderAction.status)}>
-                                      {nextOrderAction.label}
+                                    <button type="button" className="btn btn-primary" disabled={savingOrderStatusId != null || orderBulkBusy} aria-busy={savingOrderStatusId === order.id} onClick={() => { void saveOrderStatus(order.id, nextOrderAction.status); }}>
+                                      {savingOrderStatusId === order.id ? "Guardando…" : nextOrderAction.label}
                                     </button>
                                   )}
                                   <button type="button" className="btn btn-outline" onClick={() => onCopyOrderCode(order.code)}>
                                     <Copy size={14} />Copiar código
                                   </button>
-                                  <select className="select admin-order-status-select" aria-label={`Estado del pedido ${order.code}`} value={normalizedOrderStatus} onChange={(event) => updateOrderStatus(order.id, event.target.value)}>
+                                  <select className="select admin-order-status-select" aria-label={`Estado del pedido ${order.code}`} value={normalizedOrderStatus} disabled={savingOrderStatusId != null || orderBulkBusy} onChange={(event) => { void saveOrderStatus(order.id, event.target.value); }}>
                                     {orderStatusOptions.map((status) => <option key={status} value={status}>{status}</option>)}
                                   </select>
                                   <span className={`badge ${stockReservationState === "released" ? "badge-warning" : "badge-light"}`}>

@@ -5,10 +5,40 @@ import {
   buildProductImagePathname,
   dataUrlToBlob,
   normalizeImageKitUrl,
+  uploadCatalogProductImage,
   uploadPreparedCatalogImage,
 } from "../../src/services/blobImageService.js";
+import { CATALOG_IMAGE_OPTIMIZATION } from "../../src/utils/fileUpload.js";
 
 test("ImageKit image service", async (t) => {
+  await t.test("uses the high-definition bounded profile for new catalog photos", async () => {
+    assert.equal(CATALOG_IMAGE_OPTIMIZATION.maxLongEdge, 1600);
+    assert.equal(CATALOG_IMAGE_OPTIMIZATION.maxBytes, 350 * 1024);
+    assert.equal(CATALOG_IMAGE_OPTIMIZATION.preferredQuality, 0.88);
+
+    let capturedProfile = null;
+    const endpoint = "https://ik.imagekit.io/adriego";
+    const result = await uploadCatalogProductImage({ name: "coat.jpg" }, {
+      optimizeFn: async (_file, profile) => {
+        capturedProfile = profile;
+        return "data:image/webp;base64,AQID";
+      },
+      authorizeFn: async () => ({
+        ok: true,
+        type: "imagekit.upload-auth",
+        publicKey: "public_key",
+        token: "one-time-token",
+        signature: "signed-token",
+        expire: 2_000_000_000,
+        urlEndpoint: endpoint,
+      }),
+      uploadFn: async () => ({ url: `${endpoint}/catalog/products/high-definition.webp` }),
+    });
+
+    assert.equal(capturedProfile, CATALOG_IMAGE_OPTIMIZATION);
+    assert.equal(result, `${endpoint}/catalog/products/high-definition.webp`);
+  });
+
   await t.test("allows the direct ImageKit upload endpoint in the page CSP", async () => {
     const html = await fs.readFile(new URL("../../index.html", import.meta.url), "utf8");
     assert.match(html, /connect-src[^;]*https:\/\/upload\.imagekit\.io/);

@@ -9,6 +9,8 @@ import { ANIMATION } from "../../constants/animation";
 import { FALLBACK_IMAGE } from "../../constants/product";
 import { getResponsiveImageSources, applyImageFallback } from "../../domain/products/imageSources.js";
 import { getProductBadgeKinds } from "../../domain/products/catalogPresentation";
+import { useImagePending } from "../../hooks/useImagePending.js";
+import { ImageLoadingIndicator } from "../ui/ImageLoadingIndicator.jsx";
 import {
   getSelectionForColor,
   getImagesForColor,
@@ -43,7 +45,6 @@ export function CatalogProductCard({
   const productPath = productSlug ? `/producto/${encodeURIComponent(productSlug)}` : "/";
   const [isSelectingSize, setIsSelectingSize] = useState(false);
   const [justAddedSize, setJustAddedSize] = useState("");
-  const [addedFeedback, setAddedFeedback] = useState(false);
   const feedbackTimerRef = useRef(null);
   useEffect(() => () => clearTimeout(feedbackTimerRef.current), []);
   const resolvedSelection = getSelectionForColor(product, selection);
@@ -51,6 +52,7 @@ export function CatalogProductCard({
   const selectedSize = resolvedSelection.size;
   const currentImages = getImagesForColor(product, selectedColor);
   const currentImage = currentImages[0] || FALLBACK_IMAGE;
+  const { pending: imagePending, markReady: markImageReady } = useImagePending(currentImage);
   const discount = discountPercent(product.price, product.oldPrice);
   const badgeKinds = getProductBadgeKinds(product, discount);
   const badges = badgeKinds.map((badgeKind) => {
@@ -67,33 +69,11 @@ export function CatalogProductCard({
   const hiddenColorCount = Math.max(0, product.colors.length - visibleColors.length);
   const hiddenSizeCount = Math.max(0, sizesForSelectedColor.length - visibleSizes.length);
 
-  const handleAddToCart = (event) => {
-    event.stopPropagation();
-    if (availableStock <= 0 || addedFeedback) return;
-    const added = onAddToCart(
-      product,
-      { sourceElement: event.currentTarget, image: currentImage },
-      { color: selectedColor, size: selectedSize }
-    );
-    if (added === false) return;
-    triggerHaptic("medium");
-    setAddedFeedback(true);
-    clearTimeout(feedbackTimerRef.current);
-    feedbackTimerRef.current = setTimeout(() => {
-      setAddedFeedback(false);
-    }, 1200);
-  };
-
   const handleMainButtonClick = (event) => {
     event.stopPropagation();
     if (availableStock <= 0) return;
-    const isMobile = typeof window !== "undefined" && window.innerWidth <= 760;
-    if (isMobile) {
-      triggerHaptic("selection");
-      setIsSelectingSize(true);
-    } else {
-      handleAddToCart(event);
-    }
+    triggerHaptic("selection");
+    setIsSelectingSize(true);
   };
 
   return (
@@ -108,6 +88,7 @@ export function CatalogProductCard({
           className="product-image-main-btn"
           aria-label={`Ver detalle de ${product.name}`}
         >
+          <ImageLoadingIndicator pending={imagePending} />
           <AnimatePresence mode="wait">
             <Motion.img
               key={`${product.id}-${selectedColor}-${currentImage}`}
@@ -122,7 +103,11 @@ export function CatalogProductCard({
               exit={{ opacity: 0, scale: 0.99 }}
               transition={{ duration: ANIMATION.fast, ease: ANIMATION.easeOut }}
               className="product-img"
-              onError={(event) => applyImageFallback(event.currentTarget, FALLBACK_IMAGE)}
+              onLoad={markImageReady}
+              onError={(event) => {
+                if (event.currentTarget.getAttribute("src") === FALLBACK_IMAGE) markImageReady();
+                else applyImageFallback(event.currentTarget, FALLBACK_IMAGE);
+              }}
             />
           </AnimatePresence>
         </a>
@@ -246,6 +231,7 @@ export function CatalogProductCard({
           <div className="quick-size-picker" onClick={(e) => e.stopPropagation()}>
             <div className="quick-size-header">
               <span className="quick-size-title">Talla para <strong>{selectedColor}</strong>:</span>
+              <button type="button" className="quick-size-detail-link" onClick={() => onOpenDetail(product, { color: selectedColor, size: selectedSize })}>Ver colores</button>
               <button
                 type="button"
                 className="quick-size-close-btn"
@@ -303,11 +289,11 @@ export function CatalogProductCard({
           <div className="product-card-actions">
             <button
               type="button"
-              className={`btn ${addedFeedback ? "btn-success" : "btn-primary"}`}
+              className="btn btn-primary"
               style={{
                 width: "100%",
                 opacity: availableStock <= 0 ? 0.6 : 1,
-                cursor: availableStock <= 0 ? "not-allowed" : (addedFeedback ? "default" : "pointer"),
+                cursor: availableStock <= 0 ? "not-allowed" : "pointer",
                 display: "inline-flex",
                 alignItems: "center",
                 justifyContent: "center",
@@ -315,16 +301,12 @@ export function CatalogProductCard({
                 transition: "background-color 160ms ease-out, color 160ms ease-out, box-shadow 160ms ease-out"
               }}
               onClick={handleMainButtonClick}
-              disabled={availableStock <= 0 || addedFeedback}
+              disabled={availableStock <= 0}
             >
               {availableStock <= 0 ? (
                 "Agotado"
-              ) : addedFeedback ? (
-                <>
-                  <Check size={16} /> ¡Agregado!
-                </>
               ) : (
-                <><span className="catalog-add-desktop">Agregar</span><span className="catalog-add-mobile">Elegir talla</span></>
+                "Elegir talla"
               )}
             </button>
           </div>

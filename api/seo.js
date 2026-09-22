@@ -1,6 +1,6 @@
 import { readStore } from "./_lib/store.js";
 import { getPublicSiteOrigin } from "../src/constants/site.js";
-import { getProductSlug } from "../src/domain/products/seo.js";
+import { getProductSeo, getProductSlug } from "../src/domain/products/seo.js";
 import { escapeHtml, readPublicTemplate, renderPublicDocument, renderMaintenanceDocument } from "./_lib/seoDocument.js";
 import { consumeRateLimit, getClientIp, monitorApiRequest, normalizeLine, setCommonSecurityHeaders } from "./_lib/security.js";
 
@@ -29,9 +29,18 @@ export default async function handler(req, res) {
     if (action === "sitemap") {
       res.setHeader("Content-Type", "application/xml; charset=utf-8");
       res.setHeader("Cache-Control", "public, s-maxage=60");
-      const paths = [...new Set(["/", ...products.map((p) => `/producto/${getProductSlug(p)}`).filter((p) => p !== "/producto/")])];
+      const productEntriesByUrl = new Map();
+      for (const product of products) {
+        const entry = getProductSeo(product, origin, store.storeSettings?.brandName);
+        if (entry.url && !productEntriesByUrl.has(entry.url)) productEntriesByUrl.set(entry.url, entry);
+      }
+      const productEntries = [...productEntriesByUrl.values()];
       // lastmod needs actual page dates; do not claim every page changed today.
-      return res.status(200).send(`<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${paths.map((p) => `<url><loc>${escapeHtml(origin + p)}</loc></url>`).join("")}</urlset>`);
+      const entries = [
+        `<url><loc>${escapeHtml(`${origin}/`)}</loc></url>`,
+        ...productEntries.map((product) => `<url><loc>${escapeHtml(product.url)}</loc>${product.images.map((image) => `<image:image><image:loc>${escapeHtml(image)}</image:loc></image:image>`).join("")}</url>`),
+      ];
+      return res.status(200).send(`<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">${entries.join("")}</urlset>`);
     }
     if (store.storeSettings?.maintenanceSettings?.enabled === true) {
       res.setHeader("Content-Type", "text/html; charset=utf-8");

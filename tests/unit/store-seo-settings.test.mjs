@@ -15,8 +15,9 @@ const settings = { brandName: "Adriego Boutique", seoSettings: {
 test("legacy settings retain the current default search identity", () => {
   const result = getStoreSeo({}, origin);
   assert.equal(result.title, "Adriego Store | Ropa, colores y tallas");
-  assert.equal(result.faviconUrl, `${origin}/favicon.svg`);
-  assert.equal(result.imageUrl, `${origin}/og-cover.jpg`);
+  assert.equal(result.faviconUrl, `${origin}/adriego-icon.png`);
+  assert.equal(result.logoUrl, `${origin}/adriego-logo.png`);
+  assert.equal(result.imageUrl, `${origin}/adriego-share.png`);
   assert.equal(getStoreSeo(null, origin).title, result.title);
   assert.equal(getStoreSeo({ brandName: "Nueva Marca" }, origin).title, "Nueva Marca | Ropa, colores y tallas");
 });

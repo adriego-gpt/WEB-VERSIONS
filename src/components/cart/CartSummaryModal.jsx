@@ -167,7 +167,7 @@ export function CartSummaryModal({
   const effectiveProducts = useMemo(() => products.map(product => projectCartStock(product, {
     stock: availability.stock,
     stockDeadline: Date.now() + Math.max(0, (availability.stockExpiresAt || availability.expiresAt || 0) - (availability.serverNow || Date.now())),
-  })), [products, availability.stock, availability.stockExpiresAt, availability.expiresAt, availability.serverNow, availability.ok]);
+  })), [products, availability.stock, availability.stockExpiresAt, availability.expiresAt, availability.serverNow]);
   const changeCheckoutStep = (step) => {
     if (typeof window !== "undefined" && window.location.pathname === "/carrito") {
       window.history.pushState({ ...(window.history.state || {}), [CHECKOUT_HISTORY_KEY]: step, adriegoCheckoutDepth: readCheckoutHistoryDepth(window.history.state) + 1 }, document.title, checkoutStepUrl(window.location.href, step));

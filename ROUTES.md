@@ -8,8 +8,8 @@ Este documento define la arquitectura técnica de rutas, metadatos SEO, datos es
 
 | Ruta | Tipo | Propósito | Indexabilidad | Canonical |
 |---|---|---|:---:|---|
-| `/` | Estática | Portada, Showcase destacado y Catálogo interactivo con filtros | `index, follow` | `https://adriego.vercel.app/` |
-| `/producto/:slug` | Dinámica | Ficha dedicada de producto con selección de variantes y compra | `index, follow` | `https://adriego.vercel.app/producto/:slug` |
+| `/` | Estática | Portada, Showcase destacado y Catálogo interactivo con filtros | `index, follow` | `https://www.adriego.shop/` |
+| `/producto/:slug` | Dinámica | Ficha dedicada de producto con selección de variantes y compra | `index, follow` | `https://www.adriego.shop/producto/:slug` |
 | `/cuenta/restablecer` | Funcional | Formulario seguro para restablecimiento de contraseña de cliente/admin | `noindex, nofollow` | Auto-referencia / Ninguno |
 | `/*` (404) | Catch-all | Vista de error amigable cuando la URL o producto no existe | `noindex, nofollow` | Ninguno |
 
@@ -22,16 +22,16 @@ Este documento define la arquitectura técnica de rutas, metadatos SEO, datos es
 - **Metadatos SEO:**
   - **Title:** `Adriego Store | Moda y ropa exclusiva`
   - **Meta Description:** `Descubre Adriego Store. Tienda web moderna de moda y ropa con atención personalizada.`
-  - **Open Graph:** `og:type=website`, `og:image=/favicon.svg`, `og:site_name=Adriego Store`.
-  - **Twitter Card:** `twitter:card=summary`, `twitter:image=/favicon.svg`.
+  - **Open Graph:** `og:type=website`, `og:image=/adriego-share.png`, `og:site_name=Adriego Store`.
+  - **Twitter Card:** `twitter:card=summary_large_image`, `twitter:image=/adriego-share.png`.
 - **Datos Estructurados (JSON-LD):**
   ```json
   {
     "@context": "https://schema.org",
     "@type": "ClothingStore",
     "name": "Adriego Store",
-    "url": "https://adriego.vercel.app/",
-    "logo": "https://adriego.vercel.app/favicon.svg",
+    "url": "https://www.adriego.shop/",
+    "logo": "https://www.adriego.shop/adriego-logo.png",
     "description": "Descubre Adriego Store. Tienda web moderna de moda y ropa con atención personalizada.",
     "priceRange": "$$",
     "currenciesAccepted": "USD"
@@ -46,7 +46,7 @@ Este documento define la arquitectura técnica de rutas, metadatos SEO, datos es
 - **Metadatos SEO (Dinámicos por Producto):**
   - **Title:** `[Nombre del Producto] | Adriego Store`
   - **Meta Description:** `Compra [Nombre] en Adriego Store por $[Precio]. [Descripción corta]. Pedidos directos por WhatsApp.`
-  - **Canonical:** `https://adriego.vercel.app/producto/:slug`
+  - **Canonical:** `https://www.adriego.shop/producto/:slug`
   - **Open Graph:**
     - `og:type=product`
     - `og:title=[Nombre del Producto] | Adriego Store`
@@ -72,7 +72,7 @@ Este documento define la arquitectura técnica de rutas, metadatos SEO, datos es
     "sku": "prod_101",
     "offers": {
       "@type": "Offer",
-      "url": "https://adriego.vercel.app/producto/camisa-lino-premium",
+      "url": "https://www.adriego.shop/producto/camisa-lino-premium",
       "priceCurrency": "USD",
       "price": "45.00",
       "availability": "https://schema.org/InStock",

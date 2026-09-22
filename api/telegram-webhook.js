@@ -1980,6 +1980,7 @@ export default async function handler(req, res) {
   const text = ADMIN_KEYBOARD_COMMANDS.get(rawText.toLowerCase())
     || rawText.replace(/^\/(start|menu)@[a-zA-Z0-9_]+(?=\s|$)/i, "/$1");
   const lowerText = text.toLowerCase();
+  const baseCommand = lowerText.trim().split(/\s+/, 1)[0];
   if (!update.message && (/^\/(venta|deshacer)(\s|$)/i.test(text) || lowerText === "deshacer venta")) {
     res.status(200).json({ ok: true, skipped: true });
     return;
@@ -2057,7 +2058,7 @@ export default async function handler(req, res) {
   }
 
   // Command Handlers for Admin
-  if (/^\/start(?:\s.*)?$/.test(lowerText) || lowerText === "hola" || lowerText === "/menu" || lowerText === "menu") {
+  if (baseCommand === "/start" || lowerText === "hola" || lowerText === "/menu" || lowerText === "menu") {
     if (message.chat.type === "private" || (!message.chat.type && Number(senderChatId) > 0)) {
       await ensureTelegramBotCommandsRegistered(token, { chatId: senderChatId });
     }

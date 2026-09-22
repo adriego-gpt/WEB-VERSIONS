@@ -1,6 +1,6 @@
 import { FILE_SECURITY } from "../constants/product.js";
 import { createUuid } from "../utils/uid.js";
-import { fileToDataUrl } from "../utils/fileUpload.js";
+import { CATALOG_IMAGE_OPTIMIZATION, fileToDataUrl } from "../utils/fileUpload.js";
 import { requestJson } from "./httpClient.js";
 
 const PRODUCT_IMAGE_UPLOAD_ENDPOINT = "/api/catalog-state?action=image-upload";
@@ -126,7 +126,11 @@ async function uploadPreparedCatalogImage(imageBlob, options = {}) {
   if (!(imageBlob instanceof Blob) || !SUPPORTED_IMAGE_TYPES.has(String(imageBlob.type || "").toLowerCase())) {
     throw new Error("Solo se permiten imágenes JPG, PNG o WebP.");
   }
-  if (imageBlob.size <= 0 || imageBlob.size > FILE_SECURITY.maxInlineImageBytes) {
+  const maxBytes = Math.min(
+    FILE_SECURITY.maxCatalogImageBytes,
+    Math.max(FILE_SECURITY.maxInlineImageBytes, Math.floor(Number(options.maxBytes) || FILE_SECURITY.maxCatalogImageBytes)),
+  );
+  if (imageBlob.size <= 0 || imageBlob.size > maxBytes) {
     throw new Error("La imagen optimizada excede el tamaño permitido.");
   }
 
@@ -172,8 +176,12 @@ async function uploadPreparedCatalogImage(imageBlob, options = {}) {
 }
 
 async function uploadCatalogProductImage(file, options = {}) {
-  const optimizedDataUrl = await fileToDataUrl(file);
-  return uploadPreparedCatalogImage(dataUrlToBlob(optimizedDataUrl), options);
+  const { optimizeFn = fileToDataUrl, ...uploadOptions } = options;
+  const optimizedDataUrl = await optimizeFn(file, CATALOG_IMAGE_OPTIMIZATION);
+  return uploadPreparedCatalogImage(dataUrlToBlob(optimizedDataUrl), {
+    ...uploadOptions,
+    maxBytes: CATALOG_IMAGE_OPTIMIZATION.maxBytes,
+  });
 }
 
 export {

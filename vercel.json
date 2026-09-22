@@ -12,7 +12,7 @@
       ]
     },
     {
-      "source": "/(favicon.svg|manifest.json|og-cover.jpg|llms.txt)",
+      "source": "/(adriego-icon.png|adriego-logo.png|adriego-share.png|favicon.svg|manifest.json|og-cover.jpg|llms.txt|762a2b370a8eaa34badf3cf58c7e7d37.txt)",
       "headers": [
         {
           "key": "Cache-Control",

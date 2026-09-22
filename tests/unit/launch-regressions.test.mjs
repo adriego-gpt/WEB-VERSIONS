@@ -7,6 +7,7 @@ import { normalizePublicSiteOrigin, getPublicSiteOrigin } from "../../src/consta
 import { getResponsiveImageSources } from "../../src/domain/products/imageSources.js";
 
 test("domain configuration only accepts safe origins", () => {
+  assert.equal(getPublicSiteOrigin(), "https://www.adriego.shop");
   assert.equal(getPublicSiteOrigin("https://adriego.shop/"), "https://adriego.shop");
   for (const value of ["http://adriego.shop", "https://user:pass@adriego.shop", "https://adriego.shop/admin", "https://adriego.shop/?redirect=x", "javascript:alert(1)"]) assert.equal(normalizePublicSiteOrigin(value), "");
   assert.equal(normalizePublicSiteOrigin("http://localhost:5173"), "http://localhost:5173");

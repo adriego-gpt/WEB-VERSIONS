@@ -72,7 +72,7 @@ export function OfferManagerPanel({
           return (
             <article key={`offer-${product.id}`} className={`admin-offer-item${offerEnabled ? " is-active" : ""}${dirtyById[productId] ? " is-dirty" : ""}`}>
               <img
-                src={getProductImage(product, colors[0])}
+                src={getProductImage(product, product.catalogColor || colors[0])}
                 alt=""
                 width="64"
                 height="68"

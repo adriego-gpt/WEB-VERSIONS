@@ -80,6 +80,86 @@ test("catalog color controls keep a compact visual inside an accessible touch ta
   assert.match(css, /\.product-card-color-swatch\.active \{[^}]*border-color: var\(--text-strong\);/);
 });
 
+test("mobile landscape is guarded with a portrait-only recovery screen", async () => {
+  const [app, css] = await Promise.all([
+    fs.readFile(new URL("../../src/App.jsx", import.meta.url), "utf8"),
+    fs.readFile(new URL("../../src/App.css", import.meta.url), "utf8"),
+  ]);
+  assert.match(app, /function PortraitOrientationGuard/);
+  assert.match(app, /className="portrait-orientation-guard" role="dialog" aria-modal="true"/);
+  assert.match(app, /Gira tu teléfono/);
+  assert.match(css, /@media \(orientation: landscape\) and \(max-height: 600px\) and \(max-width: 1000px\) and \(pointer: coarse\)/);
+  assert.match(css, /\.portrait-orientation-guard \{[^}]*display: none;/);
+  assert.match(css, /\.portrait-orientation-guard \{[^}]*display: grid;[^}]*position: fixed;[^}]*inset: 0;/);
+});
+
+test("mobile drawer keeps one clear navigation path without cart or favorites duplicates", async () => {
+  const [app, css] = await Promise.all([
+    fs.readFile(new URL("../../src/App.jsx", import.meta.url), "utf8"),
+    fs.readFile(new URL("../../src/App.css", import.meta.url), "utf8"),
+  ]);
+  const start = app.indexOf("{showMobileNav && (");
+  const drawer = app.slice(start, app.indexOf("</Motion.nav>", start));
+  assert.match(drawer, /Explorar/);
+  assert.match(drawer, /Ayuda y cuenta/);
+  assert.match(drawer, /Colección/);
+  assert.match(drawer, /Destacados/);
+  assert.match(drawer, /Ofertas/);
+  assert.match(drawer, /Contacto/);
+  assert.match(drawer, /Mis pedidos/);
+  assert.match(drawer, /Ingresar \/ crear cuenta/);
+  assert.doesNotMatch(drawer, /mobile-quick-icons|mobile-nav-primary-grid|Favoritos \(|Carrito \(/);
+  assert.match(css, /\.mobile-nav-links a,\s*\.mobile-nav-links button \{[^}]*border-bottom: 1px solid var\(--line-soft\);[^}]*background: transparent;/);
+  assert.match(css, /\.mobile-nav-actions \{[^}]*margin-top: auto;/);
+  assert.match(css, /\.mobile-nav-panel \{[^}]*width: min\(356px, 90vw\);/);
+  assert.match(css, /\.mobile-nav-head \.mobile-nav-close-btn \{[^}]*border: 1px solid var\(--line-soft\);[^}]*box-shadow: none;/);
+  assert.doesNotMatch(css, /\.mobile-nav-links a:hover,\s*\.mobile-nav-links button:hover \{[^}]*padding-left:/);
+});
+
+test("product detail places one accessible social signature below recommendations while home footer stays unchanged", async () => {
+  const [app, css, productModal] = await Promise.all([
+    fs.readFile(new URL("../../src/App.jsx", import.meta.url), "utf8"),
+    fs.readFile(new URL("../../src/App.css", import.meta.url), "utf8"),
+    fs.readFile(new URL("../../src/components/products/ProductModal.jsx", import.meta.url), "utf8"),
+  ]);
+  const footerStart = app.indexOf("<Motion.footer");
+  const footer = app.slice(footerStart, app.indexOf("</Motion.footer>", footerStart));
+  assert.match(footer, /className="social-row"/);
+  assert.match(footer, /className="social-link"/);
+  assert.doesNotMatch(footer, /footer-social-signature|product-modal-social-signature/);
+  assert.match(productModal, /contactSettings = \{\}/);
+  assert.match(productModal, /className="product-modal-related"[\s\S]*?className="product-modal-social-signature"/);
+  assert.match(productModal, /className="product-modal-social-brand"[\s\S]*?ADRIEGO[\s\S]*?STORE/);
+  assert.match(productModal, /aria-labelledby="product-social-title"/);
+  assert.equal((productModal.match(/className="product-modal-social-icon"/g) || []).length, 4);
+  assert.doesNotMatch(productModal, /Correo electrónico|contactSettings\.emailLink/);
+  assert.match(productModal, /icon="whatsapp"[\s\S]*?icon="facebook"[\s\S]*?icon="instagram"[\s\S]*?icon="tiktok"/);
+  assert.match(css, /\.product-modal-social-icon \{[\s\S]*?min-width: 44px;[\s\S]*?min-height: 44px;/);
+  assert.match(css, /\.product-modal-social-icon:focus-visible \{[\s\S]*?outline: 2px solid var\(--brand-accent\);/);
+});
+
+test("route panels preserve the catalog position and product context they were opened from", async () => {
+  const app = await fs.readFile(new URL("../../src/App.jsx", import.meta.url), "utf8");
+  const cartStart = app.indexOf("const openCartPage = useCallback");
+  const cartFlow = app.slice(cartStart, app.indexOf("const closeCartPage", cartStart));
+  const ordersStart = app.indexOf("const openOrdersPage = useCallback");
+  const ordersFlow = app.slice(ordersStart, app.indexOf("const closeOrdersPage", ordersStart));
+  const favoritesStart = app.indexOf("const openFavoritesPage = useCallback");
+  const favoritesFlow = app.slice(favoritesStart, app.indexOf("const closeFavoritesPage", favoritesStart));
+  const mobileHeaderStart = app.indexOf("const mobileStoreHeader = (");
+  const mobileHeader = app.slice(mobileHeaderStart, app.indexOf("const maintenanceActive", mobileHeaderStart));
+  const toastStart = app.indexOf("<StoreNotification");
+  const toast = app.slice(toastStart, app.indexOf("/>", toastStart));
+
+  assert.match(app, /const rememberCatalogReturnPoint = useCallback\(\(\) => \{/);
+  assert.match(app, /\[CATALOG_SCROLL_HISTORY_KEY\]: Math\.max\(0, window\.scrollY \|\| 0\)/);
+  assert.match(cartFlow, /rememberCatalogReturnPoint\(\);/);
+  assert.match(ordersFlow, /rememberCatalogReturnPoint\(\);/);
+  assert.match(favoritesFlow, /rememberCatalogReturnPoint\(\);/);
+  assert.doesNotMatch(mobileHeader, /else \{ if \(selectedProduct\) closeProductModal\(\); openCartPage\(\); \}/);
+  assert.doesNotMatch(toast, /if \(selectedProduct\) closeProductModal\(\);/);
+});
+
 test("stale chunks refresh once per session and tolerate blocked storage", () => {
   const values = new Map();
   let reloads = 0;

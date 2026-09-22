@@ -4,6 +4,7 @@ import {
   addSizeToColorDrafts,
   createProductDraftPayload,
   getProductFormSignature,
+  moveColorImageInDrafts,
   parseProductDraftPayload,
   removeSizeFromColorDrafts,
 } from "../../src/domain/admin/productDraft.js";
@@ -39,6 +40,24 @@ test("removing a matrix size keeps every color synchronized", () => {
   assert.deepEqual(result[0].sizes, [{ uid: "large-black", size: "L", stock: "1" }]);
   assert.deepEqual(result[1].sizes, [{ uid: "empty-white", size: "", stock: "0" }]);
   assert.strictEqual(removeSizeFromColorDrafts(result, "XL"), result);
+});
+
+test("gallery images can be reordered per color while preserving their view metadata", () => {
+  const colors = [
+    {
+      uid: "blue",
+      images: ["back.jpg", "front.jpg", "detail.jpg"],
+      imageViews: ["back", "front", "detail"],
+    },
+    { uid: "black", images: ["black.jpg"], imageViews: ["front"] },
+  ];
+  const reordered = moveColorImageInDrafts(colors, "blue", 1, 0);
+  assert.deepEqual(reordered[0].images, ["front.jpg", "back.jpg", "detail.jpg"]);
+  assert.deepEqual(reordered[0].imageViews, ["front", "back", "detail"]);
+  assert.strictEqual(reordered[1], colors[1]);
+  assert.strictEqual(moveColorImageInDrafts(reordered, "blue", -1, 0), reordered);
+  assert.strictEqual(moveColorImageInDrafts(reordered, "blue", 0, 99), reordered);
+  assert.strictEqual(moveColorImageInDrafts(reordered, "missing", 0, 1), reordered);
 });
 
 const sampleForm = {

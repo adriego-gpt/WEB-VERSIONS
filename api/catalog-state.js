@@ -3,6 +3,8 @@ import { createHmac, randomUUID } from "node:crypto";
 import { Buffer } from "node:buffer";
 import { normalizeMaintenanceSettings } from "../src/domain/store/maintenance.js";
 import { fetchWithTimeout } from "./_lib/network.js";
+import { notifyIndexNowInProduction } from "./_lib/indexNow.js";
+import { FILE_SECURITY } from "../src/constants/product.js";
 import { bumpRealtimeMeta, getStoreBackend, readStore, updateStore } from "./_lib/store.js";
 import {
   sanitizeAdminCatalogPayload,
@@ -26,7 +28,7 @@ import {
 
 const ADMIN_COOKIE_NAME = "adriego_admin_session";
 const ENDPOINT_NAME = "catalog-state";
-const MAX_PRODUCT_IMAGE_BYTES = 150 * 1024;
+const MAX_PRODUCT_IMAGE_BYTES = FILE_SECURITY.maxCatalogImageBytes;
 const ALLOWED_PRODUCT_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp"];
 const IMAGEKIT_AUTH_LIFETIME_SECONDS = 10 * 60;
 const IMAGEKIT_API_URL = "https://api.imagekit.io/v1/files";
@@ -391,6 +393,7 @@ export default async function handler(req, res) {
       return draft;
     });
     const sanitizedCatalog = buildSanitizedCatalogPayload(nextStore);
+    await notifyIndexNowInProduction(sanitizedCatalog.products);
     res.status(200).json({
       ok: true,
       data: {
@@ -485,6 +488,7 @@ export default async function handler(req, res) {
     });
   }
   const sanitizedCatalog = buildSanitizedCatalogPayload(nextStore);
+  await notifyIndexNowInProduction(sanitizedCatalog.products);
 
   res.status(200).json({
     ok: true,

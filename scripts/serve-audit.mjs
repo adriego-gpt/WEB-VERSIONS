@@ -51,6 +51,17 @@ await updateStore((draft) => {
       variants: colors.map((color) => ({ uid: `audit-variant-${index}-${color}`, color, size: "M", stock: 1 })),
     }));
   }
+  if (process.argv.includes("--mobile-catalog")) {
+    const source = draft.products[0];
+    const colors = ["Palo de Rosa", "Negro", "Azul Marino"];
+    const sizes = ["S", "M", "L", "XL", "2XL", "3XL", "4XL", "5XL"];
+    draft.products = Array.from({ length: 4 }, (_, index) => ({
+      ...source, id: `mobile-fixture-${index}`, name: `Prenda de prueba ${index + 1}`,
+      colors, sizes, catalogColor: colors[0],
+      imagesByColor: Object.fromEntries(colors.map(color => [color, source.imagesByColor.Rojo])),
+      variants: colors.flatMap(color => sizes.map(size => ({ uid: `mobile-${index}-${color}-${size}`, color, size, stock: size === "5XL" ? 0 : 4 }))),
+    }));
+  }
   return draft;
 });
 const productionPreview = process.argv.includes("--production");
@@ -69,7 +80,9 @@ const previewPlugins = productionPreview ? [{
         } catch { res.statusCode = 404; res.end(); }
         return;
       }
-      if (/^\/(?:admin|cuenta)(?:\/.*)?$|^\/(?:carrito|favoritos|pedidos|buscar)$/.test(pathname)) {
+      const isNestedSpaRoute = ["/admin", "/cuenta"].some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
+      const isFlatSpaRoute = ["/carrito", "/favoritos", "/pedidos", "/buscar"].includes(pathname);
+      if (isNestedSpaRoute || isFlatSpaRoute) {
         // Match Vercel's SPA rewrites so these checks use the compiled app too.
         try {
           res.setHeader("Content-Type", "text/html; charset=utf-8");

@@ -1,6 +1,8 @@
 import React, { Suspense, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { alignImageViews } from "./domain/products/imageViews.js";
 import { getPublicSiteOrigin } from "./constants/site.js";
+import { DEFAULT_HERO_IMAGE } from "./domain/store/defaultHero.js";
+import { MobileStoreHeader } from "./components/common/MobileStoreHeader.jsx";
 import { StoreNotification } from "./components/common/StoreNotification.jsx";
 import { getProductSeo } from "./domain/products/seo.js";
 import { getStoreSeo, normalizeSeoSettings } from "./domain/store/seoSettings.js";
@@ -17,10 +19,8 @@ import {
   ChevronRight,
   ChevronLeft,
   ShieldCheck,
-  Truck,
   RotateCcw,
   X,
-  Sparkles,
   Tag,
   Tags,
   PencilLine,
@@ -97,6 +97,8 @@ import { isLegacyInlineCatalogImage, migrateLegacyCatalogImages } from "./domain
 import { useBodyScrollLock } from "./hooks/useBodyScrollLock";
 import { useMobileNavGuards } from "./hooks/useMobileNavGuards";
 import { useSwipeGesture } from "./hooks/useSwipeGesture";
+import { useImagePending } from "./hooks/useImagePending.js";
+import { ImageLoadingIndicator } from "./components/ui/ImageLoadingIndicator.jsx";
 import { useCatalogBootstrap } from "./hooks/useCatalogBootstrap";
 import { useRealtimeSync } from "./hooks/useRealtimeSync";
 import { useCheckoutAvailability } from "./hooks/useCheckoutAvailability";
@@ -118,6 +120,7 @@ import {
   addSizeToColorDrafts,
   createProductDraftPayload,
   getProductFormSignature,
+  moveColorImageInDrafts,
   parseProductDraftPayload,
   removeSizeFromColorDrafts,
 } from "./domain/admin/productDraft";
@@ -291,6 +294,18 @@ function RouteNotFound({ onReturnHome }) {
         </button>
       </section>
     </main>
+  );
+}
+
+function PortraitOrientationGuard({ brandName = "Adriego Store" }) {
+  return (
+    <aside className="portrait-orientation-guard" role="dialog" aria-modal="true" aria-labelledby="portrait-orientation-title" aria-describedby="portrait-orientation-description">
+      <div className="portrait-orientation-card">
+        <RotateCcw size={30} strokeWidth={1.5} aria-hidden="true" />
+        <h2 id="portrait-orientation-title">Gira tu teléfono</h2>
+        <p id="portrait-orientation-description">{brandName} está diseñada para verse en vertical. Vuelve a esa posición para continuar.</p>
+      </div>
+    </aside>
   );
 }
 
@@ -529,7 +544,7 @@ const defaultStoreSettings = {
       id: "slide-1",
       title: "Nueva colección",
       subtitle: "Prendas versátiles para crear looks con personalidad.",
-      image: "https://images.unsplash.com/photo-1445205170230-053b83016050?auto=format&fit=crop&w=1400&q=80",
+      image: DEFAULT_HERO_IMAGE,
       linkedProductId: "",
       targetUrl: "",
     },
@@ -1477,9 +1492,10 @@ function buildProductFromForm(form) {
   const imagesByColor = Object.fromEntries(parsedColors.map((color) => [color.name, color.images]));
   const imageViewsByColor = Object.fromEntries(parsedColors.map((color) => [color.name, color.imageViews]));
   const colorSwatches = Object.fromEntries(parsedColors.map((color) => [color.name, color.hex]));
-  const catalogColor = parsedColors.some((color) => color.name === form.catalogColor)
-    ? form.catalogColor
-    : parsedColors[0].name;
+  const requestedCatalogColor = sanitizeLine(form.catalogColor).toLocaleLowerCase("es");
+  const catalogColor = parsedColors.find(
+    (color) => color.name.toLocaleLowerCase("es") === requestedCatalogColor,
+  )?.name || parsedColors[0].name;
   const filterTags = form.filterTagsText
     .split(",")
     .map((item) => sanitizeLine(item))
@@ -1641,6 +1657,8 @@ export default function App() {
   const [couponDraft, setCouponDraft] = useState(() => createEmptyCouponDraft());
   const [couponEditorMessage, setCouponEditorMessage] = useState("");
   const [couponEditorError, setCouponEditorError] = useState("");
+  const [couponSaveBusy, setCouponSaveBusy] = useState(false);
+  const couponSaveBusyRef = useRef(false);
   const [orderSearch, setOrderSearch] = useState("");
   const [orderStatusFilter, setOrderStatusFilter] = useState("all");
   const [orderDeliveryFilter, setOrderDeliveryFilter] = useState("all");
@@ -1663,7 +1681,11 @@ export default function App() {
   const [customFilterTagInput, setCustomFilterTagInput] = useState("");
   const [editorMessage, setEditorMessage] = useState("");
   const [editorError, setEditorError] = useState("");
+  const [productSaveBusy, setProductSaveBusy] = useState(false);
+  const productSaveBusyRef = useRef(false);
   const [offerSaveBusy, setOfferSaveBusy] = useState(false);
+  const [storeSaveBusy, setStoreSaveBusy] = useState(false);
+  const storeSaveBusyRef = useRef(false);
   const [contactSaveBusy, setContactSaveBusy] = useState(false);
   const [bankQrUploadBusy, setBankQrUploadBusy] = useState(false);
   const [contactSyncFeedback, setContactSyncFeedback] = useState(null);
@@ -1761,7 +1783,7 @@ export default function App() {
     setProductFormBaseline(
       productDraftRecovery.baselineSignature || getProductFormSignature(createEmptyProductForm()),
     );
-    setPreviewColor(restoredForm.colorsData?.[0]?.name || "");
+    setPreviewColor(restoredForm.catalogColor || restoredForm.colorsData?.[0]?.name || "");
     setPreviewImageIndex(0);
     setProductDraftSavedAt(productDraftRecovery.savedAt || "");
     setProductDraftSaveError("");
@@ -1798,7 +1820,7 @@ export default function App() {
     const cleanForm = savedProduct ? createProductForm(savedProduct) : createEmptyProductForm();
     setProductForm(cleanForm);
     setProductFormBaseline(getProductFormSignature(cleanForm));
-    setPreviewColor(cleanForm.colorsData?.[0]?.name || "");
+    setPreviewColor(cleanForm.catalogColor || cleanForm.colorsData?.[0]?.name || "");
     setPreviewImageIndex(0);
     setCustomProductTypeInput("");
     setCustomFilterTagInput("");
@@ -1879,15 +1901,23 @@ export default function App() {
 
   const normalizedPathname = pathname.replace(/\/+$/, "") || "/";
   const adminRouteActive = isAdminRoute(normalizedPathname);
+  const rememberCatalogReturnPoint = useCallback(() => {
+    if (typeof window === "undefined" || window.location.pathname !== "/") return;
+    window.history.replaceState({
+      ...(window.history.state || {}),
+      [CATALOG_SCROLL_HISTORY_KEY]: Math.max(0, window.scrollY || 0),
+    }, document.title, window.location.href);
+  }, []);
   const openOrdersPage = useCallback(() => {
     setShowProfileQuickMenu(false);
     setShowMobileNav(false);
     setShowOrdersModal(true);
     if (typeof window !== "undefined" && window.location.pathname !== "/pedidos") {
+      rememberCatalogReturnPoint();
       window.history.pushState({ ...(window.history.state || {}), [ORDERS_PAGE_HISTORY_KEY]: true }, document.title, "/pedidos");
       setPathname("/pedidos");
     }
-  }, []);
+  }, [rememberCatalogReturnPoint]);
   const closeOrdersPage = useCallback(() => {
     setShowOrdersModal(false);
     if (typeof window === "undefined" || window.location.pathname !== "/pedidos") return;
@@ -1903,10 +1933,11 @@ export default function App() {
     setShowFavoritesPanel(false);
     setShowCartSummary(true);
     if (typeof window !== "undefined" && window.location.pathname !== "/carrito") {
+      rememberCatalogReturnPoint();
       window.history.pushState({ adriegoNavigation: true, [CART_PAGE_HISTORY_KEY]: true, adriegoCheckoutDepth: 0 }, document.title, "/carrito");
       setPathname("/carrito");
     }
-  }, []);
+  }, [rememberCatalogReturnPoint]);
   const closeCartPage = useCallback(({ force = false } = {}) => {
     if (checkoutBusyRef.current && !force) return;
     setShowCartSummary(false);
@@ -1923,10 +1954,11 @@ export default function App() {
     setShowCartSummary(false);
     setShowFavoritesPanel(true);
     if (typeof window !== "undefined" && window.location.pathname !== "/favoritos") {
+      rememberCatalogReturnPoint();
       window.history.pushState({ ...(window.history.state || {}), [FAVORITES_PAGE_HISTORY_KEY]: true }, document.title, "/favoritos");
       setPathname("/favoritos");
     }
-  }, []);
+  }, [rememberCatalogReturnPoint]);
   const closeFavoritesPage = useCallback(() => {
     setShowFavoritesPanel(false);
     if (typeof window === "undefined" || window.location.pathname !== "/favoritos") return;
@@ -2141,6 +2173,8 @@ export default function App() {
 
   const heroSlides = storeSettings.heroSlides.length ? storeSettings.heroSlides : defaultStoreSettings.heroSlides;
   const activeHeroSlide = heroSlides[heroIndex] || defaultStoreSettings.heroSlides[0];
+  const heroImageSource = activeHeroSlide?.image || FALLBACK_IMAGE;
+  const { pending: heroImagePending, markReady: markHeroImageReady } = useImagePending(heroImageSource);
   const heroSlideHasAction = Boolean(activeHeroSlide?.linkedProductId || activeHeroSlide?.targetUrl?.trim());
   const shouldPauseHeroAutoplay = storeSettings.maintenanceSettings.enabled || heroHasFocus || reduceMotion || showAdminPanel
     || showMobileNav
@@ -5398,7 +5432,10 @@ export default function App() {
   };
 
   const saveCoupon = async () => {
-    const existingCoupon = coupons.find((coupon) => coupon.id === couponDraft.id);
+    if (couponSaveBusyRef.current) return;
+    const previousCoupons = couponsRef.current;
+    const previousCouponDraft = couponDraft;
+    const existingCoupon = previousCoupons.find((coupon) => coupon.id === couponDraft.id);
     const parsed = parseCouponDraft(couponDraft);
     if (parsed.error || !parsed.value) {
       setCouponEditorMessage("");
@@ -5412,7 +5449,7 @@ export default function App() {
       createdAt: existingCoupon?.createdAt || parsed.value.createdAt || new Date().toISOString(),
     };
 
-    const duplicated = coupons.some((coupon) => (
+    const duplicated = previousCoupons.some((coupon) => (
       coupon.id !== normalized.id && normalizeCode(coupon.code) === normalizeCode(normalized.code)
     ));
     if (duplicated) {
@@ -5422,74 +5459,127 @@ export default function App() {
     }
 
     const nextCoupons = (() => {
-      const exists = coupons.some((coupon) => coupon.id === normalized.id);
+      const exists = previousCoupons.some((coupon) => coupon.id === normalized.id);
       if (exists) {
-        return coupons.map((coupon) => (coupon.id === normalized.id ? { ...coupon, ...normalized, updatedAt: new Date().toISOString() } : coupon));
+        return previousCoupons.map((coupon) => (coupon.id === normalized.id ? { ...coupon, ...normalized, updatedAt: new Date().toISOString() } : coupon));
       }
-      return [{ ...normalized, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }, ...coupons];
+      return [{ ...normalized, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }, ...previousCoupons];
     })();
+    couponSaveBusyRef.current = true;
+    setCouponSaveBusy(true);
     setCoupons(nextCoupons);
     couponsRef.current = nextCoupons;
-
     setCouponEditorError("");
-    setCouponEditorMessage(`Cupon ${normalized.code} guardado correctamente.`);
-    setCouponDraft(createEmptyCouponDraft());
+    setCouponEditorMessage(`Guardando cupón ${normalized.code}...`);
 
-    const syncResult = await syncCatalogSnapshot({
-      coupons: nextCoupons,
-    }, { silent: true });
-    if (!syncResult.ok) {
-      setCouponEditorError(syncResult.message || "No pudimos sincronizar el cupon con el servidor.");
-      return;
+    try {
+      const syncResult = await syncCatalogSnapshot({
+        coupons: nextCoupons,
+      }, { silent: true });
+      if (!syncResult.ok) {
+        setCoupons(previousCoupons);
+        couponsRef.current = previousCoupons;
+        setCouponDraft(previousCouponDraft);
+        setCouponEditorMessage("");
+        setCouponEditorError(syncResult.message || "No pudimos guardar el cupón. Conservamos el formulario para que puedas reintentar.");
+        return { ok: false };
+      }
+      const persistedCoupons = normalizeCouponList(syncResult.data?.coupons || nextCoupons);
+      setCoupons(persistedCoupons);
+      couponsRef.current = persistedCoupons;
+      setCouponEditorError("");
+      setCouponEditorMessage(`Cupón ${normalized.code} guardado correctamente.`);
+      setCouponDraft(createEmptyCouponDraft());
+      showToastMessage(`Cupón ${normalized.code} sincronizado.`, "success");
+      return { ok: true };
+    } catch {
+      setCoupons(previousCoupons);
+      couponsRef.current = previousCoupons;
+      setCouponDraft(previousCouponDraft);
+      setCouponEditorMessage("");
+      setCouponEditorError("No pudimos guardar el cupón. Revisa tu conexión y vuelve a intentarlo.");
+      return { ok: false };
+    } finally {
+      couponSaveBusyRef.current = false;
+      setCouponSaveBusy(false);
     }
-    showToastMessage(`Cupon ${normalized.code} sincronizado.`, "success");
   };
 
   const toggleCouponActive = async (couponId) => {
-    const previousCoupons = coupons;
+    if (couponSaveBusyRef.current) return;
+    const previousCoupons = couponsRef.current;
     const normalizedCouponId = normalizeEntityId(couponId);
-    const nextCoupons = coupons.map((coupon) => (
+    const nextCoupons = previousCoupons.map((coupon) => (
       normalizeEntityId(coupon.id) === normalizedCouponId
         ? { ...coupon, active: coupon.active === false, updatedAt: new Date().toISOString() }
         : coupon
     ));
+    couponSaveBusyRef.current = true;
+    setCouponSaveBusy(true);
     setCoupons(nextCoupons);
     couponsRef.current = nextCoupons;
-    const syncResult = await syncCatalogSnapshot({ coupons: nextCoupons }, { silent: true });
-    if (!syncResult.ok) {
+    try {
+      const syncResult = await syncCatalogSnapshot({ coupons: nextCoupons }, { silent: true });
+      if (!syncResult.ok) {
+        setCoupons(previousCoupons);
+        couponsRef.current = previousCoupons;
+        showToastMessage(syncResult.message || "No pudimos sincronizar el cambio de estado del cupón.", "error");
+        return;
+      }
+      showToastMessage("Estado del cupón actualizado.", "success");
+    } catch {
       setCoupons(previousCoupons);
       couponsRef.current = previousCoupons;
-      showToastMessage(syncResult.message || "No pudimos sincronizar el cambio de estado del cupon.", "error");
-      return;
+      showToastMessage("No pudimos actualizar el cupón. Revisa tu conexión y reintenta.", "error");
+    } finally {
+      couponSaveBusyRef.current = false;
+      setCouponSaveBusy(false);
     }
-    showToastMessage("Estado del cupon actualizado.", "success");
   };
 
   const deleteCoupon = async (couponId) => {
+    if (couponSaveBusyRef.current) return;
     const normalizedCouponId = normalizeEntityId(couponId);
-    const target = coupons.find((coupon) => normalizeEntityId(coupon.id) === normalizedCouponId);
+    const previousCoupons = couponsRef.current;
+    const target = previousCoupons.find((coupon) => normalizeEntityId(coupon.id) === normalizedCouponId);
     if (!target) return;
     const confirmed = await requestDestructiveConfirmation({
       title: `¿Eliminar el cupón “${target.code}”?`,
       description: "Dejará de ser válido para nuevas compras. Los pedidos históricos no se modificarán.",
     });
     if (!confirmed) return;
-    const nextCoupons = coupons.filter((coupon) => normalizeEntityId(coupon.id) !== normalizedCouponId);
+    const nextCoupons = previousCoupons.filter((coupon) => normalizeEntityId(coupon.id) !== normalizedCouponId);
+    couponSaveBusyRef.current = true;
+    setCouponSaveBusy(true);
     setCoupons(nextCoupons);
     couponsRef.current = nextCoupons;
     setCouponEditorError("");
-    setCouponEditorMessage(`Cupon ${target.code} eliminado.`);
-    if (activeCouponCode && normalizeCode(target.code) === normalizeCode(activeCouponCode)) {
-      clearActiveCoupon();
+    setCouponEditorMessage(`Eliminando cupón ${target.code}...`);
+    try {
+      const syncResult = await syncCatalogSnapshot({
+        coupons: nextCoupons,
+      }, { silent: true });
+      if (!syncResult.ok) {
+        setCoupons(previousCoupons);
+        couponsRef.current = previousCoupons;
+        setCouponEditorMessage("");
+        setCouponEditorError(syncResult.message || "No pudimos eliminar el cupón. No se aplicó ningún cambio.");
+        return;
+      }
+      if (activeCouponCode && normalizeCode(target.code) === normalizeCode(activeCouponCode)) {
+        clearActiveCoupon();
+      }
+      setCouponEditorMessage(`Cupón ${target.code} eliminado.`);
+      showToastMessage(`Cupón ${target.code} eliminado y sincronizado.`, "success");
+    } catch {
+      setCoupons(previousCoupons);
+      couponsRef.current = previousCoupons;
+      setCouponEditorMessage("");
+      setCouponEditorError("No pudimos eliminar el cupón. Revisa tu conexión y vuelve a intentarlo.");
+    } finally {
+      couponSaveBusyRef.current = false;
+      setCouponSaveBusy(false);
     }
-    const syncResult = await syncCatalogSnapshot({
-      coupons: nextCoupons,
-    }, { silent: true });
-    if (!syncResult.ok) {
-      setCouponEditorError(syncResult.message || "No pudimos sincronizar la eliminacion del cupon.");
-      return;
-    }
-    showToastMessage(`Cupon ${target.code} eliminado y sincronizado.`, "success");
   };
 
   const applyCouponFromInput = () => {
@@ -6057,7 +6147,7 @@ export default function App() {
     setProductForm(form);
     setProductFormBaseline(getProductFormSignature(form));
     discardProductDraft();
-    setPreviewColor(form.colorsData[0]?.name || "");
+    setPreviewColor(form.catalogColor || form.colorsData[0]?.name || "");
     setPreviewImageIndex(0);
     setCustomProductTypeInput("");
     setCustomFilterTagInput("");
@@ -6166,7 +6256,7 @@ export default function App() {
     setProductForm(form);
     setProductFormBaseline(getProductFormSignature(emptyBaseline));
     discardProductDraft();
-    setPreviewColor(form.colorsData[0]?.name || "");
+    setPreviewColor(form.catalogColor || form.colorsData[0]?.name || "");
     setPreviewImageIndex(0);
     setCustomProductTypeInput("");
     setCustomFilterTagInput("");
@@ -6451,6 +6541,10 @@ export default function App() {
         .replace(/(\..*?)\..*/g, "$1")
       : value;
     setProductForm((previous) => ({ ...previous, [field]: nextValue }));
+    if (field === "catalogColor") {
+      setPreviewColor(nextValue);
+      setPreviewImageIndex(0);
+    }
   };
 
   const addManagedProductType = async () => {
@@ -7063,7 +7157,7 @@ export default function App() {
     setProductForm(form);
     setProductFormBaseline(getProductFormSignature(form));
     discardProductDraft();
-    setPreviewColor(form.colorsData[0]?.name || "");
+    setPreviewColor(form.catalogColor || form.colorsData[0]?.name || "");
     setPreviewImageIndex(0);
     setCustomProductTypeInput("");
     setCustomFilterTagInput("");
@@ -7201,6 +7295,13 @@ export default function App() {
         return { ...color, images: nextImages.length ? nextImages : [""], imageViews: nextImages.length ? nextImageViews : [""] };
       }),
     }));
+  };
+
+  const moveImageField = (uid, fromIndex, toIndex) => {
+    setProductForm((previous) => {
+      const colorsData = moveColorImageInDrafts(previous.colorsData, uid, fromIndex, toIndex);
+      return colorsData === previous.colorsData ? previous : { ...previous, colorsData };
+    });
   };
 
   const handleColorFilesUpload = async (uid, event) => {
@@ -7517,6 +7618,7 @@ export default function App() {
   }, []);
 
   const saveOffersFromAdmin = async (draftById = {}) => {
+    if (offerSaveBusy) return { ok: false, saved: 0 };
     if (!draftById || typeof draftById !== "object") {
       return { ok: false, saved: 0 };
     }
@@ -7525,32 +7627,26 @@ export default function App() {
       return { ok: true, saved: 0 };
     }
 
-    let nextProductsSnapshot = null;
+    const previousProducts = productsRef.current;
+    const previousProductForm = productForm;
     let savedCount = 0;
-    setProducts((previous) => {
-      const updated = previous.map((product) => {
-        const productId = String(product.id);
-        if (!pendingIds.has(productId)) return product;
-        const patch = draftById[productId] || draftById[product.id];
-        if (!patch) return product;
-        const nextProduct = applyOfferPatchToProduct(product, patch);
-        const unchanged = nextProduct.offerEnabled === product.offerEnabled
-          && nextProduct.offerDiscountMode === product.offerDiscountMode
-          && Number(nextProduct.offerDiscountValue) === Number(product.offerDiscountValue)
-          && Number(nextProduct.offerExtraDiscount) === Number(product.offerExtraDiscount)
-          && Number(nextProduct.offerExtraAmount) === Number(product.offerExtraAmount)
-          && Number(nextProduct.price) === Number(product.price)
-          && Number(nextProduct.basePrice) === Number(product.basePrice);
-        if (unchanged) return product;
-        savedCount += 1;
-        return nextProduct;
-      });
-      nextProductsSnapshot = updated;
-      return updated;
+    const nextProductsSnapshot = previousProducts.map((product) => {
+      const productId = String(product.id);
+      if (!pendingIds.has(productId)) return product;
+      const patch = draftById[productId] || draftById[product.id];
+      if (!patch) return product;
+      const nextProduct = applyOfferPatchToProduct(product, patch);
+      const unchanged = nextProduct.offerEnabled === product.offerEnabled
+        && nextProduct.offerDiscountMode === product.offerDiscountMode
+        && Number(nextProduct.offerDiscountValue) === Number(product.offerDiscountValue)
+        && Number(nextProduct.offerExtraDiscount) === Number(product.offerExtraDiscount)
+        && Number(nextProduct.offerExtraAmount) === Number(product.offerExtraAmount)
+        && Number(nextProduct.price) === Number(product.price)
+        && Number(nextProduct.basePrice) === Number(product.basePrice);
+      if (unchanged) return product;
+      savedCount += 1;
+      return nextProduct;
     });
-    if (nextProductsSnapshot) {
-      productsRef.current = nextProductsSnapshot;
-    }
 
     if (savedCount === 0) {
       setEditorMessage("No había cambios pendientes para guardar en ofertas.");
@@ -7558,8 +7654,10 @@ export default function App() {
       return { ok: true, saved: 0 };
     }
 
+    setProducts(nextProductsSnapshot);
+    productsRef.current = nextProductsSnapshot;
     if (productForm.id != null) {
-      const updatedProduct = (nextProductsSnapshot || []).find(
+      const updatedProduct = nextProductsSnapshot.find(
         (product) => String(product.id) === String(productForm.id),
       );
       if (updatedProduct) {
@@ -7570,13 +7668,17 @@ export default function App() {
     setOfferSaveBusy(true);
     try {
       const syncResult = await syncCatalogSnapshot({
-        products: nextProductsSnapshot || productsRef.current,
+        products: nextProductsSnapshot,
       }, { silent: true });
 
       if (!syncResult.ok) {
-        const message = syncResult.message || "Se guardaron las ofertas localmente, pero falló la sincronización con el servidor.";
+        setProducts(previousProducts);
+        productsRef.current = previousProducts;
+        setProductForm(previousProductForm);
+        const message = syncResult.message || "No pudimos guardar las ofertas. Conservamos tus cambios para que puedas reintentar.";
+        setEditorMessage("");
         setEditorError(message);
-        showToastMessage(message, "warning");
+        showToastMessage(message, "error");
         return { ok: false, saved: savedCount };
       }
 
@@ -7585,12 +7687,22 @@ export default function App() {
       setEditorError("");
       showToastMessage("Ofertas sincronizadas con el servidor.", "success");
       return { ok: true, saved: savedCount };
+    } catch {
+      setProducts(previousProducts);
+      productsRef.current = previousProducts;
+      setProductForm(previousProductForm);
+      const message = "No pudimos guardar las ofertas. Revisa tu conexión y vuelve a intentarlo.";
+      setEditorMessage("");
+      setEditorError(message);
+      showToastMessage(message, "error");
+      return { ok: false, saved: savedCount };
     } finally {
       setOfferSaveBusy(false);
     }
   };
 
   const saveProduct = async (options = {}) => {
+    if (productSaveBusyRef.current) return;
     if (Object.values(catalogImageUploadStateByColor).some((state) => state?.status === "uploading")) {
       const message = "Espera a que termine la subida de fotos antes de guardar el producto.";
       setEditorError(message);
@@ -7611,64 +7723,81 @@ export default function App() {
     const previousProducts = productsRef.current;
     const previousTypeRecords = productTypeRecordsRef.current;
     const previousTagRecords = filterTagRecordsRef.current;
+    productSaveBusyRef.current = true;
+    setProductSaveBusy(true);
 
-    const nextProductTypeRecords = ensureManagedEntity(previousTypeRecords, normalizedProduct.productType, "product-type");
-    const nextFilterTagRecords = normalizedProduct.filterTags.reduce(
-      (records, tag) => ensureManagedEntity(records, tag, "filter-tag"),
-      previousTagRecords,
-    );
-    const nextProducts = productForm.id
-      ? previousProducts.map((product) => normalizeEntityId(product.id) === normalizeEntityId(normalizedProduct.id) ? normalizedProduct : product)
-      : [normalizedProduct, ...previousProducts];
+    try {
+      const nextProductTypeRecords = ensureManagedEntity(previousTypeRecords, normalizedProduct.productType, "product-type");
+      const nextFilterTagRecords = normalizedProduct.filterTags.reduce(
+        (records, tag) => ensureManagedEntity(records, tag, "filter-tag"),
+        previousTagRecords,
+      );
+      const nextProducts = productForm.id
+        ? previousProducts.map((product) => normalizeEntityId(product.id) === normalizeEntityId(normalizedProduct.id) ? normalizedProduct : product)
+        : [normalizedProduct, ...previousProducts];
 
-    setProductTypeRecords(nextProductTypeRecords);
-    setFilterTagRecords(nextFilterTagRecords);
-    setProducts(nextProducts);
-    productsRef.current = nextProducts;
-    const savedSelection = getSelectionForColor(normalizedProduct, { color: normalizedProduct.catalogColor });
-    setSelections((previous) => ({
-      ...previous,
-      [normalizedProduct.id]: {
-        color: savedSelection.color,
-        size: savedSelection.size,
-      },
-    }));
-    productTypeRecordsRef.current = nextProductTypeRecords;
-    filterTagRecordsRef.current = nextFilterTagRecords;
+      setProductTypeRecords(nextProductTypeRecords);
+      setFilterTagRecords(nextFilterTagRecords);
+      setProducts(nextProducts);
+      productsRef.current = nextProducts;
+      const savedSelection = getSelectionForColor(normalizedProduct, { color: normalizedProduct.catalogColor });
+      setSelections((previous) => ({
+        ...previous,
+        [normalizedProduct.id]: {
+          color: savedSelection.color,
+          size: savedSelection.size,
+        },
+      }));
+      productTypeRecordsRef.current = nextProductTypeRecords;
+      filterTagRecordsRef.current = nextFilterTagRecords;
 
-    const actionText = normalizedProduct.isPublic ? "Publicando" : "Guardando";
-    setEditorMessage(`${actionText} "${normalizedProduct.name}" en el servidor...`);
-    setEditorError("");
+      const actionText = normalizedProduct.isPublic ? "Publicando" : "Guardando";
+      setEditorMessage(`${actionText} "${normalizedProduct.name}" en el servidor...`);
+      setEditorError("");
 
-    const syncResult = await syncCatalogSnapshot({
-      products: nextProducts,
-      productTypeRecords: nextProductTypeRecords,
-      filterTagRecords: nextFilterTagRecords,
-    }, { silent: true });
+      const syncResult = await syncCatalogSnapshot({
+        products: nextProducts,
+        productTypeRecords: nextProductTypeRecords,
+        filterTagRecords: nextFilterTagRecords,
+      }, { silent: true });
 
-    if (!syncResult.ok) {
+      if (!syncResult.ok) {
+        setProducts(previousProducts);
+        productsRef.current = previousProducts;
+        setProductTypeRecords(previousTypeRecords);
+        productTypeRecordsRef.current = previousTypeRecords;
+        setFilterTagRecords(previousTagRecords);
+        filterTagRecordsRef.current = previousTagRecords;
+
+        setEditorMessage("");
+        setEditorError(syncResult.message || "No pudimos sincronizar. El formulario sigue abierto para que puedas reintentar.");
+        showToastMessage(syncResult.message || "No pudimos sincronizar. Conservamos tus cambios para reintentar.", "warning");
+        return;
+      }
+
+      resetEditor();
+      const visibilityLabel = normalizedProduct.isPublic
+        ? "publicado en la tienda"
+        : "guardado como borrador (oculto al público)";
+      const successMessage = productForm.id
+        ? `Producto "${normalizedProduct.name}" actualizado y ${visibilityLabel}.`
+        : `Producto "${normalizedProduct.name}" agregado y ${visibilityLabel}.`;
+      setEditorMessage(successMessage);
+      showToastMessage(`Producto "${normalizedProduct.name}" sincronizado con el servidor.`, "success");
+    } catch {
       setProducts(previousProducts);
       productsRef.current = previousProducts;
       setProductTypeRecords(previousTypeRecords);
       productTypeRecordsRef.current = previousTypeRecords;
       setFilterTagRecords(previousTagRecords);
       filterTagRecordsRef.current = previousTagRecords;
-
       setEditorMessage("");
-      setEditorError(syncResult.message || "No pudimos sincronizar. El formulario sigue abierto para que puedas reintentar.");
-      showToastMessage(syncResult.message || "No pudimos sincronizar. Conservamos tus cambios para reintentar.", "warning");
-      return;
+      setEditorError("No pudimos guardar el producto. Conservamos el formulario para que puedas reintentar.");
+      showToastMessage("No pudimos guardar el producto. Revisa tu conexión y vuelve a intentarlo.", "error");
+    } finally {
+      productSaveBusyRef.current = false;
+      setProductSaveBusy(false);
     }
-
-    resetEditor();
-    const visibilityLabel = normalizedProduct.isPublic
-      ? "publicado en la tienda"
-      : "guardado como borrador (oculto al público)";
-    const successMessage = productForm.id
-      ? `Producto "${normalizedProduct.name}" actualizado y ${visibilityLabel}.`
-      : `Producto "${normalizedProduct.name}" agregado y ${visibilityLabel}.`;
-    setEditorMessage(successMessage);
-    showToastMessage(`Producto "${normalizedProduct.name}" sincronizado con el servidor.`, "success");
   };
 
   const importCatalogProducts = async (importedProducts = []) => {
@@ -7937,22 +8066,40 @@ export default function App() {
   };
 
   const saveStoreConfiguration = async () => {
+    if (storeSaveBusyRef.current || !isAdmin || !catalogReady) return;
     const nextStoreSettings = mergeStoreSettings({ ...storeDraft,
       brandName: storeSettingsRef.current.brandName, brandLabel: storeSettingsRef.current.brandLabel,
       seoSettings: storeSettingsRef.current.seoSettings,
       maintenanceSettings: storeSettingsRef.current.maintenanceSettings });
-    setStoreSettings(nextStoreSettings);
-    storeSettingsRef.current = nextStoreSettings;
-    setEditorMessage("La portada, branding, ofertas y slides fueron actualizados.");
+    storeSaveBusyRef.current = true;
+    setStoreSaveBusy(true);
+    setEditorMessage("Guardando ajustes, tarifas y portada...");
     setEditorError("");
-    const syncResult = await syncCatalogSnapshot({
-      storeSettings: nextStoreSettings,
-    }, { silent: true });
-    if (!syncResult.ok) {
-      showToastMessage(syncResult.message || "Guardamos cambios localmente, pero no pudimos sincronizar la configuracion.", "warning");
-      return;
+    try {
+      const syncResult = await syncCatalogSnapshot({
+        storeSettings: nextStoreSettings,
+      }, { silent: true });
+      if (!syncResult.ok) {
+        setEditorMessage("");
+        setEditorError(syncResult.message || "No pudimos guardar la configuración. Tus cambios siguen en el formulario para reintentar.");
+        showToastMessage(syncResult.message || "No pudimos guardar la configuración. Vuelve a intentarlo.", "error");
+        return;
+      }
+      const persistedStoreSettings = mergeStoreSettings(syncResult.data?.storeSettings || nextStoreSettings);
+      setStoreSettings(persistedStoreSettings);
+      storeSettingsRef.current = persistedStoreSettings;
+      setStoreDraft(persistedStoreSettings);
+      setEditorMessage("La portada, tarifas y slides fueron actualizados.");
+      setEditorError("");
+      showToastMessage("Portada, tarifas y slides actualizados y sincronizados.", "success");
+    } catch {
+      setEditorMessage("");
+      setEditorError("No pudimos guardar la configuración. Revisa tu conexión y vuelve a intentarlo.");
+      showToastMessage("No pudimos guardar la configuración. Tus cambios siguen disponibles.", "error");
+    } finally {
+      storeSaveBusyRef.current = false;
+      setStoreSaveBusy(false);
     }
-    showToastMessage("Portada, branding y slides actualizados y sincronizados.", "success");
   };
 
   const saveMaintenanceConfiguration = async (settings) => {
@@ -8311,6 +8458,26 @@ export default function App() {
   };
 
   const checkoutDisabled = Boolean(checkoutBusy || couponBusy || (activeCouponCode && !appliedCouponState?.ok));
+  const mobileStoreHeader = (
+    <MobileStoreHeader brandName={storeSettings.brandName} count={totalItems} menuOpen={showMobileNav}
+      onHome={() => { if (selectedProduct) closeProductModal(); handleGoHome(); }}
+      onMenu={() => { if (selectedProduct) closeProductModal(); setShowMobileNav(previous => !previous); }}
+      onBack={() => {
+        if (typeof window !== "undefined" && window.history.state?.[PRODUCT_PAGE_HISTORY_KEY]) {
+          window.history.back();
+          return;
+        }
+        closeProductModal({ returnToCart: true });
+      }}
+      onAccount={() => {
+        if (currentUser) openProfileModal("datos");
+        else openUserAuth({ mode: "login" });
+      }}
+      onCart={() => {
+        if (selectedProduct && editingCartItemKey) closeProductModal({ returnToCart: true });
+        else openCartPage();
+      }} />
+  );
   const maintenanceActive = storeSettings.maintenanceSettings.enabled && !isAdmin;
   const routeNotFound = catalogReady
     && !KNOWN_DIRECT_ROUTES.has(normalizedPathname)
@@ -8327,9 +8494,12 @@ export default function App() {
   if (normalizedPathname === "/error-preview") {
     return (
       <MotionConfig reducedMotion="user">
-        <ErrorBoundary onReset={returnHomeFromRoute}>
-          <ErrorPreviewThrower />
-        </ErrorBoundary>
+        <>
+          <PortraitOrientationGuard brandName={storeSettings.brandName} />
+          <ErrorBoundary onReset={returnHomeFromRoute}>
+            <ErrorPreviewThrower />
+          </ErrorBoundary>
+        </>
       </MotionConfig>
     );
   }
@@ -8337,7 +8507,10 @@ export default function App() {
   if (routeNotFound) {
     return (
       <MotionConfig reducedMotion="user">
-        <RouteNotFound onReturnHome={returnHomeFromRoute} />
+        <>
+          <PortraitOrientationGuard brandName={storeSettings.brandName} />
+          <RouteNotFound onReturnHome={returnHomeFromRoute} />
+        </>
       </MotionConfig>
     );
   }
@@ -8345,14 +8518,18 @@ export default function App() {
   return (
     <MotionConfig reducedMotion="user">
       <>
+      <PortraitOrientationGuard brandName={storeSettings.brandName} />
       {selectedProduct && !maintenanceActive && (
         <ErrorBoundary onReset={() => closeProductModal({ returnToCart: true })}>
           <Suspense fallback={null}>
             <ProductModal
+              mobileHeader={mobileStoreHeader}
+              interactionSuspended={showUserAuth || showProfileModal || showProfileQuickMenu || legalModalState.open}
               product={projectCartStock(selectedProduct, cartStockSnapshot)}
               selection={selectedProduct ? selections[selectedProduct.id] : null}
               recommendations={recommendedProducts.slice(0, 4)}
               onOpenRecommendation={openRecommendedProduct}
+              contactSettings={publicContactSettings}
               onClose={() => closeProductModal({ returnToCart: true })}
               onChange={handleSelection}
               cartEditMode={Boolean(editingCartItemKey)}
@@ -8634,6 +8811,7 @@ export default function App() {
               toggleProductPublicVisibility={toggleProductPublicVisibility}
               toggleProductFeatured={toggleProductFeatured}
               productForm={productForm}
+              productSaveBusy={productSaveBusy}
               productDraftRecovery={productDraftRecovery}
               productDraftSavedAt={productDraftSavedAt}
               productDraftSaveError={productDraftSaveError}
@@ -8658,8 +8836,10 @@ export default function App() {
               cancelCatalogImageUpload={cancelCatalogImageUpload}
               addImageField={addImageField}
               handleColorImageChange={handleColorImageChange}
+              moveImageField={moveImageField}
               removeImageField={removeImageField}
               saveProduct={saveProduct}
+              couponSaveBusy={couponSaveBusy}
               setStoreDraft={setStoreDraft}
               storeDraft={storeDraft}
               storeSettings={storeSettings}
@@ -8670,6 +8850,7 @@ export default function App() {
               handleStoreSlideImageUpload={handleStoreSlideImageUpload}
               handleBankImageUpload={handleBankImageUpload}
               saveStoreConfiguration={saveStoreConfiguration}
+              storeSaveBusy={storeSaveBusy}
               addHeroSlide={addHeroSlide}
               removeHeroSlide={removeHeroSlide}
               previewColor={previewColor}
@@ -8841,10 +9022,7 @@ export default function App() {
       <StoreNotification
         notification={toast}
         onDismiss={dismissToast}
-        onOpenCart={() => {
-          if (selectedProduct) closeProductModal();
-          openCartPage();
-        }}
+        onOpenCart={openCartPage}
         cartOpen={showCartSummary}
         durationMs={TOAST_DURATION_MS}
         reducedMotion={reduceMotion}
@@ -8894,7 +9072,7 @@ export default function App() {
                 type="button"
                 className="icon-btn nav-menu-toggle"
                 onClick={() => setShowMobileNav((previous) => !previous)}
-                aria-label={showMobileNav ? "Cerrar menu" : "Abrir menu"}
+                aria-label={showMobileNav ? "Cerrar menú" : "Abrir menú"}
                 aria-expanded={showMobileNav}
               >
                 <Menu size={18} />
@@ -8904,8 +9082,8 @@ export default function App() {
 
           <nav className="nav-links">
             <a href="#destacados" onClick={() => setShowMobileNav(false)}>Destacados</a>
-            <a href="#coleccion" onClick={() => setShowMobileNav(false)}>Coleccion</a>
-            <a href="#coleccion" onClick={() => { setCategory(OFFER_TAB_VALUE); setShowMobileNav(false); }}>Ofertas</a>
+            <a href="#coleccion" onClick={() => { document.getElementById("coleccion")?.scrollIntoView({ behavior: "smooth", block: "start" }); setShowMobileNav(false); }}>Colección</a>
+            <a href="#coleccion" onClick={() => { setCategory(OFFER_TAB_VALUE); document.getElementById("coleccion")?.scrollIntoView({ behavior: "smooth", block: "start" }); setShowMobileNav(false); }}>Ofertas</a>
             <a href="#contacto" onClick={() => setShowMobileNav(false)}>Contacto</a>
           </nav>
 
@@ -8980,6 +9158,7 @@ export default function App() {
           >
             <Motion.nav
               className="mobile-nav-panel"
+              aria-label="Menú principal"
               initial={{ x: "100%" }}
               animate={{ x: 0 }}
               exit={{ x: "100%" }}
@@ -8995,74 +9174,46 @@ export default function App() {
                 >
                   <strong>{storeSettings.brandName}</strong>
                 </button>
-                <button type="button" className="icon-btn" onClick={() => setShowMobileNav(false)} aria-label="Cerrar menu">
+                <button type="button" className="icon-btn mobile-nav-close-btn" onClick={() => setShowMobileNav(false)} aria-label="Cerrar menú">
                   <X size={16} />
                 </button>
               </div>
               <p className="mobile-nav-subhead">
                 {currentUser?.name ? `Hola, ${currentUser.name}` : "Explora la tienda y encuentra tus favoritos"}
               </p>
-              <div className="mobile-nav-section">
-                <p className="mobile-nav-section-label">Navegacion</p>
+              <div className="mobile-nav-section mobile-nav-section-primary">
+                <p className="mobile-nav-section-label">Explorar</p>
                 <div className="mobile-nav-links">
+                  <a href="#coleccion" onClick={() => { document.getElementById("coleccion")?.scrollIntoView({ behavior: "smooth", block: "start" }); setShowMobileNav(false); }}>
+                    <span>Colección</span>
+                    <ChevronRight size={15} />
+                  </a>
                   <a href="#destacados" onClick={() => setShowMobileNav(false)}>
                     <span>Destacados</span>
                     <ChevronRight size={15} />
                   </a>
-                  <a href="#coleccion" onClick={() => setShowMobileNav(false)}>
-                    <span>Colección</span>
-                    <ChevronRight size={15} />
-                  </a>
-                  <a href="#coleccion" onClick={() => { setCategory(OFFER_TAB_VALUE); setShowMobileNav(false); }}>
+                  <a href="#coleccion" onClick={() => { setCategory(OFFER_TAB_VALUE); document.getElementById("coleccion")?.scrollIntoView({ behavior: "smooth", block: "start" }); setShowMobileNav(false); }}>
                     <span>Ofertas</span>
                     <ChevronRight size={15} />
                   </a>
+                </div>
+              </div>
+              <div className="mobile-nav-section mobile-nav-section-support">
+                <p className="mobile-nav-section-label">Ayuda y cuenta</p>
+                <div className="mobile-nav-links mobile-nav-links-secondary">
                   <a href="#contacto" onClick={() => setShowMobileNav(false)}>
                     <span>Contacto</span>
                     <ChevronRight size={15} />
                   </a>
+                  {!isAdmin && (
+                    <button type="button" onClick={openOrdersPage} aria-label={currentUser ? "Consultar mis pedidos" : "Consultar pedidos sin cuenta"}>
+                      <span>Mis pedidos</span>
+                      <ChevronRight size={15} />
+                    </button>
+                  )}
                 </div>
-              </div>
-              <div className="mobile-quick-icons" role="group" aria-label="Accesos rápidos">
-                <button type="button" className="icon-quick-btn" onClick={() => { setShowMobileNav(false); openCatalogSearch(); }} aria-label="Buscar">
-                  <Search size={18} />
-                </button>
-                <button
-                  type="button"
-                  className="icon-quick-btn"
-                  onClick={(event) => {
-                    setShowMobileNav(false);
-                    if (currentUser) {
-                      openProfileQuickMenu(event);
-                      return;
-                    }
-                    openUserAuth({ mode: "login" });
-                  }}
-                  aria-label={currentUser ? "Mi perfil" : "Ingresar"}
-                >
-                  <UserRound size={18} />
-                </button>
-                <button type="button" className="icon-quick-btn icon-quick-btn-badge" onClick={openFavoritesPage} aria-label="Favoritos">
-                  <Heart size={18} />
-                  {favorites.length > 0 && <span className="icon-quick-badge">{Math.min(favorites.length, 99)}</span>}
-                </button>
-                <button type="button" className="icon-quick-btn icon-quick-btn-badge" onClick={openCartPage} aria-label="Carrito">
-                  <ShoppingBag size={18} />
-                  {totalItems > 0 && <span className="icon-quick-badge">{Math.min(totalItems, 99)}</span>}
-                </button>
               </div>
               <div className="mobile-nav-actions">
-                {!currentUser && <button type="button" className="btn btn-outline" onClick={openOrdersPage}>Mis pedidos sin cuenta</button>}
-                <div className="mobile-nav-primary-grid">
-                  <button className="btn btn-outline" onClick={openFavoritesPage}>
-                    <Heart size={14} />
-                    Favoritos ({favorites.length})
-                  </button>
-                  <button className="btn btn-primary" onClick={openCartPage}>
-                    <ShoppingBag size={14} />
-                    Carrito ({totalItems})
-                  </button>
-                </div>
                 <div className="mobile-nav-account-grid">
                   {currentUser ? (
                     <>
@@ -9070,18 +9221,14 @@ export default function App() {
                         <UserRound size={14} />
                         Mi perfil
                       </button>
-                      <button className="btn btn-outline" onClick={openOrdersPage}>
-                        <Package size={14} />
-                        Mis pedidos
-                      </button>
                       <button className="btn btn-outline mobile-nav-logout-btn" onClick={() => handleUserLogout({ closeMobileNav: true })}>
                         <X size={14} />
                         Cerrar sesion
                       </button>
                     </>
                   ) : !isAdmin ? (
-                    <button className="btn btn-outline" onClick={() => { setShowMobileNav(false); openUserAuth({ mode: "login" }); }}>
-                      <ChevronRight size={14} />
+                    <button className="btn btn-primary" onClick={() => { setShowMobileNav(false); openUserAuth({ mode: "login" }); }}>
+                      <UserRound size={15} />
                       Ingresar / crear cuenta
                     </button>
                   ) : null}
@@ -9117,7 +9264,7 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      <nav className="mobile-bottom-nav" aria-label="Navegacion rapida movil">
+      <nav className="mobile-bottom-nav" aria-label="Navegación rápida móvil">
         <button
           type="button"
           className={`mobile-bottom-item ${mobileQuickActive === "inicio" ? "active" : ""}`}
@@ -9175,35 +9322,19 @@ export default function App() {
         <div className="container hero-grid hero-shell">
           <Motion.div initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: ANIMATION.medium }} className="hero-copy-panel">
             <span className="badge badge-dark hero-badge">{storeSettings.heroBadgeText}</span>
-            <h1 className="section-title hero-title" style={{ fontSize: "clamp(34px, 6vw, 64px)", marginTop: 18 }}>{activeHeroSlide?.title || "Nueva colección"}</h1>
+            <h1 className="section-title hero-title">{activeHeroSlide?.title || "Nueva colección"}</h1>
             <p className="muted hero-copy" style={{ fontSize: 18, lineHeight: 1.8, maxWidth: 620 }}>
               {activeHeroSlide?.subtitle || "Explora prendas versátiles y encuentra tu próximo look."}
             </p>
-            <div className="hero-actions" style={{ marginTop: 20 }}>
-              <a href="#coleccion" className="btn btn-primary">{storeSettings.primaryCtaText}</a>
+            <p className="hero-order-note">Elige tus prendas aquí y confirma los detalles de tu pedido por WhatsApp.</p>
+            <div className="hero-actions">
+              <a href="#coleccion" className="btn btn-primary" onClick={() => document.getElementById("coleccion")?.scrollIntoView({ behavior: "smooth", block: "start" })}>{storeSettings.primaryCtaText}</a>
               <a
-                href="#coleccion"
-                className="btn btn-outline"
-                onClick={() => setCategory(OFFER_TAB_VALUE)}
-                aria-label="Ver ofertas especiales de la colección"
+                href="#como-comprar"
+                className="hero-text-link"
               >
-                <Sparkles size={16} />
-                Ver ofertas
+                Cómo comprar <ChevronRight size={16} aria-hidden="true" />
               </a>
-            </div>
-            <div className="trust-badges-row">
-              <span className="trust-badge-pill">
-                <Truck size={14} />
-                Envío rápido
-              </span>
-              <span className="trust-badge-pill">
-                <ShieldCheck size={14} />
-                Pago seguro
-              </span>
-              <span className="trust-badge-pill">
-                <RotateCcw size={14} />
-                Cambios fáciles
-              </span>
             </div>
           </Motion.div>
 
@@ -9222,6 +9353,7 @@ export default function App() {
               aria-disabled={!heroSlideHasAction}
             >
               <div className="hero-img-wrap">
+                <ImageLoadingIndicator pending={heroImagePending} />
                 <AnimatePresence mode="wait">
                   <Motion.img
                     key={activeHeroSlide?.image || heroIndex}
@@ -9237,7 +9369,11 @@ export default function App() {
                     exit={{ opacity: 0, scale: 0.99 }}
                     transition={{ duration: ANIMATION.medium }}
                     className="hero-img"
-                    onError={(event) => applyImageFallback(event.currentTarget, FALLBACK_IMAGE)}
+                    onLoad={markHeroImageReady}
+                    onError={(event) => {
+                      if (event.currentTarget.getAttribute("src") === FALLBACK_IMAGE) markHeroImageReady();
+                      else applyImageFallback(event.currentTarget, FALLBACK_IMAGE);
+                    }}
                   />
                 </AnimatePresence>
               </div>
@@ -9277,7 +9413,7 @@ export default function App() {
               </div>
 
               <div className="catalog-primary-row">
-                <div className="collection-audience-wrap" aria-label="Filtrar por coleccion">
+                <div className="collection-audience-wrap" aria-label="Filtrar por colección">
                   <div className="collection-audience-tabs" role="tablist" aria-label="Colecciones por audiencia">
                     {collectionAudienceTabs.map((item) => {
                       const isActive = category === item.value;
@@ -9453,6 +9589,7 @@ export default function App() {
           </section>
 
           <Motion.section
+            id="como-comprar"
             className="purchase-process-section section-shell"
             initial={{ opacity: 0, y: 24 }}
             whileInView={{ opacity: 1, y: 0 }}

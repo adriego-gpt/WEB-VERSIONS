@@ -50,9 +50,9 @@ export function SeoSettingsPanel({ settings, onSave }) {
   const origin = getPublicSiteOrigin(import.meta.env.VITE_PUBLIC_SITE_URL);
   const preview = getStoreSeo(draft, origin);
   const previewAssets = {
-    faviconUrl: draft.seoSettings.faviconUrl ? preview.faviconUrl : "/favicon.svg",
-    logoUrl: draft.seoSettings.logoUrl || draft.seoSettings.faviconUrl ? preview.logoUrl : "/favicon.svg",
-    imageUrl: draft.seoSettings.imageUrl ? preview.imageUrl : "/og-cover.jpg",
+    faviconUrl: draft.seoSettings.faviconUrl ? preview.faviconUrl : "/adriego-icon.png",
+    logoUrl: draft.seoSettings.logoUrl ? preview.logoUrl : "/adriego-logo.png",
+    imageUrl: draft.seoSettings.imageUrl ? preview.imageUrl : "/adriego-share.png",
   };
   const markChanged = () => { dirtyRef.current = true; setDirty(true); setFeedback(null); };
   const update = (key, value) => { markChanged(); setDraft(previous => ({ ...previous, [key]: value })); };

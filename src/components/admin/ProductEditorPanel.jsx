@@ -2,12 +2,14 @@ import React, { useMemo, useState } from "react";
 import {
   CheckCircle2,
   ChevronDown,
+  ChevronUp,
   Circle,
   Eye,
   ImagePlus,
   PackagePlus,
   Plus,
   Save,
+  Star,
   Trash2,
   X,
 } from "lucide-react";
@@ -57,6 +59,7 @@ export function ProductEditorPanel({
   onCancelImageUpload,
   onAddImageField,
   onColorImageChange,
+  onMoveImageField,
   onRemoveImageField,
   onAddSize,
   onAddSizeToAll,
@@ -64,10 +67,12 @@ export function ProductEditorPanel({
   onSizeChange,
   onRemoveSize,
   onSave,
+  saveBusy = false,
   onReset,
 }) {
   const [activeSection, setActiveSection] = useState("datos");
   const [customSize, setCustomSize] = useState("");
+  const [imageOrderAnnouncement, setImageOrderAnnouncement] = useState("");
   const colorsData = form?.colorsData;
   const [expandedColorId, setExpandedColorId] = useState(colorsData?.[0]?.uid || "");
   const formTags = useMemo(() => splitFilterTagsText(form?.filterTagsText), [form?.filterTagsText]);
@@ -108,6 +113,12 @@ export function ProductEditorPanel({
     if (!nextSize) return;
     onAddSizeToAll?.(nextSize);
     setCustomSize("");
+  };
+  const moveImage = (color, fromIndex, toIndex) => {
+    onMoveImageField?.(color.uid, fromIndex, toIndex);
+    setImageOrderAnnouncement(toIndex === 0
+      ? `La imagen elegida ahora es la portada de ${color.name || "este color"}.`
+      : `Imagen movida a la posición ${toIndex + 1} de ${color.name || "este color"}.`);
   };
   const publishChecks = [
     { label: "Nombre", complete: String(form.name || "").trim().length >= 2 },
@@ -525,7 +536,7 @@ export function ProductEditorPanel({
                           <div className="product-variant-block-head">
                             <div>
                               <strong>Fotografías</strong>
-                              <p>Pega enlaces o sube varias imágenes.</p>
+                              <p>La primera foto será la portada de este color. Puedes cambiar el orden sin volver a subirlas.</p>
                             </div>
                             <div className="admin-actions">
                               {(color.images || []).filter((image) => isLegacyInlineCatalogImage(image)).length > 0 && (
@@ -555,11 +566,30 @@ export function ProductEditorPanel({
                             </div>
                           </div>
                           <div className="product-image-editor-list">
+                            <p className="visually-hidden" role="status" aria-live="polite">{imageOrderAnnouncement}</p>
                             {(color.images || []).map((image, imageIndex) => (
-                              <div key={`${color.uid}-${imageIndex}`} className="product-image-editor-row">
-                                {image ? <img src={image} alt="" width="40" height="40" loading="lazy" decoding="async" /> : <span className="product-image-placeholder"><ImagePlus size={16} /></span>}
-                                <input className="input" value={image} onChange={(event) => onColorImageChange(color.uid, imageIndex, event.target.value)} placeholder={`URL de imagen ${imageIndex + 1}`} />
-                                <button className="icon-btn" type="button" onClick={() => onRemoveImageField(color.uid, imageIndex)} aria-label={`Quitar imagen ${imageIndex + 1}`}><Trash2 size={15} /></button>
+                              <div key={`${color.uid}-${imageIndex}`} className={`product-image-editor-row${imageIndex === 0 ? " is-primary" : ""}`}>
+                                <span className="product-image-editor-preview">
+                                  {image ? <img src={image} alt="" width="48" height="48" loading="lazy" decoding="async" /> : <span className="product-image-placeholder"><ImagePlus size={16} /></span>}
+                                  <span className="product-image-position" aria-hidden="true">{imageIndex + 1}</span>
+                                </span>
+                                <label className="product-image-editor-field">
+                                  <span className="visually-hidden">URL de la imagen {imageIndex + 1} de {color.name || "este color"}</span>
+                                  <input className="input" value={image} onChange={(event) => onColorImageChange(color.uid, imageIndex, event.target.value)} placeholder={`URL de imagen ${imageIndex + 1}`} />
+                                  <small>{imageIndex === 0 ? "Portada de este color" : `Posición ${imageIndex + 1} en la galería`}</small>
+                                </label>
+                                <div className="product-image-editor-actions" role="group" aria-label={`Orden de la imagen ${imageIndex + 1}`}>
+                                  {imageIndex === 0 ? (
+                                    <span className="product-image-primary-status"><Star size={13} fill="currentColor" aria-hidden="true" />Portada</span>
+                                  ) : (
+                                    <button className="product-image-primary-btn" type="button" onClick={() => moveImage(color, imageIndex, 0)} aria-label={`Usar imagen ${imageIndex + 1} como portada`}>
+                                      <Star size={14} aria-hidden="true" />Portada
+                                    </button>
+                                  )}
+                                  <button className="icon-btn product-image-order-btn" type="button" onClick={() => moveImage(color, imageIndex, imageIndex - 1)} disabled={imageIndex === 0} aria-label={`Mover imagen ${imageIndex + 1} una posición arriba`} title="Mover arriba"><ChevronUp size={16} /></button>
+                                  <button className="icon-btn product-image-order-btn" type="button" onClick={() => moveImage(color, imageIndex, imageIndex + 1)} disabled={imageIndex === color.images.length - 1} aria-label={`Mover imagen ${imageIndex + 1} una posición abajo`} title="Mover abajo"><ChevronDown size={16} /></button>
+                                  <button className="icon-btn admin-danger-icon" type="button" onClick={() => onRemoveImageField(color.uid, imageIndex)} aria-label={`Quitar imagen ${imageIndex + 1}`} title="Quitar imagen"><Trash2 size={15} /></button>
+                                </div>
                               </div>
                             ))}
                           </div>
@@ -606,19 +636,30 @@ export function ProductEditorPanel({
               <p>Controla dónde aparece el producto y si tendrá un descuento adicional.</p>
             </div>
             <div className="product-editor-toggle-grid">
-              <label className="product-editor-field product-editor-catalog-color-field">
-                <span className="product-editor-field-label">Color principal del catálogo</span>
-                <select
-                  className="select"
-                  value={form.catalogColor || ""}
-                  onChange={(event) => onFieldChange("catalogColor", event.target.value)}
-                >
-                  {colors.map((color) => (
-                    <option key={color.uid} value={color.name}>{color.name || "Color sin nombre"}</option>
-                  ))}
-                </select>
-                <small>Se mostrará primero en las tarjetas y en productos destacados.</small>
-              </label>
+              <fieldset className="product-editor-field product-editor-catalog-color-field">
+                <legend className="product-editor-field-label">Color principal del catálogo</legend>
+                <div className="product-editor-principal-colors" role="radiogroup" aria-label="Elegir color principal">
+                  {colors.map((color) => {
+                    const selected = color.name === form.catalogColor;
+                    return (
+                      <button
+                        key={color.uid}
+                        type="button"
+                        className={selected ? "is-selected" : ""}
+                        onClick={() => onFieldChange("catalogColor", color.name)}
+                        role="radio"
+                        aria-checked={selected}
+                        disabled={!color.name}
+                      >
+                        <i style={{ backgroundColor: /^#[0-9a-fA-F]{6}$/.test(color.hex || "") ? color.hex : "#c8c4bc" }} aria-hidden="true" />
+                        <span>{color.name || "Color sin nombre"}</span>
+                        {selected ? <Star size={13} fill="currentColor" aria-hidden="true" /> : null}
+                      </button>
+                    );
+                  })}
+                </div>
+                <small>Este color se mostrará primero en el catálogo, destacados, favoritos, ofertas y buscadores.</small>
+              </fieldset>
               <label className="product-editor-toggle-card">
                 <input className="checkbox" type="checkbox" checked={Boolean(form.isPublic)} onChange={(event) => onFieldChange("isPublic", event.target.checked)} />
                 <span><strong>Visible al público</strong><small>Permite comprarlo en la tienda.</small></span>
@@ -666,11 +707,13 @@ export function ProductEditorPanel({
           </span>
         </div>
         <div className="product-editor-footer-actions">
-          <button className="btn btn-outline" type="button" onClick={onReset}>{form.id ? "Cancelar" : "Limpiar"}</button>
+          <button className="btn btn-outline" type="button" onClick={onReset} disabled={saveBusy}>{form.id ? "Cancelar" : "Limpiar"}</button>
           {!form.isPublic && (
             <button
               className="btn btn-soft"
               type="button"
+              disabled={saveBusy}
+              aria-busy={saveBusy}
               onClick={() => {
                 onFieldChange("isPublic", true);
                 if (typeof onSave === "function") {
@@ -678,11 +721,11 @@ export function ProductEditorPanel({
                 }
               }}
             >
-              <Eye size={16} />Guardar y publicar
+              <Eye size={16} />{saveBusy ? "Guardando…" : "Guardar y publicar"}
             </button>
           )}
-          <button className="btn btn-primary" type="button" onClick={() => onSave()}>
-            <Save size={16} />{form.isPublic ? "Guardar producto" : "Guardar borrador"}
+          <button className="btn btn-primary" type="button" onClick={() => onSave()} disabled={saveBusy} aria-busy={saveBusy}>
+            <Save size={16} />{saveBusy ? "Guardando…" : (form.isPublic ? "Guardar producto" : "Guardar borrador")}
           </button>
         </div>
       </footer>

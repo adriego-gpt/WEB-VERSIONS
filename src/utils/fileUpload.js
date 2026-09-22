@@ -4,6 +4,18 @@
 import { FILE_SECURITY } from "../constants/product.js";
 import { normalizeSafeUrl } from "./url.js";
 
+const INLINE_IMAGE_OPTIMIZATION = Object.freeze({
+  maxBytes: FILE_SECURITY.maxInlineImageBytes,
+  maxLongEdge: 960,
+  preferredQuality: 0.82,
+});
+
+export const CATALOG_IMAGE_OPTIMIZATION = Object.freeze({
+  maxBytes: FILE_SECURITY.maxCatalogImageBytes,
+  maxLongEdge: 1600,
+  preferredQuality: 0.88,
+});
+
 export function estimateDataUrlBytes(value = "") {
   const raw = String(value || "").trim();
   const separatorIndex = raw.indexOf(",");
@@ -55,22 +67,32 @@ function loadImageFromDataUrl(dataUrl) {
   });
 }
 
-async function optimizeInlineImage(dataUrl, maxBytes) {
+function resolveOptimizationProfile(options = {}) {
+  const source = options && typeof options === "object" ? options : {};
+  return {
+    maxBytes: Math.min(FILE_SECURITY.maxCatalogImageBytes, Math.max(8 * 1024, Math.floor(Number(source.maxBytes) || INLINE_IMAGE_OPTIMIZATION.maxBytes))),
+    maxLongEdge: Math.min(2560, Math.max(320, Math.floor(Number(source.maxLongEdge) || INLINE_IMAGE_OPTIMIZATION.maxLongEdge))),
+    preferredQuality: Math.min(0.94, Math.max(0.7, Number(source.preferredQuality) || INLINE_IMAGE_OPTIMIZATION.preferredQuality)),
+  };
+}
+
+async function optimizeInlineImage(dataUrl, options = INLINE_IMAGE_OPTIMIZATION) {
   if (typeof document === "undefined" || typeof Image === "undefined") return "";
+  const profile = resolveOptimizationProfile(options);
   const image = await loadImageFromDataUrl(dataUrl);
   const sourceWidth = Math.max(1, Number(image.naturalWidth) || Number(image.width) || 1);
   const sourceHeight = Math.max(1, Number(image.naturalHeight) || Number(image.height) || 1);
-  const initialScale = Math.min(1, 960 / Math.max(sourceWidth, sourceHeight));
+  const initialScale = Math.min(1, profile.maxLongEdge / Math.max(sourceWidth, sourceHeight));
   const outputFormats = [
-    ["image/webp", 0.82],
-    ["image/webp", 0.74],
-    ["image/jpeg", 0.80],
-    ["image/jpeg", 0.72],
-    ["image/webp", 0.62],
+    ["image/webp", profile.preferredQuality],
+    ["image/webp", Math.max(0.8, profile.preferredQuality - 0.04)],
+    ["image/jpeg", Math.min(0.92, profile.preferredQuality + 0.02)],
+    ["image/jpeg", Math.max(0.82, profile.preferredQuality - 0.02)],
+    ["image/webp", Math.max(0.76, profile.preferredQuality - 0.08)],
   ];
 
-  for (let sizeAttempt = 0; sizeAttempt < 5; sizeAttempt += 1) {
-    const scale = initialScale * (0.85 ** sizeAttempt);
+  for (let sizeAttempt = 0; sizeAttempt < 6; sizeAttempt += 1) {
+    const scale = initialScale * (0.9 ** sizeAttempt);
     const width = Math.max(64, Math.round(sourceWidth * scale));
     const height = Math.max(64, Math.round(sourceHeight * scale));
     const canvas = document.createElement("canvas");
@@ -78,13 +100,15 @@ async function optimizeInlineImage(dataUrl, maxBytes) {
     canvas.height = height;
     const context = canvas.getContext("2d", { alpha: false });
     if (!context) return "";
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = "high";
     context.fillStyle = "#ffffff";
     context.fillRect(0, 0, width, height);
     context.drawImage(image, 0, 0, width, height);
 
     for (const [mimeType, quality] of outputFormats) {
       const optimized = canvas.toDataURL(mimeType, quality);
-      if (optimized.startsWith("data:image/") && estimateDataUrlBytes(optimized) <= maxBytes) {
+      if (optimized.startsWith("data:image/") && estimateDataUrlBytes(optimized) <= profile.maxBytes) {
         return optimized;
       }
     }
@@ -92,7 +116,7 @@ async function optimizeInlineImage(dataUrl, maxBytes) {
   return "";
 }
 
-export async function fileToDataUrl(file) {
+export async function fileToDataUrl(file, options = INLINE_IMAGE_OPTIMIZATION) {
   if (!file || !String(file.type || "").startsWith("image/")) {
     throw new Error("Solo se permiten archivos de imagen.");
   }
@@ -106,9 +130,10 @@ export async function fileToDataUrl(file) {
     throw new Error("No pudimos procesar la imagen seleccionada.");
   }
 
-  const optimized = await optimizeInlineImage(dataUrl, FILE_SECURITY.maxInlineImageBytes);
+  const profile = resolveOptimizationProfile(options);
+  const optimized = await optimizeInlineImage(dataUrl, profile);
   if (optimized) return optimized;
-  if (estimateDataUrlBytes(dataUrl) <= FILE_SECURITY.maxInlineImageBytes) {
+  if (estimateDataUrlBytes(dataUrl) <= profile.maxBytes) {
     return dataUrl;
   }
   throw new Error("La imagen no pudo optimizarse para guardar. Elige una imagen más pequeña o con menor resolución.");
