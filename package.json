@@ -15,6 +15,8 @@
     "test:e2e": "node scripts/run-tests.mjs e2e",
     "test:all": "node scripts/run-tests.mjs all",
     "check:release": "npm run lint && npm run test:all && npm run build",
+    "audit:site": "squirrel audit https://www.adriego.shop --http --offline --max-pages 1 --max-depth 1 --concurrency 1 --per-host 1 --refresh --format console",
+    "audit:site:full": "squirrel audit https://www.adriego.shop --http --offline --coverage full --max-pages 100 --refresh --format console",
     "dev:audit": "node scripts/serve-audit.mjs",
     "test:unit:analytics": "node --test tests/unit/analytics-service.test.mjs",
     "test:unit:remote-state": "node --test tests/unit/remote-state.test.mjs",
@@ -40,6 +42,7 @@
     "eslint-plugin-react-refresh": "^0.5.2",
     "eslint-plugin-security": "^4.0.1",
     "globals": "^17.4.0",
+    "squirrelscan": "^0.0.98",
     "vite": "^8.0.1"
   }
 }

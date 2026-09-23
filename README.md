@@ -72,6 +72,32 @@ npm run check:release
 npm run build
 ```
 
+## Auditoría del sitio
+
+El proyecto incluye Squirrelscan para revisar rastreo, sitemap, SEO, rendimiento, accesibilidad, seguridad, contenido y datos estructurados. La revisión rápida analiza la portada y sus señales globales:
+
+```bash
+npm run audit:site
+```
+
+Para recorrer hasta 100 páginas del sitio:
+
+```bash
+npm run audit:site:full
+```
+
+Ejecuta la auditoría completa después de cada despliegue importante. Ambos comandos son de diagnóstico y no modifican el sitio.
+
+## Analítica con Umami
+
+La tienda integra Umami Cloud de forma diferida para no bloquear el render inicial. El tracker permanece desactivado si no existe un identificador válido.
+
+1. Crea el sitio `www.adriego.shop` en Umami y copia su **Website ID**.
+2. Configura `VITE_UMAMI_WEBSITE_ID` en Vercel para Production y, si deseas medir pruebas, también para Preview.
+3. Vuelve a desplegar la aplicación.
+
+La integración respeta `Do Not Track`, no usa cookies analíticas y elimina parámetros y fragmentos de las URL. Los eventos comerciales excluyen el texto de búsqueda y los códigos de pedido antes de enviarse a Umami.
+
 ## Despliegue en Vercel
 
 1. Importa el proyecto en Vercel.

@@ -1,0 +1,8 @@
+[crawler]
+concurrency = 1
+per_host_concurrency = 1
+per_host_delay_ms = 1200
+max_backoff_ms = 120000
+
+[cloud]
+render = "off"

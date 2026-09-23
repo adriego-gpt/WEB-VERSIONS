@@ -5,6 +5,8 @@
  * Guarantees zero capture of personal information (names, emails, phones, addresses, passwords, tokens).
  */
 
+import { dispatchUmamiEvent } from './umamiAnalytics.js';
+
 export const ALLOWED_EVENTS = Object.freeze({
   catalog_search: Object.freeze([
     'query_term',
@@ -69,6 +71,10 @@ const SENSITIVE_KEY_PATTERNS = [
   /item[s]?$/i,
   /product[s]?$/i
 ];
+
+// Search text and order references stay out of external analytics because users
+// can enter identifying text and an order code is a persistent transaction ID.
+const UMAMI_EXCLUDED_FIELDS = new Set(['query_term', 'order_id']);
 
 function containsSensitiveString(value) {
   const normalized = value.trim();
@@ -151,6 +157,11 @@ export function trackAnalyticsEvent(name, payload = {}) {
       ...sanitized,
       timestamp: Date.now()
     };
+
+    const umamiPayload = Object.fromEntries(
+      Object.entries(sanitized).filter(([field]) => !UMAMI_EXCLUDED_FIELDS.has(field))
+    );
+    dispatchUmamiEvent(name.trim(), umamiPayload);
 
     if (typeof window !== 'undefined' && Array.isArray(window.dataLayer)) {
       window.dataLayer.push(eventRecord);

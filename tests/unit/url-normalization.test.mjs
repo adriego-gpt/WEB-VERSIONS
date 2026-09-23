@@ -32,6 +32,10 @@ test("index.html CSP includes frame-src allowing Google Maps iframes", async () 
   assert.match(html, /frame-src[^"]*https:\/\/maps\.google\.com/);
   assert.doesNotMatch(html, /frame-ancestors/);
   assert.match(responseCsp, /frame-ancestors 'none'/);
+  assert.match(html, /script-src[^;]*https:\/\/cloud\.umami\.is/);
+  assert.match(html, /connect-src[^;]*https:\/\/cloud\.umami\.is/);
+  assert.match(responseCsp, /script-src[^;]*https:\/\/cloud\.umami\.is/);
+  assert.match(responseCsp, /connect-src[^;]*https:\/\/cloud\.umami\.is/);
 });
 
 test("Google Maps links without protocol are normalized to HTTPS", () => {

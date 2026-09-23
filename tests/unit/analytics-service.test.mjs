@@ -178,6 +178,27 @@ describe('Zero-PII Analytics Service', () => {
     assert.equal(typeof mockDataLayer[0].timestamp, 'number');
   });
 
+  test('7b. Sends only non-identifying event fields to Umami', () => {
+    const calls = [];
+    globalThis.window = {
+      umami: { track: (...args) => calls.push(args) },
+      __adriegoUmamiQueue: [],
+    };
+
+    trackAnalyticsEvent('order_created', {
+      order_id: 'ORDER-PRIVATE-55',
+      total: 92,
+      item_count: 2,
+      delivery_type: 'pickup',
+      coupon_used: false,
+    });
+
+    assert.deepEqual(calls, [[
+      'order_created',
+      { total: 92, item_count: 2, delivery_type: 'pickup', coupon_used: false },
+    ]]);
+  });
+
   test('8. Handles non-object and null rawPayload inputs cleanly', () => {
     assert.deepEqual(sanitizeEventPayload('cart_item_added', null), {});
     assert.deepEqual(sanitizeEventPayload('cart_item_added', undefined), {});

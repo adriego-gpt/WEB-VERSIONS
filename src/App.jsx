@@ -19,8 +19,10 @@ import {
   ChevronRight,
   ChevronLeft,
   ShieldCheck,
+  Truck,
   RotateCcw,
   X,
+  Sparkles,
   Tag,
   Tags,
   PencilLine,
@@ -153,6 +155,7 @@ import { MemoFeaturedProductMarquee as ExternalFeaturedProductMarquee } from "./
 import { MemoCatalogProductCard as ExternalMemoCatalogProductCard } from "./components/catalog/CatalogProductCard";
 import { CatalogSkeletonCard as ExternalCatalogSkeletonCard } from "./components/catalog/CatalogSkeletonCard";
 import { CatalogPagination as ExternalCatalogPagination } from "./components/catalog/CatalogPagination";
+import { OuterwearFinder } from "./components/catalog/OuterwearFinder";
 import { DESKTOP_CATALOG_PAGE_SIZE, MOBILE_CATALOG_PAGE_SIZE, getCatalogPagination } from "./domain/products/catalogPagination";
 import whatsappIconUrl from "./assets/social/whatsapp.svg";
 import instagramIconUrl from "./assets/social/instagram.svg";
@@ -246,12 +249,28 @@ const LegalModal = lazyWithRetry(() => import("./components/modals/LegalModal").
 const OrderSuccessRedirectModal = lazyWithRetry(() => import("./components/modals/OrderSuccessRedirectModal").then((module) => ({ default: module.OrderSuccessRedirectModal || module.default })));
 
 /** Module-level route set — avoids re-instantiation on every render (#11). */
-const KNOWN_DIRECT_ROUTES = new Set(["/", "/cuenta/restablecer", "/carrito", "/favoritos", "/pedidos", "/buscar", "/error-preview"]);
+const LEGAL_ROUTE_TO_TAB = Object.freeze({
+  "/legal/cambios": "exchanges",
+  "/legal/privacidad": "privacy",
+  "/legal/terminos": "terms",
+  "/legal/cookies": "cookies",
+});
+const LEGAL_TAB_TO_ROUTE = Object.freeze(Object.fromEntries(
+  Object.entries(LEGAL_ROUTE_TO_TAB).map(([route, tab]) => [tab, route]),
+));
+const LEGAL_ROUTE_META = Object.freeze({
+  exchanges: { title: "Política de cambios", description: "Consulta los requisitos, plazos y excepciones para cambios de prendas en Adriego Store." },
+  privacy: { title: "Política de privacidad", description: "Conoce cómo Adriego Store utiliza, protege y conserva los datos necesarios para gestionar cuentas y pedidos." },
+  terms: { title: "Términos de compra", description: "Consulta las condiciones de catálogo, disponibilidad, pagos, pedidos y entregas de Adriego Store." },
+  cookies: { title: "Uso de cookies", description: "Conoce las cookies técnicas, de seguridad, sesión y analítica utilizadas por Adriego Store." },
+});
+const KNOWN_DIRECT_ROUTES = new Set(["/", "/cuenta/restablecer", "/carrito", "/favoritos", "/pedidos", "/buscar", "/error-preview", ...Object.keys(LEGAL_ROUTE_TO_TAB)]);
 const ADMIN_WORKSPACE_HISTORY_KEY = "__adriegoAdminWorkspace";
 const ORDERS_PAGE_HISTORY_KEY = "__adriegoOrdersPage";
 const CART_PAGE_HISTORY_KEY = "__adriegoCartPage";
 const FAVORITES_PAGE_HISTORY_KEY = "__adriegoFavoritesPage";
 const PRODUCT_PAGE_HISTORY_KEY = "__adriegoProductPage";
+const LEGAL_PAGE_HISTORY_KEY = "__adriegoLegalPage";
 const CATALOG_SCROLL_HISTORY_KEY = "__adriegoCatalogScrollY";
 const PRIVATE_UTILITY_ROUTES = new Set(["/carrito", "/favoritos", "/pedidos"]);
 const MAX_IMPORT_SYNC_BYTES = 3_500_000;
@@ -530,6 +549,19 @@ const defaultStoreSettings = {
   saleDescription: "Elige tus prendas, confirma tus datos y envía tu pedido. Adjunta tu transferencia en la web o solicita el enlace de tarjeta por WhatsApp.",
   footerTitle: "¿Necesitas ayuda para elegir?",
   footerText: "Escríbenos para consultar tallas, colores, disponibilidad o el estado de tu pedido.",
+  outerwearFinder: {
+    title: "Encuentra tu abrigo ideal",
+    description: "Elige el estilo que buscas y te mostraremos las prendas disponibles.",
+    image: "/editorial/outerwear-finder.png",
+    imageAlt: "Tres modelos luciendo una gabardina, un acolchado con peluche y una chompa ligera",
+    primaryCta: "Ver mi selección",
+    secondaryCta: "Ver catálogo completo",
+    options: [
+      { id: "peluche", label: "Acolchado con peluche", description: "Calidez suave para días fríos", query: "peluche" },
+      { id: "reversible", label: "Gabardina reversible", description: "Dos estilos en una sola prenda", query: "reversible gabardina" },
+      { id: "ligera", label: "Chompa ligera", description: "Versátil para todos los días", query: "chompa" },
+    ],
+  },
   automationSettings: {
     postPurchaseEnabled: false,
     postPurchaseTemplate: "",
@@ -935,6 +967,34 @@ function replaceLegacyStoreCopy(value, legacyValue, replacement) {
   return !value || legacyValues.includes(value) ? replacement : value;
 }
 
+function normalizeStoreImageSource(value = "", fallback = "") {
+  const raw = String(value || "").trim();
+  if (/^\/(?!\/)/.test(raw) && !/[\\\s\p{Cc}]/u.test(raw)) return raw;
+  return normalizeImageSource(raw) || fallback;
+}
+
+function normalizeOuterwearFinder(rawFinder = {}) {
+  const source = rawFinder && typeof rawFinder === "object" ? rawFinder : {};
+  const sourceOptions = Array.isArray(source.options) ? source.options : [];
+  return {
+    title: sanitizeLine(source.title || defaultStoreSettings.outerwearFinder.title).slice(0, 100) || defaultStoreSettings.outerwearFinder.title,
+    description: sanitizeParagraph(source.description || defaultStoreSettings.outerwearFinder.description).slice(0, 240) || defaultStoreSettings.outerwearFinder.description,
+    image: normalizeStoreImageSource(source.image, defaultStoreSettings.outerwearFinder.image),
+    imageAlt: sanitizeLine(source.imageAlt || defaultStoreSettings.outerwearFinder.imageAlt).slice(0, 180) || defaultStoreSettings.outerwearFinder.imageAlt,
+    primaryCta: sanitizeLine(source.primaryCta || defaultStoreSettings.outerwearFinder.primaryCta).slice(0, 60) || defaultStoreSettings.outerwearFinder.primaryCta,
+    secondaryCta: sanitizeLine(source.secondaryCta || defaultStoreSettings.outerwearFinder.secondaryCta).slice(0, 60) || defaultStoreSettings.outerwearFinder.secondaryCta,
+    options: defaultStoreSettings.outerwearFinder.options.map((fallbackOption, index) => {
+      const option = sourceOptions.find((entry) => entry?.id === fallbackOption.id) || sourceOptions[index] || {};
+      return {
+        id: fallbackOption.id,
+        label: sanitizeLine(option.label || fallbackOption.label).slice(0, 70) || fallbackOption.label,
+        description: sanitizeLine(option.description || fallbackOption.description).slice(0, 120) || fallbackOption.description,
+        query: sanitizeLine(option.query || fallbackOption.query).slice(0, 80) || fallbackOption.query,
+      };
+    }),
+  };
+}
+
 function mergeStoreSettings(rawSettings = {}) {
   const incomingSlides = Array.isArray(rawSettings.heroSlides) && rawSettings.heroSlides.length
     ? rawSettings.heroSlides
@@ -1013,6 +1073,7 @@ function mergeStoreSettings(rawSettings = {}) {
       ],
       defaultStoreSettings.footerText,
     ),
+    outerwearFinder: normalizeOuterwearFinder(rawSettings.outerwearFinder),
     maintenanceSettings: normalizeMaintenanceSettings(rawSettings.maintenanceSettings),
     seoSettings: normalizeSeoSettings(rawSettings.seoSettings),
     automationSettings: normalizeAutomationSettings(
@@ -1041,7 +1102,7 @@ function mergeStoreSettings(rawSettings = {}) {
         id: slide.id || defaultSlide.id || createUid(),
         title: replaceLegacyStoreCopy(sanitizeLine(slide.title), legacyTitles[index] || "", defaultSlide.title),
         subtitle: replaceLegacyStoreCopy(sanitizeParagraph(slide.subtitle), [legacySubtitles[index] || "", ...(index === 2 ? ["Guarda tus favoritos, arma tu pedido y confírmalo por WhatsApp."] : [])], defaultSlide.subtitle),
-        image: normalizeSafeUrl(slide.image || defaultSlide.image || FALLBACK_IMAGE) || FALLBACK_IMAGE,
+        image: normalizeStoreImageSource(slide.image || defaultSlide.image || FALLBACK_IMAGE, FALLBACK_IMAGE),
         linkedProductId: (slide.linkedProductId != null ? String(slide.linkedProductId) : ""),
         targetUrl: normalizeSafeUrl(slide.targetUrl != null ? slide.targetUrl : ""),
       };
@@ -1629,7 +1690,10 @@ export default function App() {
   const [authBusy, setAuthBusy] = useState(false);
   const [authPasswordVisible, setAuthPasswordVisible] = useState(false);
   const [authResetEmailLocked, setAuthResetEmailLocked] = useState(false);
-  const [legalModalState, setLegalModalState] = useState({ open: false, tab: "exchanges" });
+  const [legalModalState, setLegalModalState] = useState(() => {
+    const initialTab = typeof window === "undefined" ? "" : LEGAL_ROUTE_TO_TAB[window.location.pathname || ""];
+    return { open: Boolean(initialTab), tab: initialTab || "exchanges" };
+  });
   const [orderSuccessModal, setOrderSuccessModal] = useState(() => (
     normalizePendingWhatsAppConfirmation(
       readStorage(STORAGE_KEYS.pendingWhatsAppConfirmation, null),
@@ -1901,6 +1965,27 @@ export default function App() {
 
   const normalizedPathname = pathname.replace(/\/+$/, "") || "/";
   const adminRouteActive = isAdminRoute(normalizedPathname);
+  const legalRouteTab = LEGAL_ROUTE_TO_TAB[normalizedPathname] || "";
+  const openLegalDocument = useCallback((requestedTab = "terms", { replace = false } = {}) => {
+    const tab = LEGAL_TAB_TO_ROUTE[requestedTab] ? requestedTab : "terms";
+    const nextRoute = LEGAL_TAB_TO_ROUTE[tab];
+    setLegalModalState({ open: true, tab });
+    if (typeof window === "undefined" || window.location.pathname === nextRoute) return;
+    const state = { ...(window.history.state || {}), [LEGAL_PAGE_HISTORY_KEY]: true };
+    if (replace) window.history.replaceState(state, document.title, nextRoute);
+    else window.history.pushState(state, document.title, nextRoute);
+    setPathname(nextRoute);
+  }, []);
+  const closeLegalDocument = useCallback(() => {
+    setLegalModalState((previous) => ({ ...previous, open: false }));
+    if (typeof window === "undefined" || !LEGAL_ROUTE_TO_TAB[window.location.pathname]) return;
+    if (window.history.state?.[LEGAL_PAGE_HISTORY_KEY]) {
+      window.history.back();
+      return;
+    }
+    window.history.replaceState({}, document.title, "/");
+    setPathname("/");
+  }, []);
   const rememberCatalogReturnPoint = useCallback(() => {
     if (typeof window === "undefined" || window.location.pathname !== "/") return;
     window.history.replaceState({
@@ -2011,10 +2096,14 @@ export default function App() {
     if (typeof window === "undefined") return undefined;
     // A direct link gets an in-site parent once. Do not trap Back on the home page.
     const initialPath = window.location.pathname;
-    if (!window.history.state?.adriegoNavigation && !window.history.state?.[ADMIN_WORKSPACE_HISTORY_KEY] && (/^\/(carrito|favoritos|pedidos|producto\/|admin(?:\/|$))/.test(initialPath))) {
+    if (!window.history.state?.adriegoNavigation && !window.history.state?.[ADMIN_WORKSPACE_HISTORY_KEY] && (/^\/(carrito|favoritos|pedidos|producto\/|legal\/|admin(?:\/|$))/.test(initialPath))) {
       const originalUrl = `${initialPath}${window.location.search}${window.location.hash}`;
       window.history.replaceState({ adriegoNavigation: true }, document.title, "/");
-      window.history.pushState({ adriegoNavigation: true, ...(initialPath === "/carrito" ? { [CART_PAGE_HISTORY_KEY]: true } : {}) }, document.title, originalUrl);
+      window.history.pushState({
+        adriegoNavigation: true,
+        ...(initialPath === "/carrito" ? { [CART_PAGE_HISTORY_KEY]: true } : {}),
+        ...(LEGAL_ROUTE_TO_TAB[initialPath] ? { [LEGAL_PAGE_HISTORY_KEY]: true } : {}),
+      }, document.title, originalUrl);
     }
     const handlePopState = (event) => {
       const nextPathname = window.location.pathname || "/";
@@ -2045,6 +2134,14 @@ export default function App() {
     if (normalizedPathname === "/pedidos" || !showOrdersModal) return;
     setShowOrdersModal(false);
   }, [normalizedPathname, showOrdersModal]);
+
+  useEffect(() => {
+    if (legalRouteTab) {
+      setLegalModalState({ open: true, tab: legalRouteTab });
+      return;
+    }
+    setLegalModalState((previous) => (previous.open ? { ...previous, open: false } : previous));
+  }, [legalRouteTab]);
 
   useEffect(() => {
     if (typeof window === "undefined" || !showAdminPanel) return undefined;
@@ -2099,16 +2196,17 @@ export default function App() {
         : normalizedPathname === "/pedidos"
           ? "Tus pedidos | Adriego Store"
           : "";
+    const legalMeta = legalRouteTab ? LEGAL_ROUTE_META[legalRouteTab] : null;
     const title = adminRouteActive
       ? "Administración | Adriego Store"
       : isResetRoute
       ? "Restablecer contraseña | Adriego Store"
       : (isMissingRoute
         ? "Página no encontrada | Adriego Store"
-        : (routedProduct ? `${productName} | ${site.brandName}` : (utilityRouteTitle || site.title)));
+        : (routedProduct ? `${productName} | ${site.brandName}` : (legalMeta ? `${legalMeta.title} | ${site.brandName}` : (utilityRouteTitle || site.title))));
     const description = adminRouteActive
       ? "Espacio privado de administración de Adriego Store."
-      : routedProduct ? productDescription : site.description;
+      : routedProduct ? productDescription : legalMeta?.description || site.description;
     document.title = title;
     upsertRouteMeta('meta[name="description"]', ["name", "description"], description);
     upsertRouteMeta('meta[property="og:title"]', ["property", "og:title"], title);
@@ -2157,7 +2255,7 @@ export default function App() {
     schema.type = "application/ld+json";
     schema.textContent = JSON.stringify(productSeo.schema).replace(/</g, "\\u003c");
     if (!existingSchema) document.head.appendChild(schema);
-  }, [adminRouteActive, catalogReady, isResetRoute, normalizedPathname, productRouteSlug, routedProduct, storeSettings]);
+  }, [adminRouteActive, catalogReady, isResetRoute, legalRouteTab, normalizedPathname, productRouteSlug, routedProduct, storeSettings]);
   const knownAdminOrderIdsRef = useRef(new Set());
   const adminOrdersHydratedRef = useRef(false);
   const checkoutAttemptRef = useRef({ signature: "", idempotencyKey: "" });
@@ -5623,6 +5721,35 @@ export default function App() {
     }
   }, []);
 
+  const scrollToCatalogResults = useCallback(() => {
+    if (typeof window === "undefined") return;
+    window.requestAnimationFrame(() => {
+      document.getElementById("coleccion")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }, []);
+
+  const handleOuterwearFinderSelection = useCallback((option) => {
+    startTransition(() => {
+      setSearch(option.query);
+      setCategory("Todos");
+      setProductTypeFilter("Todos");
+      setSortBy("destacados");
+      setCatalogPage(1);
+    });
+    scrollToCatalogResults();
+  }, [scrollToCatalogResults]);
+
+  const handleOuterwearFinderBrowseAll = useCallback(() => {
+    startTransition(() => {
+      setSearch("");
+      setCategory("Todos");
+      setProductTypeFilter("Todos");
+      setSortBy("destacados");
+      setCatalogPage(1);
+    });
+    scrollToCatalogResults();
+  }, [scrollToCatalogResults]);
+
   const stageGuestStateMerge = (user) => {
     const guestCart = normalizeAccountCartState(cart);
     const guestFavorites = normalizeStoredFavorites(favorites);
@@ -7525,6 +7652,29 @@ export default function App() {
     }
   };
 
+  const handleOuterwearFinderImageUpload = async (event) => {
+    const inputElement = event.target;
+    const file = inputElement?.files?.[0];
+    if (!file) return;
+    try {
+      const image = await fileToDataUrl(file);
+      setStoreDraft((previous) => ({
+        ...previous,
+        outerwearFinder: {
+          ...normalizeOuterwearFinder(previous.outerwearFinder),
+          image,
+        },
+      }));
+      showToastMessage("Imagen del selector actualizada. Guarda los ajustes para publicarla.", "success");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "No pudimos cargar la imagen del selector.";
+      setEditorError(message);
+      showToastMessage(message, "error");
+    } finally {
+      if (inputElement) inputElement.value = "";
+    }
+  };
+
   const handleBankImageUpload = async (accountId, field, event) => {
     if (field !== "bankLogoImage" && field !== "bankQrImage") return;
     const inputElement = event.target;
@@ -7719,8 +7869,16 @@ export default function App() {
       return;
     }
 
-    const normalizedProduct = normalizeProduct(builtProduct.value);
     const previousProducts = productsRef.current;
+    const currentProduct = previousProducts.find(
+      (product) => normalizeEntityId(product.id) === normalizeEntityId(builtProduct.value.id),
+    );
+    const savedAt = new Date().toISOString();
+    const normalizedProduct = normalizeProduct({
+      ...builtProduct.value,
+      createdAt: currentProduct?.createdAt || savedAt,
+      updatedAt: savedAt,
+    });
     const previousTypeRecords = productTypeRecordsRef.current;
     const previousTagRecords = filterTagRecordsRef.current;
     productSaveBusyRef.current = true;
@@ -8679,7 +8837,7 @@ export default function App() {
               onFieldChange={handleAuthFieldChange}
               onTogglePasswordVisibility={() => setAuthPasswordVisible((previous) => !previous)}
               onSubmit={handleUserAuthSubmit}
-              onOpenLegal={(tab) => setLegalModalState({ open: true, tab: tab || "terms" })}
+              onOpenLegal={(tab) => openLegalDocument(tab || "terms")}
             />
           )}
 
@@ -8756,13 +8914,13 @@ export default function App() {
       )}
 
       {legalModalState.open && (
-        <ErrorBoundary onReset={() => setLegalModalState((prev) => ({ ...prev, open: false }))}>
+        <ErrorBoundary onReset={closeLegalDocument}>
           <Suspense fallback={null}>
             <LegalModal
               open={legalModalState.open}
               tab={legalModalState.tab}
-              onTabChange={(tab) => setLegalModalState((prev) => ({ ...prev, tab }))}
-              onClose={() => setLegalModalState((prev) => ({ ...prev, open: false }))}
+              onTabChange={(tab) => openLegalDocument(tab, { replace: true })}
+              onClose={closeLegalDocument}
               brandName={storeSettings.brandName || "Adriego Store"}
               contactSettings={publicContactSettings}
             />
@@ -8848,6 +9006,7 @@ export default function App() {
               maintenanceSaveBusy={maintenanceSaveBusy}
               onSaveMaintenance={saveMaintenanceConfiguration}
               handleStoreSlideImageUpload={handleStoreSlideImageUpload}
+              handleOuterwearFinderImageUpload={handleOuterwearFinderImageUpload}
               handleBankImageUpload={handleBankImageUpload}
               saveStoreConfiguration={saveStoreConfiguration}
               storeSaveBusy={storeSaveBusy}
@@ -9029,7 +9188,7 @@ export default function App() {
       />
 
       {maintenanceActive ? (
-        <MaintenancePage settings={storeSettings.maintenanceSettings} brandName={storeSettings.brandName} whatsappUrl={publicContactSettings.whatsappLink} onOpenOrders={openOrdersPage} onOpenLegal={(tab) => setLegalModalState({ open: true, tab })} />
+        <MaintenancePage settings={storeSettings.maintenanceSettings} brandName={storeSettings.brandName} whatsappUrl={publicContactSettings.whatsappLink} onOpenOrders={openOrdersPage} onOpenLegal={openLegalDocument} />
       ) : (<>
       {isAdmin && storeSettings.maintenanceSettings.enabled && <aside className="maintenance-admin-banner" role="status">Mantenimiento activo para clientes. Estás viendo la tienda como administrador.</aside>}
       <a className="skip-link" href="#main-content">Saltar al catálogo</a>
@@ -9322,19 +9481,26 @@ export default function App() {
         <div className="container hero-grid hero-shell">
           <Motion.div initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: ANIMATION.medium }} className="hero-copy-panel">
             <span className="badge badge-dark hero-badge">{storeSettings.heroBadgeText}</span>
-            <h1 className="section-title hero-title">{activeHeroSlide?.title || "Nueva colección"}</h1>
+            <h1 className="section-title hero-title" style={{ fontSize: "clamp(34px, 6vw, 64px)", marginTop: 18 }}>{activeHeroSlide?.title || "Nueva colección"}</h1>
             <p className="muted hero-copy" style={{ fontSize: 18, lineHeight: 1.8, maxWidth: 620 }}>
               {activeHeroSlide?.subtitle || "Explora prendas versátiles y encuentra tu próximo look."}
             </p>
-            <p className="hero-order-note">Elige tus prendas aquí y confirma los detalles de tu pedido por WhatsApp.</p>
-            <div className="hero-actions">
-              <a href="#coleccion" className="btn btn-primary" onClick={() => document.getElementById("coleccion")?.scrollIntoView({ behavior: "smooth", block: "start" })}>{storeSettings.primaryCtaText}</a>
+            <div className="hero-actions" style={{ marginTop: 20 }}>
+              <a href="#coleccion" className="btn btn-primary">{storeSettings.primaryCtaText}</a>
               <a
-                href="#como-comprar"
-                className="hero-text-link"
+                href="#coleccion"
+                className="btn btn-outline"
+                onClick={() => setCategory(OFFER_TAB_VALUE)}
+                aria-label="Ver ofertas especiales de la colección"
               >
-                Cómo comprar <ChevronRight size={16} aria-hidden="true" />
+                <Sparkles size={16} />
+                Ver ofertas
               </a>
+            </div>
+            <div className="trust-badges-row">
+              <span className="trust-badge-pill"><Truck size={14} /> Envío rápido</span>
+              <span className="trust-badge-pill"><ShieldCheck size={14} /> Pago seguro</span>
+              <span className="trust-badge-pill"><RotateCcw size={14} /> Cambios fáciles</span>
             </div>
           </Motion.div>
 
@@ -9588,71 +9754,11 @@ export default function App() {
             </div>
           </section>
 
-          <Motion.section
-            id="como-comprar"
-            className="purchase-process-section section-shell"
-            initial={{ opacity: 0, y: 24 }}
-            whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: true, amount: 0.2 }}
-            transition={{ duration: ANIMATION.medium }}
-            aria-labelledby="purchase-process-heading"
-          >
-            <div className="purchase-process-header">
-              <span className="purchase-process-eyebrow">EXPERIENCIA ADRIEGO · EN 3 PASOS</span>
-              <h2 id="purchase-process-heading" className="purchase-process-title">{storeSettings.saleTitle}</h2>
-              <p className="purchase-process-subtitle">{storeSettings.saleDescription}</p>
-            </div>
-
-            <ol className="purchase-process-grid" aria-label="Cómo comprar en Adriego Store">
-              <li className="purchase-process-card">
-                <div className="purchase-process-card-top">
-                  <span className="purchase-process-card-num" aria-hidden="true">01</span>
-                  <div className="purchase-process-card-icon-wrap" aria-hidden="true">
-                    <ShoppingBag size={22} />
-                  </div>
-                </div>
-                <div className="purchase-process-card-body">
-                  <h3>Elige tu prenda</h3>
-                  <p>Explora nuestras colecciones exclusivas, escoge tu talla, color y agrega a tu selección.</p>
-                </div>
-                <div className="purchase-process-card-footer">
-                  <span className="purchase-process-card-tag">Paso 01 · Catálogo</span>
-                </div>
-              </li>
-
-              <li className="purchase-process-card">
-                <div className="purchase-process-card-top">
-                  <span className="purchase-process-card-num" aria-hidden="true">02</span>
-                  <div className="purchase-process-card-icon-wrap" aria-hidden="true">
-                    <Package size={22} />
-                  </div>
-                </div>
-                <div className="purchase-process-card-body">
-                  <h3>Revisa tus datos</h3>
-                  <p>Confirma tu dirección de entrega y método de pago preferido para procesar tu orden.</p>
-                </div>
-                <div className="purchase-process-card-footer">
-                  <span className="purchase-process-card-tag">Paso 02 · Confirmación</span>
-                </div>
-              </li>
-
-              <li className="purchase-process-card">
-                <div className="purchase-process-card-top">
-                  <span className="purchase-process-card-num" aria-hidden="true">03</span>
-                  <div className="purchase-process-card-icon-wrap" aria-hidden="true">
-                    <Send size={22} />
-                  </div>
-                </div>
-                <div className="purchase-process-card-body">
-                  <h3>Envía tu pedido</h3>
-                  <p>Transferencia: adjunta el comprobante en la web. Tarjeta: solicita tu enlace por WhatsApp. Revisaremos el pago antes de confirmar.</p>
-                </div>
-                <div className="purchase-process-card-footer">
-                  <span className="purchase-process-card-tag">Paso 03 · Revisión del pago</span>
-                </div>
-              </li>
-            </ol>
-          </Motion.section>
+          <OuterwearFinder
+            settings={storeSettings.outerwearFinder}
+            onApplySelection={handleOuterwearFinderSelection}
+            onBrowseAll={handleOuterwearFinderBrowseAll}
+          />
 
         </div>
       </main>
@@ -9839,41 +9945,41 @@ export default function App() {
 
           <div className="footer-subbar" aria-label="Políticas y documentos legales">
             <nav className="footer-legal-links">
-              <button
-                type="button"
+              <a
+                href="/legal/cambios"
                 className="footer-legal-btn"
-                onClick={() => setLegalModalState({ open: true, tab: "exchanges" })}
+                onClick={(event) => { event.preventDefault(); openLegalDocument("exchanges"); }}
               >
                 <span className="footer-legal-label-full">Política de Cambios</span>
                 <span className="footer-legal-label-compact">Cambios</span>
-              </button>
+              </a>
               <span className="footer-legal-divider" aria-hidden="true">•</span>
-              <button
-                type="button"
+              <a
+                href="/legal/privacidad"
                 className="footer-legal-btn"
-                onClick={() => setLegalModalState({ open: true, tab: "privacy" })}
+                onClick={(event) => { event.preventDefault(); openLegalDocument("privacy"); }}
               >
                 <span className="footer-legal-label-full">Privacidad de Datos</span>
                 <span className="footer-legal-label-compact">Privacidad</span>
-              </button>
+              </a>
               <span className="footer-legal-divider" aria-hidden="true">•</span>
-              <button
-                type="button"
+              <a
+                href="/legal/terminos"
                 className="footer-legal-btn"
-                onClick={() => setLegalModalState({ open: true, tab: "terms" })}
+                onClick={(event) => { event.preventDefault(); openLegalDocument("terms"); }}
               >
                 <span className="footer-legal-label-full">Términos de Compra</span>
                 <span className="footer-legal-label-compact">Términos</span>
-              </button>
+              </a>
               <span className="footer-legal-divider" aria-hidden="true">•</span>
-              <button
-                type="button"
+              <a
+                href="/legal/cookies"
                 className="footer-legal-btn"
-                onClick={() => setLegalModalState({ open: true, tab: "cookies" })}
+                onClick={(event) => { event.preventDefault(); openLegalDocument("cookies"); }}
               >
                 <span className="footer-legal-label-full">Uso de Cookies</span>
                 <span className="footer-legal-label-compact">Cookies</span>
-              </button>
+              </a>
             </nav>
             <p className="footer-copyright">
               © {new Date().getFullYear()} {storeSettings.brandName || "Adriego Store"}. Todos los derechos reservados.

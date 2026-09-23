@@ -8,6 +8,7 @@ import App from './App.jsx'
 import './index.css'
 import { ErrorBoundary } from './components/ui/ErrorBoundary.jsx'
 import { tryReloadStaleChunk } from './utils/chunkRecovery.js'
+import { scheduleUmamiAnalytics } from './services/umamiAnalytics.js'
 
 preload(manropeFontUrl, { as: 'font', type: 'font/woff2', crossOrigin: 'anonymous' })
 preload(cormorantFontUrl, { as: 'font', type: 'font/woff2', crossOrigin: 'anonymous' })
@@ -48,3 +49,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
     </ErrorBoundary>
   </React.StrictMode>,
 )
+
+// Third-party analytics starts after the initial React render and remains fully
+// disabled when VITE_UMAMI_WEBSITE_ID is absent or invalid.
+scheduleUmamiAnalytics()

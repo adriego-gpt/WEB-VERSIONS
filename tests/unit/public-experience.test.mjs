@@ -28,6 +28,8 @@ test("public HTML includes useful content, links, schema and compiled applicatio
   assert.match(html, /src="\/assets\/app-123.js"/);
   assert.match(html, /href="\/assets\/app-123.css"/);
   assert.match(html, /<h1>Chompa Azul<\/h1>/);
+  assert.match(html, /<link rel="preload" as="image" fetchpriority="high" href="https:\/\/images\.example\/azul\.png"/);
+  assert.match(html, /<img[^>]+fetchpriority="high"/);
   assert.match(html, /<p>Tejido suave\.<\/p>/);
   assert.match(html, /Colores: Azul\. Tallas: M\./);
   assert.match(html, /Disponible/);
@@ -52,7 +54,14 @@ test("public page routes are identical for browsers and search crawlers", async 
     assert.ok(rewrite.destination.includes("action=page"));
     assert.equal(rewrite.has, undefined);
   }
-  assert.equal(config.functions["api/seo.js"].includeFiles, "dist/index.html");
+  assert.equal(config.functions["api/seo.js"].includeFiles, "dist/app.html");
+  // ASVS V14.2.5: unknown XML files must not receive the 200 SPA shell.
+  const xmlRoute = config.rewrites.find((entry) => entry.source === "/:name.xml");
+  assert.ok(xmlRoute.destination.includes("action=page&path=/"));
+  assert.ok(config.rewrites.find((entry) => entry.source === "/sitemap.xml")?.destination.includes("action=sitemap-index"));
+  assert.ok(config.rewrites.find((entry) => entry.source === "/sitemap-pages.xml")?.destination.includes("action=sitemap-pages"));
+  assert.ok(config.rewrites.find((entry) => entry.source === "/sitemap-products.xml")?.destination.includes("action=sitemap-products"));
+  assert.equal(config.rewrites.at(-1).destination, "/app.html");
 });
 
 test("agent discovery file is useful Markdown with canonical public links", async () => {
@@ -78,6 +87,28 @@ test("catalog color controls keep a compact visual inside an accessible touch ta
   assert.match(css, /\.product-card-color-swatch::after,[\s\S]*?width: 44px;[\s\S]*?height: 44px;/);
   assert.match(css, /\.product-card-color-swatch,[\s\S]*?width: 34px;[\s\S]*?height: 34px;/);
   assert.match(css, /\.product-card-color-swatch\.active \{[^}]*border-color: var\(--text-strong\);/);
+});
+
+test("outerwear finder replaces repeated purchase steps with responsive catalog discovery", async () => {
+  const [app, component, css] = await Promise.all([
+    fs.readFile(new URL("../../src/App.jsx", import.meta.url), "utf8"),
+    fs.readFile(new URL("../../src/components/catalog/OuterwearFinder.jsx", import.meta.url), "utf8"),
+    fs.readFile(new URL("../../src/App.css", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(app, /<OuterwearFinder[\s\S]*settings=\{storeSettings\.outerwearFinder\}[\s\S]*onApplySelection=\{handleOuterwearFinderSelection\}/);
+  assert.doesNotMatch(app, /purchase-process-section|EXPERIENCIA ADRIEGO · EN 3 PASOS/);
+  assert.match(component, /Acolchado con peluche[\s\S]*query: "peluche"/);
+  assert.match(component, /Gabardina reversible[\s\S]*query: "reversible gabardina"/);
+  assert.match(component, /Chompa ligera[\s\S]*query: "chompa"/);
+  assert.match(component, /role="radiogroup"[\s\S]*role="radio"[\s\S]*aria-checked=\{isSelected\}/);
+  assert.match(component, /loading="lazy"/);
+  assert.match(component, /settings\.image[\s\S]*settings\.title[\s\S]*settings\.primaryCta/);
+  assert.match(css, /--finder-accent: #111214;/);
+  assert.match(css, /\.outerwear-finder-option \{[\s\S]*?min-height: 72px;/);
+  assert.match(css, /@media \(min-width: 900px\)[\s\S]*?\.outerwear-finder-layout \{[\s\S]*?grid-template-columns:/);
+  assert.match(css, /@media \(min-width: 900px\)[\s\S]*?\.outerwear-finder-media \{[\s\S]*?aspect-ratio: 4 \/ 3;[\s\S]*?align-self: center;/);
+  assert.match(css, /@media \(min-width: 1120px\)[\s\S]*?\.outerwear-finder-options \{[\s\S]*?repeat\(3,/);
 });
 
 test("mobile landscape is guarded with a portrait-only recovery screen", async () => {

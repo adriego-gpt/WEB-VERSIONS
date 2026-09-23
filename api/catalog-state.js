@@ -124,6 +124,7 @@ function collectCatalogImagePaths(catalog = {}, urlEndpoint = "") {
   for (const slide of (Array.isArray(catalog?.storeSettings?.heroSlides) ? catalog.storeSettings.heroSlides : [])) {
     urls.push(slide?.image);
   }
+  urls.push(catalog?.storeSettings?.outerwearFinder?.image);
   const seoImages = catalog?.storeSettings?.seoSettings;
   urls.push(seoImages?.faviconUrl, seoImages?.logoUrl, seoImages?.imageUrl);
   for (const account of (Array.isArray(catalog?.contactSettings?.paymentSettings?.bankAccounts)

@@ -44,6 +44,28 @@ test("five-minute reservation protects payment and expires atomically", async t 
     assert.equal(hold.expiresAt - hold.createdAt, 300000);
     assert.equal(state.meta.realtime.reservationExpiresAt, hold.expiresAt);
   });
+  await t.test("N simultaneous buyers conserve every unit without duplicate holds", async () => {
+    await reset();
+    const availableUnits = 17;
+    const buyerCount = 64;
+    await updateStore(draft => {
+      draft.products[0].variants[0].stock = availableUnits;
+      return draft;
+    });
+    if (globalThis.__ATELIER_RATE_LIMIT_STORE__) globalThis.__ATELIER_RATE_LIMIT_STORE__.clear();
+    const buyers = Array.from({ length: buyerCount }, () => guest());
+    const responses = await Promise.all(buyers.map(cookie => call({ cart }, { action: "reserve", cookie })));
+    assert.equal(responses.filter(response => response.statusCode === 200).length, availableUnits);
+    assert.equal(responses.filter(response => response.statusCode === 409).length, buyerCount - availableUnits);
+    const state = await readStore();
+    const heldUnits = state.checkoutReservations.reduce((total, reservation) => (
+      total + reservation.items.reduce((itemTotal, item) => itemTotal + Number(item.quantity || 0), 0)
+    ), 0);
+    assert.equal(state.products[0].variants[0].stock, 0);
+    assert.equal(state.checkoutReservations.length, availableUnits);
+    assert.equal(new Set(state.checkoutReservations.map(reservation => reservation.id)).size, availableUnits);
+    assert.equal(heldUnits, availableUnits);
+  });
   await t.test("removing every cart line releases its hold without waiting five minutes", async () => {
     await reset();
     const cookie = guest();

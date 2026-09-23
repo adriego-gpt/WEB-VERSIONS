@@ -326,6 +326,23 @@ function sanitizeStoreSettings(rawSettings = {}) {
     linkedProductId: slide?.linkedProductId != null ? String(slide.linkedProductId) : "",
     targetUrl: normalizeSafeUrl(slide?.targetUrl || ""),
   }));
+  const outerwearSource = rawSettings?.outerwearFinder && typeof rawSettings.outerwearFinder === "object"
+    ? rawSettings.outerwearFinder
+    : {};
+  const outerwearDefaults = [
+    { id: "peluche", label: "Acolchado con peluche", description: "Calidez suave para días fríos", query: "peluche" },
+    { id: "reversible", label: "Gabardina reversible", description: "Dos estilos en una sola prenda", query: "reversible gabardina" },
+    { id: "ligera", label: "Chompa ligera", description: "Versátil para todos los días", query: "chompa" },
+  ];
+  const outerwearOptions = sanitizeArray(outerwearSource.options, 3);
+  const normalizeOuterwearText = (value, fallback, limit, paragraph = false) => {
+    const normalized = paragraph ? sanitizeParagraph(value || fallback) : normalizeLine(value || fallback);
+    return normalized.slice(0, limit) || fallback;
+  };
+  const rawOuterwearImage = String(outerwearSource.image || "").trim();
+  const safeOuterwearImage = /^\/(?!\/)/.test(rawOuterwearImage) && !/[\\\s\p{Cc}]/u.test(rawOuterwearImage)
+    ? rawOuterwearImage
+    : normalizeImageSource(rawOuterwearImage);
 
   const rawHeroBadgeText = normalizeLine(rawSettings?.heroBadgeText || "").slice(0, 100);
   const heroBadgeText = /premium\s+listo\s+para\s+vender/i.test(rawHeroBadgeText)
@@ -345,6 +362,23 @@ function sanitizeStoreSettings(rawSettings = {}) {
     saleDescription: sanitizeParagraph(rawSettings?.saleDescription || "").slice(0, 320),
     footerTitle: normalizeLine(rawSettings?.footerTitle || "").slice(0, 120),
     footerText: sanitizeParagraph(rawSettings?.footerText || "").slice(0, 320),
+    outerwearFinder: {
+      title: normalizeOuterwearText(outerwearSource.title, "Encuentra tu abrigo ideal", 100),
+      description: normalizeOuterwearText(outerwearSource.description, "Elige el estilo que buscas y te mostraremos las prendas disponibles.", 240, true),
+      image: safeOuterwearImage || "/editorial/outerwear-finder.png",
+      imageAlt: normalizeOuterwearText(outerwearSource.imageAlt, "Tres modelos luciendo una gabardina, un acolchado con peluche y una chompa ligera", 180),
+      primaryCta: normalizeOuterwearText(outerwearSource.primaryCta, "Ver mi selección", 60),
+      secondaryCta: normalizeOuterwearText(outerwearSource.secondaryCta, "Ver catálogo completo", 60),
+      options: outerwearDefaults.map((fallback, index) => {
+        const option = outerwearOptions.find((entry) => entry?.id === fallback.id) || outerwearOptions[index] || {};
+        return {
+          id: fallback.id,
+          label: normalizeOuterwearText(option.label, fallback.label, 70),
+          description: normalizeOuterwearText(option.description, fallback.description, 120),
+          query: normalizeOuterwearText(option.query, fallback.query, 80),
+        };
+      }),
+    },
     maintenanceSettings: normalizeMaintenanceSettings(rawSettings?.maintenanceSettings),
     automationSettings: {
       postPurchaseEnabled: automationSource.postPurchaseEnabled !== false,

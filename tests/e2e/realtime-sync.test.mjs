@@ -278,6 +278,33 @@ test("realtime sync keeps user/admin state consistent across devices", async () 
   assert.equal(syncA.jsonBody?.ok, true);
   assert.equal(syncA.jsonBody?.user?.cart?.length, 1);
 
+  const syncUninitializedDevice = await callApi(userAuthHandler, {
+    method: "POST",
+    query: { action: "sync-state" },
+    cookieJar: deviceB,
+    csrfToken: csrfB,
+    json: {
+      baseStateVersion: 0,
+      cart: [
+        { key: "line-zero-1", id: "prod-rt-1", color: "Negro", size: "S", quantity: 1 },
+      ],
+      favorites: ["prod-rt-extra"],
+    },
+  });
+  assert.equal(syncUninitializedDevice.statusCode, 200);
+  assert.equal(syncUninitializedDevice.jsonBody?.ok, true);
+  const uninitializedCartKeys = new Set(
+    (syncUninitializedDevice.jsonBody?.user?.cart || []).map((entry) => String(entry.key)),
+  );
+  assert.equal(
+    uninitializedCartKeys.has("line-a-1"),
+    true,
+    "An uninitialized device must not overwrite cart lines already stored on the server",
+  );
+  assert.equal(uninitializedCartKeys.has("line-zero-1"), true);
+  assert.equal(syncUninitializedDevice.jsonBody?.user?.favorites?.includes("prod-rt-1"), true);
+  assert.equal(syncUninitializedDevice.jsonBody?.user?.favorites?.includes("prod-rt-extra"), true);
+
   const statusDeviceB = await callApi(userAuthHandler, {
     method: "GET",
     query: { action: "status" },
@@ -286,7 +313,7 @@ test("realtime sync keeps user/admin state consistent across devices", async () 
   assert.equal(statusDeviceB.statusCode, 200);
   assert.equal(statusDeviceB.jsonBody?.authenticated, true);
   assert.equal(Array.isArray(statusDeviceB.jsonBody?.user?.cart), true);
-  assert.equal(statusDeviceB.jsonBody.user.cart.length, 1);
+  assert.equal(statusDeviceB.jsonBody.user.cart.length, 2);
   assert.equal(statusDeviceB.jsonBody.user.favorites?.includes("prod-rt-1"), true);
 
   const staleBaseVersion = baselineStateVersion;
@@ -307,8 +334,78 @@ test("realtime sync keeps user/admin state consistent across devices", async () 
   assert.equal(syncBWithStaleBase.jsonBody?.ok, true);
   const mergedCartKeys = new Set((syncBWithStaleBase.jsonBody?.user?.cart || []).map((entry) => String(entry.key)));
   assert.equal(mergedCartKeys.has("line-a-1"), true, "Stale sync must preserve existing cart line");
+  assert.equal(mergedCartKeys.has("line-zero-1"), true, "Stale sync must preserve zero-base cart line");
   assert.equal(mergedCartKeys.has("line-b-1"), true, "Stale sync must merge incoming cart line");
   assert.equal(syncBWithStaleBase.jsonBody?.user?.favorites?.includes("prod-rt-extra"), true);
+
+  const sharedBaseVersion = Number(syncBWithStaleBase.jsonBody?.user?.stateVersion || 0);
+  const sharedCart = syncBWithStaleBase.jsonBody?.user?.cart || [];
+  const sharedFavorites = syncBWithStaleBase.jsonBody?.user?.favorites || [];
+  const deviceCount = 24;
+  const nDeviceResponses = await Promise.all(Array.from({ length: deviceCount }, (_, index) => (
+    callApi(userAuthHandler, {
+      method: "POST",
+      query: { action: "sync-state" },
+      cookieJar: deviceB,
+      csrfToken: csrfB,
+      json: {
+        baseStateVersion: sharedBaseVersion,
+        cart: [
+          ...sharedCart,
+          {
+            key: `line-device-${index}`,
+            id: `prod-device-${index}`,
+            color: "Negro",
+            size: "M",
+            quantity: 1,
+          },
+        ],
+        favorites: [...sharedFavorites, `prod-device-${index}`],
+      },
+    })
+  )));
+  assert.equal(nDeviceResponses.every((response) => response.statusCode === 200), true);
+  const nDeviceStatus = await callApi(userAuthHandler, {
+    method: "GET",
+    query: { action: "status" },
+    cookieJar: deviceA,
+  });
+  const nDeviceKeys = new Set((nDeviceStatus.jsonBody?.user?.cart || []).map((entry) => String(entry.key)));
+  assert.equal(nDeviceKeys.has("line-a-1"), true);
+  assert.equal(nDeviceKeys.has("line-zero-1"), true);
+  assert.equal(nDeviceKeys.has("line-b-1"), true);
+  for (let index = 0; index < deviceCount; index += 1) {
+    assert.equal(nDeviceKeys.has(`line-device-${index}`), true, `Device ${index} cart line must survive the merge`);
+    assert.equal(nDeviceStatus.jsonBody?.user?.favorites?.includes(`prod-device-${index}`), true);
+  }
+  assert.equal(nDeviceKeys.size, sharedCart.length + deviceCount);
+
+  const missingVersionResponse = await callApi(userAuthHandler, {
+    method: "POST",
+    query: { action: "sync-state" },
+    cookieJar: deviceB,
+    csrfToken: csrfB,
+    json: { cart: sharedCart, favorites: sharedFavorites },
+  });
+  assert.equal(missingVersionResponse.statusCode, 400);
+  assert.equal(missingVersionResponse.jsonBody?.code, "INVALID_USER_STATE_VERSION");
+
+  const stableVersion = Number(nDeviceStatus.jsonBody?.user?.stateVersion || 0);
+  const futureVersionResponse = await callApi(userAuthHandler, {
+    method: "POST",
+    query: { action: "sync-state" },
+    cookieJar: deviceB,
+    csrfToken: csrfB,
+    json: {
+      baseStateVersion: stableVersion + 100,
+      cart: [],
+      favorites: [],
+    },
+  });
+  assert.equal(futureVersionResponse.statusCode, 409);
+  assert.equal(futureVersionResponse.jsonBody?.code, "USER_STATE_VERSION_CONFLICT");
+  assert.equal(Number(futureVersionResponse.jsonBody?.user?.stateVersion || 0), stableVersion);
+  assert.equal(futureVersionResponse.jsonBody?.user?.cart?.length, sharedCart.length + deviceCount);
 
   const realtimeSnapshot = await callApi(realtimeSyncHandler, {
     method: "GET",

@@ -16,6 +16,22 @@ function safeImage(value) {
   } catch { return ""; }
 }
 
+function buildProductDescription(product, { name, brandName, colors, sizes }) {
+  const provided = String(product.description || "").trim().replace(/\s+/g, " ");
+  if (provided.length >= 120) return provided.slice(0, 200);
+
+  const details = [
+    colors.length ? `Colores: ${colors.slice(0, 4).join(", ")}.` : "",
+    sizes.length ? `Tallas: ${sizes.slice(0, 6).join(", ")}.` : "",
+    `Consulta disponibilidad y compra ${name} en ${brandName}.`,
+  ].filter(Boolean).join(" ");
+  const description = `${provided}${provided && !/[.!?]$/.test(provided) ? "." : ""} ${details}`.trim();
+  if (description.length <= 200) return description;
+  const shortened = description.slice(0, 197);
+  const lastSpace = shortened.lastIndexOf(" ");
+  return `${shortened.slice(0, lastSpace > 150 ? lastSpace : 197).replace(/[.,;:\s]+$/, "")}...`;
+}
+
 export function getProductSeo(product = {}, origin, brandName = "Adriego Store") {
   const mode = normalizeOfferDiscountMode(product.offerDiscountMode);
   const rawPrice = Math.max(0, Number(product.price) || 0);
@@ -33,7 +49,7 @@ export function getProductSeo(product = {}, origin, brandName = "Adriego Store")
   const colors = [...new Set(variants.length ? variants.map((v) => String(v.color || "")) : (Array.isArray(product.colors) ? product.colors : []))].filter(Boolean);
   const sizes = [...new Set(variants.length ? variants.map((v) => String(v.size || "")) : (Array.isArray(product.sizes) ? product.sizes : []))].filter(Boolean);
   const name = String(product.name || "Producto");
-  const description = String(product.description || `Consulta los colores, tallas y disponibilidad de ${name} en ${brandName}. Compra desde la web.`);
+  const description = buildProductDescription(product, { name, brandName, colors, sizes });
   const url = `${origin}/producto/${getProductSlug(product)}`;
   const schema = {
     "@context": "https://schema.org", "@type": "Product", name, description,

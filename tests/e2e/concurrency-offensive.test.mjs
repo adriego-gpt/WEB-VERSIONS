@@ -249,7 +249,6 @@ test("Offensive Concurrency & Race Condition Suite", async (t) => {
     });
 
     const [res1, res2] = await Promise.all([user1CheckoutPromise, user2CheckoutPromise]);
-    console.log("CHECKOUT CONCURRENCY RESULTS:", { s1: res1.statusCode, b1: res1.jsonBody, s2: res2.statusCode, b2: res2.jsonBody });
     const statusCodes = [res1.statusCode, res2.statusCode];
 
     assert.ok(statusCodes.includes(200), "Exactly one purchase must succeed with 200");
@@ -326,5 +325,206 @@ test("Offensive Concurrency & Race Condition Suite", async (t) => {
     const conflictResp = save1.statusCode === 409 ? save1 : save2;
     assert.equal(conflictResp.jsonBody?.code, "CATALOG_VERSION_CONFLICT");
     assert.equal(conflictResp.jsonBody?.currentVersion, baseVersion + 1);
+  });
+
+  await t.test("3. N simultaneous guest checkouts never oversell a limited variant", async () => {
+    const availableUnits = 13;
+    const buyerCount = 40;
+    await updateStore((draft) => {
+      draft.products[0].variants[0].stock = availableUnits;
+      draft.products[0].stockBySize = { M: availableUnits };
+      draft.orders = [];
+      draft.checkoutReservations = [];
+      return draft;
+    });
+    if (globalThis.__ATELIER_RATE_LIMIT_STORE__) {
+      globalThis.__ATELIER_RATE_LIMIT_STORE__.clear();
+    }
+    const guestSeedCookies = {};
+    const guestCsrf = await getCsrfToken(guestSeedCookies);
+
+    const responses = await Promise.all(Array.from({ length: buyerCount }, (_, index) => (
+      callApi(checkoutOrderHandler, {
+        method: "POST",
+        cookieJar: { ...guestSeedCookies },
+        csrfToken: guestCsrf,
+        remoteAddress: `10.20.0.${index + 1}`,
+        json: {
+          guestCheckout: true,
+          idempotencyKey: crypto.randomUUID(),
+          cart: [{ id: "prod-scarce", color: "#111111", size: "M", quantity: 1 }],
+          delivery: {
+            type: "pickup",
+            fullName: `Comprador ${index + 1}`,
+            phone: `0987${String(index).padStart(6, "0")}`,
+          },
+        },
+      })
+    )));
+
+    const successes = responses.filter((response) => response.statusCode === 200);
+    const rejected = responses.filter((response) => response.statusCode === 400);
+    assert.equal(successes.length, availableUnits);
+    assert.equal(rejected.length, buyerCount - availableUnits);
+    assert.equal(
+      new Set(successes.map((response) => response.jsonBody?.order?.id)).size,
+      availableUnits,
+      "Every successful buyer must receive a distinct order",
+    );
+
+    const state = await readStore();
+    assert.equal(state.products[0].variants[0].stock, 0);
+    assert.equal(state.orders.length, availableUnits);
+    assert.equal(state.orders.reduce((total, order) => total + Number(order.items?.[0]?.quantity || 0), 0), availableUnits);
+  });
+
+  await t.test("4. N concurrent retries with one idempotency key deduct stock exactly once", async () => {
+    const retryCount = 10;
+    await updateStore((draft) => {
+      draft.products[0].variants[0].stock = 5;
+      draft.products[0].stockBySize = { M: 5 };
+      draft.orders = [];
+      draft.checkoutReservations = [];
+      return draft;
+    });
+    if (globalThis.__ATELIER_RATE_LIMIT_STORE__) {
+      globalThis.__ATELIER_RATE_LIMIT_STORE__.clear();
+    }
+
+    const idempotencyKey = crypto.randomUUID();
+    const body = {
+      idempotencyKey,
+      cart: [{ id: "prod-scarce", color: "#111111", size: "M", quantity: 1 }],
+      deliveryType: "pickup",
+      deliveryDetails: {
+        fullName: "Comprador 1",
+        idNumber: "111",
+        city: "Quito",
+        address: "Av 1",
+        phone: "0999999991",
+      },
+    };
+    const responses = await Promise.all(Array.from({ length: retryCount }, (_, index) => (
+      callApi(checkoutOrderHandler, {
+        method: "POST",
+        cookieJar: user1Cookies,
+        csrfToken: user1Csrf,
+        remoteAddress: `10.30.0.${index + 1}`,
+        json: body,
+      })
+    )));
+
+    assert.equal(responses.every((response) => response.statusCode === 200), true);
+    assert.equal(responses.filter((response) => response.jsonBody?.idempotentReplay === true).length, retryCount - 1);
+    assert.equal(new Set(responses.map((response) => response.jsonBody?.order?.id)).size, 1);
+    const state = await readStore();
+    assert.equal(state.products[0].variants[0].stock, 4);
+    assert.equal(state.orders.length, 1);
+    assert.equal(state.orders[0].idempotencyKey, idempotencyKey);
+  });
+
+  await t.test("5. N administrators sharing one base version produce one winner", async () => {
+    const adminCookies = {};
+    const adminCsrf = await getCsrfToken(adminCookies);
+    const login = await callApi(adminSessionHandler, {
+      method: "POST",
+      query: { action: "login" },
+      cookieJar: adminCookies,
+      csrfToken: adminCsrf,
+      json: { identifier: ADMIN_IDENTIFIER, password: ADMIN_PASSWORD },
+    });
+    assert.equal(login.statusCode, 200);
+
+    const catalog = await callApi(catalogStateHandler, { method: "GET", cookieJar: adminCookies });
+    const baseVersion = Number(catalog.jsonBody?.data?.catalogVersion || 0);
+    const writerCount = 16;
+    const responses = await Promise.all(Array.from({ length: writerCount }, (_, index) => {
+      const data = structuredClone(catalog.jsonBody.data);
+      data.products[0].price = 300 + index;
+      return callApi(catalogStateHandler, {
+        method: "POST",
+        query: { action: "sync" },
+        cookieJar: adminCookies,
+        csrfToken: adminCsrf,
+        remoteAddress: `10.40.0.${index + 1}`,
+        json: { baseCatalogVersion: baseVersion, data, writeProtocol: 2 },
+      });
+    }));
+    assert.equal(responses.filter((response) => response.statusCode === 200).length, 1);
+    assert.equal(responses.filter((response) => response.statusCode === 409).length, writerCount - 1);
+    assert.equal(
+      responses.filter((response) => response.statusCode === 409)
+        .every((response) => response.jsonBody?.code === "CATALOG_VERSION_CONFLICT"),
+      true,
+    );
+    const finalCatalog = await callApi(catalogStateHandler, { method: "GET", cookieJar: adminCookies });
+    assert.equal(Number(finalCatalog.jsonBody?.data?.catalogVersion || 0), baseVersion + 1);
+  });
+
+  await t.test("6. Catalog save racing a checkout cannot restore sold stock", async () => {
+    await updateStore((draft) => {
+      draft.products[0].variants[0].stock = 3;
+      draft.products[0].stockBySize = { M: 3 };
+      draft.orders = [];
+      draft.checkoutReservations = [];
+      return draft;
+    });
+    if (globalThis.__ATELIER_RATE_LIMIT_STORE__) {
+      globalThis.__ATELIER_RATE_LIMIT_STORE__.clear();
+    }
+
+    const adminCookies = {};
+    const adminCsrf = await getCsrfToken(adminCookies);
+    const login = await callApi(adminSessionHandler, {
+      method: "POST",
+      query: { action: "login" },
+      cookieJar: adminCookies,
+      csrfToken: adminCsrf,
+      json: { identifier: ADMIN_IDENTIFIER, password: ADMIN_PASSWORD },
+    });
+    assert.equal(login.statusCode, 200);
+    const catalog = await callApi(catalogStateHandler, { method: "GET", cookieJar: adminCookies });
+    const baseVersion = Number(catalog.jsonBody?.data?.catalogVersion || 0);
+    const data = structuredClone(catalog.jsonBody.data);
+    data.products[0].price = 777;
+
+    const [catalogSave, checkout] = await Promise.all([
+      callApi(catalogStateHandler, {
+        method: "POST",
+        query: { action: "sync" },
+        cookieJar: adminCookies,
+        csrfToken: adminCsrf,
+        remoteAddress: "10.50.0.1",
+        json: { baseCatalogVersion: baseVersion, data, writeProtocol: 2 },
+      }),
+      callApi(checkoutOrderHandler, {
+        method: "POST",
+        cookieJar: user1Cookies,
+        csrfToken: user1Csrf,
+        remoteAddress: "10.50.0.2",
+        json: {
+          idempotencyKey: crypto.randomUUID(),
+          cart: [{ id: "prod-scarce", color: "#111111", size: "M", quantity: 1 }],
+          deliveryType: "pickup",
+          deliveryDetails: {
+            fullName: "Comprador 1",
+            idNumber: "111",
+            city: "Quito",
+            address: "Av 1",
+            phone: "0999999991",
+          },
+        },
+      }),
+    ]);
+
+    assert.equal(checkout.statusCode, 200);
+    assert.equal([200, 409].includes(catalogSave.statusCode), true);
+    if (catalogSave.statusCode === 409) {
+      assert.equal(catalogSave.jsonBody?.code, "CATALOG_VERSION_CONFLICT");
+    }
+    const state = await readStore();
+    assert.equal(state.orders.length, 1);
+    assert.equal(state.products[0].variants[0].stock, 2);
+    assert.equal(state.products[0].stockBySize.M, 2);
   });
 });

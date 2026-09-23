@@ -14,6 +14,7 @@ for (const key of Object.keys(process.env)) {
 const salt = randomBytes(16).toString("base64url");
 Object.assign(process.env, {
   NODE_ENV: "development", VERCEL_ENV: "", SECURITY_LOG_ENABLED: "false",
+  PUBLIC_SITE_URL: "http://127.0.0.1:5179", VITE_PUBLIC_SITE_URL: "http://127.0.0.1:5179",
   USER_ALLOWED_ORIGIN: "http://localhost:5179", ADMIN_ALLOWED_ORIGIN: "http://localhost:5179",
   ADMIN_EMAIL: "audit@localhost.test", ADMIN_USERNAME: "audit@localhost.test",
   ADMIN_PASSWORD_ALGORITHM: "scrypt", ADMIN_PASSWORD_SALT: salt,
@@ -87,14 +88,21 @@ const previewPlugins = productionPreview ? [{
         try {
           res.setHeader("Content-Type", "text/html; charset=utf-8");
           res.setHeader("Cache-Control", "no-store");
-          res.end(await fs.readFile(path.join(projectRoot, "dist", "index.html")));
+          res.end(await fs.readFile(path.join(projectRoot, "dist", "app.html")));
         } catch { res.statusCode = 500; res.end("Compilación local no disponible."); }
         return;
       }
-      if (pathname !== "/" && !pathname.startsWith("/producto/") && pathname !== "/robots.txt" && pathname !== "/sitemap.xml") { next(); return; }
+      const seoActions = new Map([
+        ["/robots.txt", "robots"],
+        ["/sitemap.xml", "sitemap-index"],
+        ["/sitemap-pages.xml", "sitemap-pages"],
+        ["/sitemap-products.xml", "sitemap-products"],
+      ]);
+      const isSeoPage = pathname === "/" || pathname.startsWith("/producto/") || pathname.startsWith("/legal/") || pathname.endsWith(".xml");
+      if (!isSeoPage && !seoActions.has(pathname)) { next(); return; }
       try {
         const { default: handler } = await import(pathToFileURL(path.join(projectRoot, "api/seo.js")));
-        req.query = { action: pathname === "/robots.txt" ? "robots" : pathname === "/sitemap.xml" ? "sitemap" : "page", path: pathname };
+        req.query = { action: seoActions.get(pathname) || "page", path: pathname };
         res.status = (code) => { res.statusCode = code; return res; };
         res.send = (body) => { res.end(body); return res; };
         await handler(req, res);

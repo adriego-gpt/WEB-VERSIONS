@@ -3,5 +3,11 @@ import { RotateCw } from "lucide-react";
 
 export function ImageLoadingIndicator({ pending }) {
   if (!pending) return null;
-  return <span className="image-load-indicator" aria-hidden="true"><RotateCw size={20} strokeWidth={1.8} /></span>;
+  return (
+    <span className="image-load-indicator" aria-hidden="true">
+      <span className="image-load-indicator__disc">
+        <RotateCw size={22} strokeWidth={1.8} />
+      </span>
+    </span>
+  );
 }

@@ -1012,7 +1012,16 @@ export default async function handler(req, res) {
 
     const hasCartPayload = Array.isArray(body.cart);
     const hasFavoritesPayload = Array.isArray(body.favorites);
-    const requestedBaseStateVersion = normalizeUserStateVersion(body.baseStateVersion);
+    const rawBaseStateVersion = body.baseStateVersion;
+    if (!Number.isSafeInteger(rawBaseStateVersion) || rawBaseStateVersion < USER_STATE_VERSION_MIN) {
+      res.status(400).json({
+        ok: false,
+        code: "INVALID_USER_STATE_VERSION",
+        message: "La version base del estado no es valida.",
+      });
+      return;
+    }
+    const requestedBaseStateVersion = normalizeUserStateVersion(rawBaseStateVersion);
     if (!hasCartPayload && !hasFavoritesPayload) {
       res.status(400).json({ ok: false, message: "No recibimos cambios para sincronizar." });
       return;
@@ -1023,6 +1032,7 @@ export default async function handler(req, res) {
 
     let updatedUser = null;
     let mutatedState = false;
+    let versionConflict = false;
     await updateStore((draft) => {
       const nowIso = new Date().toISOString();
       draft.users = (draft.users || []).map((entry) => {
@@ -1030,7 +1040,12 @@ export default async function handler(req, res) {
         const currentStateVersion = normalizeUserStateVersion(entry.stateVersion);
         const currentCartState = normalizeUserCartState(entry.cartState);
         const currentFavorites = normalizeFavoriteIds(entry.favorites);
-        const isStaleClientWrite = requestedBaseStateVersion > 0 && currentStateVersion > requestedBaseStateVersion;
+        if (requestedBaseStateVersion > currentStateVersion) {
+          versionConflict = true;
+          updatedUser = entry;
+          return entry;
+        }
+        const isStaleClientWrite = currentStateVersion > requestedBaseStateVersion;
 
         let nextCartState = normalizedCart;
         let nextFavorites = normalizedFavorites;
@@ -1079,6 +1094,16 @@ export default async function handler(req, res) {
 
     if (!updatedUser) {
       rejectUnauthorized(res);
+      return;
+    }
+
+    if (versionConflict) {
+      res.status(409).json({
+        ok: false,
+        code: "USER_STATE_VERSION_CONFLICT",
+        message: "El estado cambio en otro dispositivo. Actualiza e intenta de nuevo.",
+        user: stripUserSensitiveData(updatedUser),
+      });
       return;
     }
 

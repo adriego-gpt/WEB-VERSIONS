@@ -40,6 +40,32 @@ test("server sanitizer persists all identity settings without arbitrary extra fi
   assert.equal(sanitized.brandName, settings.brandName);
 });
 
+test("server sanitizer persists and bounds the editable outerwear finder", () => {
+  const sanitized = sanitizeStoreSettings({
+    outerwearFinder: {
+      title: `  ${"T".repeat(140)}  `,
+      description: "Una guía personalizada para elegir.",
+      image: "/editorial/custom-finder.png",
+      imageAlt: "Tres modelos con abrigos",
+      primaryCta: "Mostrar prendas",
+      secondaryCta: "Ver todo",
+      options: [
+        { id: "peluche", label: "Muy cálido", description: "Para días fríos", query: "acolchado peluche" },
+        { id: "reversible", label: "Dos estilos", description: "Úsalo de ambos lados", query: "reversible" },
+        { id: "ligera", label: "Ligero", description: "Para todos los días", query: "ligera" },
+        { id: "extra", label: "No permitido", query: "extra" },
+      ],
+    },
+  });
+
+  assert.equal(sanitized.outerwearFinder.title.length, 100);
+  assert.equal(sanitized.outerwearFinder.image, "/editorial/custom-finder.png");
+  assert.equal(sanitized.outerwearFinder.options.length, 3);
+  assert.equal(sanitized.outerwearFinder.options[0].query, "acolchado peluche");
+  assert.equal(sanitized.outerwearFinder.options[2].label, "Ligero");
+  assert.equal(sanitizeStoreSettings({ outerwearFinder: { image: "javascript:alert(1)" } }).outerwearFinder.image, "/editorial/outerwear-finder.png");
+});
+
 test("catalog cleanup retains images used by search identity even after product deletion", () => {
   const endpoint = "https://ik.imagekit.io/adriego";
   const imagePath = "/catalog/products/2026-09/4ba7cd1c-8b6c-4b70-8a51-ea241a1d14bd.png";
@@ -48,6 +74,14 @@ test("catalog cleanup retains images used by search identity even after product 
   assert.equal(retained.size, 1);
   assert.ok(retained.has(imagePath));
   assert.equal(collectCatalogImagePaths({ products: [], storeSettings: { seoSettings: {} } }, endpoint).size, 0);
+});
+
+test("catalog cleanup retains the editable outerwear finder image", () => {
+  const endpoint = "https://ik.imagekit.io/adriego";
+  const imagePath = "/catalog/products/2026-09/2ba7cd1c-8b6c-4b70-8a51-ea241a1d14bd.webp";
+  const url = `${endpoint}${imagePath}`;
+  const retained = collectCatalogImagePaths({ products: [], storeSettings: { outerwearFinder: { image: url } } }, endpoint);
+  assert.ok(retained.has(imagePath));
 });
 
 test("SSR delivers editable metadata and WebSite/Organization schema without duplicate icons", () => {

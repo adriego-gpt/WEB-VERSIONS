@@ -45,6 +45,7 @@ export function CatalogProductCard({
   const productPath = productSlug ? `/producto/${encodeURIComponent(productSlug)}` : "/";
   const [isSelectingSize, setIsSelectingSize] = useState(false);
   const [justAddedSize, setJustAddedSize] = useState("");
+  const [addedFeedback, setAddedFeedback] = useState(false);
   const feedbackTimerRef = useRef(null);
   useEffect(() => () => clearTimeout(feedbackTimerRef.current), []);
   const resolvedSelection = getSelectionForColor(product, selection);
@@ -69,11 +70,31 @@ export function CatalogProductCard({
   const hiddenColorCount = Math.max(0, product.colors.length - visibleColors.length);
   const hiddenSizeCount = Math.max(0, sizesForSelectedColor.length - visibleSizes.length);
 
+  const handleAddToCart = (event) => {
+    event.stopPropagation();
+    if (availableStock <= 0 || addedFeedback) return;
+    const added = onAddToCart(
+      product,
+      { sourceElement: event.currentTarget, image: currentImage },
+      { color: selectedColor, size: selectedSize }
+    );
+    if (added === false) return;
+    triggerHaptic("medium");
+    setAddedFeedback(true);
+    clearTimeout(feedbackTimerRef.current);
+    feedbackTimerRef.current = setTimeout(() => setAddedFeedback(false), 1200);
+  };
+
   const handleMainButtonClick = (event) => {
     event.stopPropagation();
     if (availableStock <= 0) return;
-    triggerHaptic("selection");
-    setIsSelectingSize(true);
+    const isMobile = typeof window !== "undefined" && window.innerWidth <= 760;
+    if (isMobile) {
+      triggerHaptic("selection");
+      setIsSelectingSize(true);
+    } else {
+      handleAddToCart(event);
+    }
   };
 
   return (
@@ -289,11 +310,11 @@ export function CatalogProductCard({
           <div className="product-card-actions">
             <button
               type="button"
-              className="btn btn-primary"
+              className={`btn ${addedFeedback ? "btn-success" : "btn-primary"}`}
               style={{
                 width: "100%",
                 opacity: availableStock <= 0 ? 0.6 : 1,
-                cursor: availableStock <= 0 ? "not-allowed" : "pointer",
+                cursor: availableStock <= 0 ? "not-allowed" : (addedFeedback ? "default" : "pointer"),
                 display: "inline-flex",
                 alignItems: "center",
                 justifyContent: "center",
@@ -301,12 +322,14 @@ export function CatalogProductCard({
                 transition: "background-color 160ms ease-out, color 160ms ease-out, box-shadow 160ms ease-out"
               }}
               onClick={handleMainButtonClick}
-              disabled={availableStock <= 0}
+              disabled={availableStock <= 0 || addedFeedback}
             >
               {availableStock <= 0 ? (
                 "Agotado"
+              ) : addedFeedback ? (
+                <><Check size={16} /> ¡Agregado!</>
               ) : (
-                "Elegir talla"
+                <><span className="catalog-add-desktop">Agregar</span><span className="catalog-add-mobile">Elegir talla</span></>
               )}
             </button>
           </div>

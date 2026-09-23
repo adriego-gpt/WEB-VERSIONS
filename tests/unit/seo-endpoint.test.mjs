@@ -63,6 +63,7 @@ test("SEO endpoint tests", async (t) => {
           { color: "Negro", size: "S", stock: 0 },
         ],
         description: "Vestido de lino fresco para toda ocasión.",
+        updatedAt: "2026-09-20T12:30:00.000Z",
       },
       {
         id: "prod-2",
@@ -86,9 +87,19 @@ test("SEO endpoint tests", async (t) => {
     return draft;
   });
 
-  await t.test("generates XML sitemap including only public products", async () => {
+  await t.test("generates a sitemap index with separate page and product maps", async () => {
     const res = createMockResponse();
     await seoHandler({ query: { action: "sitemap" } }, res);
+
+    assert.equal(res.statusCode, 200);
+    assert.match(res.data, /<sitemapindex/);
+    assert.match(res.data, /https:\/\/www\.adriego\.shop\/sitemap-pages\.xml/);
+    assert.match(res.data, /https:\/\/www\.adriego\.shop\/sitemap-products\.xml/);
+  });
+
+  await t.test("product sitemap includes only canonical public products, images and real update dates", async () => {
+    const res = createMockResponse();
+    await seoHandler({ query: { action: "sitemap-products" } }, res);
 
     assert.equal(res.statusCode, 200);
     assert.match(res.data, /https:\/\/www\.adriego\.shop\/producto\/vestido-lino-natural/);
@@ -96,7 +107,72 @@ test("SEO endpoint tests", async (t) => {
     assert.match(res.data, /<urlset/);
     assert.match(res.data, /xmlns:image="http:\/\/www\.google\.com\/schemas\/sitemap-image\/1\.1"/);
     assert.match(res.data, /<image:loc>https:\/\/ik\.imagekit\.io\/adriego\/catalog\/vestido-beige\.webp<\/image:loc>/);
+    assert.match(res.data, /<image:title>Vestido Lino Natural<\/image:title>/);
+    assert.match(res.data, /<lastmod>2026-09-20T12:30:00\.000Z<\/lastmod>/);
     assert.equal((res.data.match(/<loc>https:\/\/www\.adriego\.shop\/producto\/vestido-lino-natural<\/loc>/g) || []).length, 1);
+  });
+
+  await t.test("page sitemap contains the homepage and stable public legal routes", async () => {
+    const res = createMockResponse();
+    await seoHandler({ query: { action: "sitemap-pages" } }, res);
+    assert.equal(res.statusCode, 200);
+    assert.match(res.data, /<loc>https:\/\/www\.adriego\.shop\/<\/loc>/);
+    assert.match(res.data, /<loc>https:\/\/www\.adriego\.shop\/legal\/privacidad<\/loc>/);
+    assert.match(res.data, /<loc>https:\/\/www\.adriego\.shop\/legal\/terminos<\/loc>/);
+    assert.match(res.data, /<loc>https:\/\/www\.adriego\.shop\/legal\/cambios<\/loc>/);
+    assert.match(res.data, /<loc>https:\/\/www\.adriego\.shop\/legal\/cookies<\/loc>/);
+    assert.doesNotMatch(res.data, /producto\//);
+  });
+
+  await t.test("homepage fallback exposes crawlable contact and legal navigation", async () => {
+    const res = createMockResponse();
+    await seoHandler({ query: { action: "page", path: "/" } }, res);
+    assert.equal(res.statusCode, 200);
+    assert.match(res.data, /href="\/legal\/privacidad"/);
+    assert.match(res.data, /href="\/legal\/terminos"/);
+    assert.match(res.data, /href="\/#contacto"/);
+    assert.match(res.data, /Política de privacidad/);
+  });
+
+  await t.test("legal routes have canonical server-rendered documents and reject unknown names", async () => {
+    const privacy = createMockResponse();
+    await seoHandler({ query: { action: "page", path: "/legal/privacidad" } }, privacy);
+    assert.equal(privacy.statusCode, 200);
+    assert.match(privacy.data, /<h1>Política de privacidad<\/h1>/);
+    assert.match(privacy.data, /<link rel="canonical" href="https:\/\/www\.adriego\.shop\/legal\/privacidad">/);
+    assert.match(privacy.data, /Vercel/);
+    assert.match(privacy.data, /Umami/);
+
+    const unknown = createMockResponse();
+    await seoHandler({ query: { action: "page", path: "/legal/desconocido" } }, unknown);
+    assert.equal(unknown.statusCode, 404);
+    assert.match(unknown.data, /Página no encontrada/);
+  });
+
+  await t.test("unknown XML routes stay 404 while maintenance mode is enabled", async () => {
+    await updateStore((draft) => {
+      draft.storeSettings = {
+        ...draft.storeSettings,
+        maintenanceSettings: { enabled: true },
+      };
+      return draft;
+    });
+    try {
+      const res = createMockResponse();
+      await seoHandler({ query: { action: "page", path: "/sitemap-news.xml" } }, res);
+      assert.equal(res.statusCode, 404);
+      assert.equal(res.getHeader("content-type"), "text/plain; charset=utf-8");
+      assert.equal(res.getHeader("x-robots-tag"), "noindex");
+      assert.equal(res.data, "Not found");
+    } finally {
+      await updateStore((draft) => {
+        draft.storeSettings = {
+          ...draft.storeSettings,
+          maintenanceSettings: { enabled: false },
+        };
+        return draft;
+      });
+    }
   });
 
   await t.test("prerenders product with image from imagesByColor and stock from variants", async () => {
@@ -144,7 +220,7 @@ test("SEO endpoint tests", async (t) => {
     const previous = process.env.PUBLIC_SITE_URL;
     process.env.PUBLIC_SITE_URL = "https://adriego.shop";
     try {
-      for (const action of ["robots", "sitemap"]) {
+      for (const action of ["robots", "sitemap", "sitemap-pages", "sitemap-products"]) {
         const res = createMockResponse();
         await seoHandler({ query: { action } }, res);
         assert.match(res.data, /https:\/\/adriego\.shop/);

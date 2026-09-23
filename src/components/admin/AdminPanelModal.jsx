@@ -146,6 +146,7 @@ export function AdminPanelModal({
   maintenanceSaveBusy,
   onSaveMaintenance,
   handleStoreSlideImageUpload,
+  handleOuterwearFinderImageUpload,
   handleBankImageUpload,
   saveStoreConfiguration,
   storeSaveBusy,
@@ -1804,10 +1805,53 @@ export function AdminPanelModal({
                     <input className="input" placeholder="Etiqueta de ofertas (ej: Ofertas)" value={storeDraft.offerLabel || ""} onChange={(event) => setStoreDraft((previous) => ({ ...previous, offerLabel: event.target.value }))} />
                     <input className="input" placeholder="Porcentaje de oferta (ej: 30)" value={storeDraft.offerPercentage ?? ""} onChange={(event) => setStoreDraft((previous) => ({ ...previous, offerPercentage: event.target.value }))} />
                     <div className="admin-full"><input className="input" placeholder="Texto breve de oferta (opcional)" value={storeDraft.offerText || ""} onChange={(event) => setStoreDraft((previous) => ({ ...previous, offerText: event.target.value }))} /></div>
-                    <input className="input" placeholder="Titulo del bloque de WhatsApp" value={storeDraft.saleTitle || ""} onChange={(event) => setStoreDraft((previous) => ({ ...previous, saleTitle: event.target.value }))} />
-                    <div className="admin-full"><textarea className="textarea" placeholder="Descripcion del bloque de WhatsApp" value={storeDraft.saleDescription || ""} onChange={(event) => setStoreDraft((previous) => ({ ...previous, saleDescription: event.target.value }))} /></div>
                     <input className="input" placeholder="Titulo del footer" value={storeDraft.footerTitle || ""} onChange={(event) => setStoreDraft((previous) => ({ ...previous, footerTitle: event.target.value }))} />
                     <input className="input" placeholder="Texto del footer" value={storeDraft.footerText || ""} onChange={(event) => setStoreDraft((previous) => ({ ...previous, footerText: event.target.value }))} />
+
+                    <section className="admin-full admin-finder-editor" aria-labelledby="admin-finder-editor-title">
+                      <div className="admin-finder-editor-heading">
+                        <div>
+                          <h5 id="admin-finder-editor-title">Selector de abrigos</h5>
+                          <p>Modifica la fotografía, los mensajes y las búsquedas que se aplican al catálogo.</p>
+                        </div>
+                        <label className="btn btn-outline admin-file-btn">
+                          <Upload size={16} />Cambiar fotografía
+                          <input type="file" accept="image/*" onChange={handleOuterwearFinderImageUpload} />
+                        </label>
+                      </div>
+
+                      <div className="admin-finder-editor-layout">
+                        <figure className="admin-finder-preview">
+                          <img
+                            src={storeDraft?.outerwearFinder?.image || "/editorial/outerwear-finder.png"}
+                            alt="Vista previa del selector de abrigos"
+                            loading="lazy"
+                            decoding="async"
+                          />
+                        </figure>
+                        <div className="admin-finder-copy-fields">
+                          <label className="entity-field"><span>URL de la fotografía (opcional)</span><input className="input" type="url" maxLength={2048} placeholder="https://…" value={storeDraft?.outerwearFinder?.image || ""} onChange={(event) => setStoreDraft((previous) => ({ ...previous, outerwearFinder: { ...(previous.outerwearFinder || {}), image: event.target.value } }))} /><small className="helper-text">También puedes usar «Cambiar fotografía» para cargar un archivo optimizado.</small></label>
+                          <label className="entity-field"><span>Título</span><input className="input" maxLength={100} value={storeDraft?.outerwearFinder?.title || ""} onChange={(event) => setStoreDraft((previous) => ({ ...previous, outerwearFinder: { ...(previous.outerwearFinder || {}), title: event.target.value } }))} /></label>
+                          <label className="entity-field"><span>Descripción</span><textarea className="textarea" maxLength={240} value={storeDraft?.outerwearFinder?.description || ""} onChange={(event) => setStoreDraft((previous) => ({ ...previous, outerwearFinder: { ...(previous.outerwearFinder || {}), description: event.target.value } }))} /></label>
+                          <label className="entity-field"><span>Texto alternativo de la imagen</span><input className="input" maxLength={180} value={storeDraft?.outerwearFinder?.imageAlt || ""} onChange={(event) => setStoreDraft((previous) => ({ ...previous, outerwearFinder: { ...(previous.outerwearFinder || {}), imageAlt: event.target.value } }))} /></label>
+                          <div className="admin-finder-cta-fields">
+                            <label className="entity-field"><span>Botón principal</span><input className="input" maxLength={60} value={storeDraft?.outerwearFinder?.primaryCta || ""} onChange={(event) => setStoreDraft((previous) => ({ ...previous, outerwearFinder: { ...(previous.outerwearFinder || {}), primaryCta: event.target.value } }))} /></label>
+                            <label className="entity-field"><span>Botón secundario</span><input className="input" maxLength={60} value={storeDraft?.outerwearFinder?.secondaryCta || ""} onChange={(event) => setStoreDraft((previous) => ({ ...previous, outerwearFinder: { ...(previous.outerwearFinder || {}), secondaryCta: event.target.value } }))} /></label>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="admin-finder-options" aria-label="Opciones del selector">
+                        {(storeDraft?.outerwearFinder?.options || []).map((option, index) => (
+                          <fieldset key={option.id || index} className="admin-finder-option-editor">
+                            <legend>Opción {index + 1}</legend>
+                            <label className="entity-field"><span>Nombre visible</span><input className="input" maxLength={70} value={option.label || ""} onChange={(event) => setStoreDraft((previous) => ({ ...previous, outerwearFinder: { ...(previous.outerwearFinder || {}), options: (previous.outerwearFinder?.options || []).map((entry, optionIndex) => optionIndex === index ? { ...entry, label: event.target.value } : entry) } }))} /></label>
+                            <label className="entity-field"><span>Descripción</span><input className="input" maxLength={120} value={option.description || ""} onChange={(event) => setStoreDraft((previous) => ({ ...previous, outerwearFinder: { ...(previous.outerwearFinder || {}), options: (previous.outerwearFinder?.options || []).map((entry, optionIndex) => optionIndex === index ? { ...entry, description: event.target.value } : entry) } }))} /></label>
+                            <label className="entity-field"><span>Búsqueda aplicada</span><input className="input" maxLength={80} value={option.query || ""} onChange={(event) => setStoreDraft((previous) => ({ ...previous, outerwearFinder: { ...(previous.outerwearFinder || {}), options: (previous.outerwearFinder?.options || []).map((entry, optionIndex) => optionIndex === index ? { ...entry, query: event.target.value } : entry) } }))} /><small className="helper-text">Debe coincidir con palabras usadas en los productos.</small></label>
+                          </fieldset>
+                        ))}
+                      </div>
+                    </section>
 
                     {/* SECCIÓN 3: SLIDES DEL HERO */}
                     <div className="admin-full">

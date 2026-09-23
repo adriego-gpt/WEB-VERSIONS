@@ -22,8 +22,9 @@ test("numbered purchase terms accurately describe five-minute checkout holds", (
   assert.match(terms, /no vuelvas a pagar/);
 });
 test("updated cookies and privacy disclosures remain intact", () => {
-  for (const text of ["30 días", "12 horas", "72 horas", "6 horas", "identificador de reserva de stock", "Google puede utilizar cookies"]) assert.ok(cookies.includes(text));
+  for (const text of ["30 días", "12 horas", "72 horas", "6 horas", "identificador de reserva de stock", "Google puede utilizar cookies", "Umami no utiliza cookies", "Do Not Track"]) assert.ok(cookies.includes(text));
   for (const text of ["avisos de pedidos por Telegram", "conservamos el comprobante", "Superintendencia de Protección de Datos Personales"]) assert.ok(source.includes(text));
+  for (const text of ["texto de búsqueda", "códigos de pedido", "22 de septiembre de 2026"]) assert.ok(source.includes(text));
   assert.match(source, /useOverlayHistory\(/);
   assert.match(source, /useModalA11y\(/);
 });

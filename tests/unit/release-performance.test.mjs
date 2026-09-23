@@ -97,7 +97,8 @@ test("pointer bursts render once per frame using the final position", () => {
 test("catalog memoization does not retain old action callbacks", () => {
   const source = readFileSync(new URL("../../src/components/catalog/CatalogProductCard.jsx", import.meta.url), "utf8");
   assert.match(source, /React\.memo\(CatalogProductCard\)/);
-  assert.equal((source.match(/if \(added === false\) return;/g) || []).length, 1);
+  // Desktop adds the selected variant directly; mobile adds it from the size picker.
+  assert.equal((source.match(/if \(added === false\) return;/g) || []).length, 2);
   assert.match(source, /useEffect\(\(\) => \(\) => clearTimeout\(feedbackTimerRef\.current\)/);
 });
 
